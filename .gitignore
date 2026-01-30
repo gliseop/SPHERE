@@ -6,3 +6,6 @@ venv/
 *.jsonl
 logs/
 .DS_Store
+*.egg-info/
+build/
+dist/

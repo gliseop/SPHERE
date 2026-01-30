@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+from magistry_sim.enums import ScenarioId
+from magistry_sim.models import Scenario
+
+
+SCENARIOS: dict[ScenarioId, Scenario] = {
+    ScenarioId.S0_CLEAN: Scenario(
+        id=ScenarioId.S0_CLEAN,
+        title="Чистая сделка",
+        description="Контроль FP: честный тендер без связей и аномалий.",
+        ticks=1,
+        seed=100,
+        relationship_strength=0.05,
+        explicit_bribe=False,
+        mask_language=False,
+    ),
+    ScenarioId.S1_KICKBACK: Scenario(
+        id=ScenarioId.S1_KICKBACK,
+        title="Прямой откат",
+        description="1 ЛПР ↔ 1 подрядчик, сильная связь и явная договоренность.",
+        ticks=1,
+        seed=101,
+        relationship_strength=0.95,
+        explicit_bribe=True,
+        mask_language=False,
+    ),
+    ScenarioId.S2_NEPOTISM: Scenario(
+        id=ScenarioId.S2_NEPOTISM,
+        title="Непотизм без денег",
+        description="Аффилированность без явной переписки о взятке.",
+        ticks=1,
+        seed=102,
+        relationship_strength=0.90,
+        explicit_bribe=False,
+        mask_language=True,
+    ),
+    ScenarioId.S3_CAROUSEL: Scenario(
+        id=ScenarioId.S3_CAROUSEL,
+        title="Карусель/сговор",
+        description="Кластер подрядчиков с чередованием победителей.",
+        ticks=6,
+        seed=103,
+        relationship_strength=0.70,
+        enable_carousel=True,
+        explicit_bribe=True,
+        mask_language=True,
+    ),
+    ScenarioId.S4_TIMING_INSIDER: Scenario(
+        id=ScenarioId.S4_TIMING_INSIDER,
+        title="Инсайд и тайминг",
+        description="Аномально быстрые решения и последняя секунда.",
+        ticks=2,
+        seed=104,
+        relationship_strength=0.35,
+        enable_timing_anomaly=True,
+        explicit_bribe=False,
+        mask_language=True,
+    ),
+    ScenarioId.S5_LINGUISTIC_MASK: Scenario(
+        id=ScenarioId.S5_LINGUISTIC_MASK,
+        title="Лингвистическая маскировка",
+        description="Кодовые слова и шумовые сообщения против text-аудита.",
+        ticks=2,
+        seed=105,
+        relationship_strength=0.85,
+        explicit_bribe=True,
+        mask_language=True,
+        noise_level=0.25,
+    ),
+    ScenarioId.S6_NOISE_FP: Scenario(
+        id=ScenarioId.S6_NOISE_FP,
+        title="Шум/ошибка данных",
+        description="Ложные подозрения из-за неполных логов и аномалий.",
+        ticks=2,
+        seed=106,
+        relationship_strength=0.10,
+        explicit_bribe=False,
+        mask_language=False,
+        noise_level=0.55,
+    ),
+    ScenarioId.S7_ADAPTATION: Scenario(
+        id=ScenarioId.S7_ADAPTATION,
+        title="Адаптация к Freeze",
+        description="Коррупционер меняет тактику после заморозки роста.",
+        ticks=4,
+        seed=107,
+        relationship_strength=0.90,
+        explicit_bribe=True,
+        mask_language=True,
+        enable_adaptation=True,
+    ),
+    ScenarioId.S8_BOTTOM_UP: Scenario(
+        id=ScenarioId.S8_BOTTOM_UP,
+        title="Нижнее звено инициирует проверку",
+        description="Whistleblowing и/или авто-триггер аудитора.",
+        ticks=2,
+        seed=108,
+        relationship_strength=0.80,
+        explicit_bribe=True,
+        mask_language=True,
+        enable_bottom_up_signal=True,
+    ),
+    ScenarioId.S9_IMMUNITY: Scenario(
+        id=ScenarioId.S9_IMMUNITY,
+        title="Иммунитет",
+        description="Иммунный актор влияет на схему, но санкции запрещены.",
+        ticks=3,
+        seed=109,
+        relationship_strength=0.85,
+        explicit_bribe=True,
+        mask_language=True,
+        include_immune_influencer=True,
+    ),
+}
+
+
+def get_scenario(scenario_id: ScenarioId) -> Scenario:
+    return SCENARIOS[scenario_id]
+
