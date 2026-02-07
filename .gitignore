@@ -9,3 +9,5 @@ logs/
 *.egg-info/
 build/
 dist/
+.llm_cache.db
+.pytest_cache/
