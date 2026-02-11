@@ -81,22 +81,12 @@ class TestMockLLMProvider:
         """Определение типа промпта по ключевым словам."""
         provider = MockLLMProvider(seed=42)
 
-        async def run() -> list[str]:
-            results = []
-
-            # Negotiation
-            r = await provider.generate("", "Давайте договоримся о проценте")
-            results.append("negotiation" if "обсудим условия" in r.text.lower() else "other")
-
-            # Alibi
-            r = await provider.generate("", "Обоснуй выбор победителя")
-            results.append("alibi" if "обоснован" in r.text.lower() else "other")
-
-            return results
-
-        results = asyncio.run(run())
-        assert results[0] == "negotiation"
-        assert results[1] == "alibi"
+        # Проверяем что _detect_prompt_type корректно определяет типы
+        assert provider._detect_prompt_type("", "Давайте договоримся о проценте") == "negotiation"
+        assert provider._detect_prompt_type("", "Обоснуй выбор победителя") == "alibi"
+        assert provider._detect_prompt_type("аудитор", "оцени risk") == "audit"
+        assert provider._detect_prompt_type("deal_reached", "определи результат") == "decision"
+        assert provider._detect_prompt_type("", "сожми историю") == "summary"
 
 
 class TestLLMCache:

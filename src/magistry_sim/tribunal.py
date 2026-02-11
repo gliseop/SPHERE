@@ -1,19 +1,38 @@
+"""DAO Трибунал: децентрализованное голосование по подозрительным сделкам."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from random import Random
 
 from magistry_sim.enums import AgentRole
-from magistry_sim.models import GovernanceConfig, RiskReport
+from magistry_sim.models import GovernanceConfig, RiskReport, TribunalResult
 from magistry_sim.reputation import unfreeze
 from magistry_sim.world import World
 
 
 @dataclass(slots=True)
 class Tribunal:
+    """DAO Трибунал для коллективных решений.
+
+    Args:
+        config: Конфигурация управления (содержит jury_size).
+    """
+
     config: GovernanceConfig
 
-    def run(self, *, world: World, tick: int, report: RiskReport, rng: Random) -> bool:
+    def run(self, *, world: World, tick: int, report: RiskReport, rng: Random) -> TribunalResult:
+        """Провести трибунал.
+
+        Args:
+            world: Состояние мира.
+            tick: Номер тика.
+            report: Отчёт аудитора.
+            rng: Генератор случайных чисел.
+
+        Returns:
+            TribunalResult с вердиктом, списком присяжных и голосами.
+        """
         candidates = [
             agent
             for agent in world.agents.values()
@@ -36,12 +55,14 @@ class Tribunal:
                 votes_guilty += 1
 
         guilty = votes_guilty > (votes_total / 2)
+        juror_ids = [j.id for j in jurors]
+
         world.log(
             tick,
             "tribunal_vote",
             lpr_id=report.lpr_id,
             contractor_id=report.contractor_id,
-            jurors=[j.id for j in jurors],
+            jurors=juror_ids,
             votes_guilty=votes_guilty,
             votes_total=votes_total,
             guilty=guilty,
@@ -59,4 +80,9 @@ class Tribunal:
             unfreeze(lpr)
             unfreeze(contractor)
 
-        return guilty
+        return TribunalResult(
+            guilty=guilty,
+            juror_ids=juror_ids,
+            votes_guilty=votes_guilty,
+            votes_total=votes_total,
+        )

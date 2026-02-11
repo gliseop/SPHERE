@@ -231,12 +231,40 @@ class OpenAICompatibleProvider:
 
 
 class MockLLMProvider:
-    """
-    Детерминированный mock-провайдер для тестов.
+    """Детерминированный mock-провайдер для тестов.
 
     Генерирует предсказуемые ответы на основе хэша промпта,
     что обеспечивает воспроизводимость тестов.
+
+    Поддерживаемые типы промптов:
+    - negotiation: вариативные фразы переговоров
+    - decision: JSON с deal_reached на основе traits из промпта
+    - audit: число 0.0-1.0 на основе ключевых слов
+    - summary: краткое саммари
+    - alibi: стандартное обоснование
     """
+
+    # Варианты фраз для переговоров
+    _NEGOTIATION_PHRASES_GREEDY = [
+        "Давайте обсудим взаимовыгодные условия, я готов предложить процент.",
+        "Могу предложить откат 15%, это стандартная практика.",
+        "Есть предложение — договоримся о проценте?",
+    ]
+    _NEGOTIATION_PHRASES_HONEST = [
+        "Предлагаю обсудить техническое задание и условия контракта.",
+        "Наша компания работает строго по регламенту.",
+        "Готовы предоставить лучшее ценовое предложение на основе компетенций.",
+    ]
+    _OFFICIAL_PHRASES_GREEDY = [
+        "Интересное предложение, давайте обсудим детали.",
+        "Я готов рассмотреть ваши условия.",
+        "Процент устраивает, продолжаем.",
+    ]
+    _OFFICIAL_PHRASES_HONEST = [
+        "Решение будет приниматься строго по конкурсной документации.",
+        "Я не обсуждаю ничего кроме технических характеристик.",
+        "Прошу придерживаться официальной процедуры.",
+    ]
 
     def __init__(self, seed: int = 42, *, response_templates: dict[str, str] | None = None):
         self.rng = Random(seed)
@@ -244,27 +272,108 @@ class MockLLMProvider:
         self.call_count = 0
         self.call_history: list[dict[str, Any]] = []
 
-        # Шаблоны ответов для разных типов запросов
         self.response_templates = response_templates or {
             "negotiation": "Давайте обсудим условия. Я готов рассмотреть ваше предложение.",
             "alibi": "Выбор победителя обоснован техническими характеристиками заявки и ценовым предложением.",
-            "decision": "Да, я принимаю это решение.",
+            "decision": '{"deal_reached": false, "kickback_percent": null}',
             "summary": "Агент участвовал в нескольких тендерах с переменным успехом.",
+            "audit": "0.3",
             "default": "Понял. Продолжаем работу.",
         }
 
     def _detect_prompt_type(self, system: str, user: str) -> str:
         """Определяет тип запроса по ключевым словам."""
         combined = (system + user).lower()
-        if any(w in combined for w in ["переговор", "договор", "откат", "процент", "сделка"]):
+        # Audit — проверять раньше "decision", т.к. может содержать "определи"
+        if any(w in combined for w in ["аудитор", "оцени риск", "вероятность коррупц", "risk"]):
+            return "audit"
+        # Decision (JSON output expected)
+        if any(w in combined for w in ["deal_reached", "kickback_percent", "определи результат"]):
+            return "decision"
+        if any(w in combined for w in ["переговор", "договор", "откат", "процент", "сделка", "раунд", "подрядчик", "чиновник"]):
             return "negotiation"
         if any(w in combined for w in ["обоснуй", "alibi", "выбор", "победител"]):
             return "alibi"
-        if any(w in combined for w in ["реши", "decision", "согласен", "принять"]):
-            return "decision"
-        if any(w in combined for w in ["сожми", "summary", "история", "саммари"]):
+        if any(w in combined for w in ["сожми", "summary", "история", "саммари", "архивариус"]):
             return "summary"
         return "default"
+
+    def _extract_traits(self, system: str) -> tuple[float, float, float]:
+        """Извлечь greed/fear/honesty из системного промпта."""
+        import re
+        greed = fear = honesty = 0.5
+        m = re.search(r'жадность=(\d+\.\d+)', system)
+        if m:
+            greed = float(m.group(1))
+        m = re.search(r'страх=(\d+\.\d+)', system)
+        if m:
+            fear = float(m.group(1))
+        m = re.search(r'честность=(\d+\.\d+)', system)
+        if m:
+            honesty = float(m.group(1))
+        return greed, fear, honesty
+
+    def _generate_negotiation(self, system: str, user: str, local_rng: Random) -> str:
+        """Генерировать фразу переговоров на основе traits."""
+        greed, fear, honesty = self._extract_traits(system)
+        is_official = "чиновник" in system.lower() or "лпр" in system.lower()
+
+        if is_official:
+            if greed > honesty:
+                phrases = self._OFFICIAL_PHRASES_GREEDY
+            else:
+                phrases = self._OFFICIAL_PHRASES_HONEST
+        else:
+            if greed > fear:
+                phrases = self._NEGOTIATION_PHRASES_GREEDY
+            else:
+                phrases = self._NEGOTIATION_PHRASES_HONEST
+
+        return local_rng.choice(phrases)
+
+    def _generate_decision(self, system: str, user: str, local_rng: Random) -> str:
+        """Генерировать JSON-решение на основе traits из текста переговоров."""
+        # Анализируем ключевые слова в переговорах
+        text_lower = user.lower()
+        has_corrupt_signals = any(w in text_lower for w in [
+            "откат", "процент", "взаимовыгод", "условия", "детали",
+            "предложение", "договоримся",
+        ])
+        has_honest_signals = any(w in text_lower for w in [
+            "регламент", "конкурсн", "технич", "официальн", "строго",
+        ])
+
+        if has_corrupt_signals and not has_honest_signals:
+            deal = True
+            kickback = local_rng.randint(5, 20)
+        elif has_honest_signals:
+            deal = False
+            kickback = None
+        else:
+            deal = local_rng.random() > 0.5
+            kickback = local_rng.randint(5, 15) if deal else None
+
+        return json.dumps({"deal_reached": deal, "kickback_percent": kickback})
+
+    def _generate_audit_score(self, system: str, user: str, local_rng: Random) -> str:
+        """Генерировать audit risk score на основе ключевых слов."""
+        text_lower = user.lower()
+        score = 0.15  # baseline
+
+        # Высокорисковые слова
+        if any(w in text_lower for w in ["откат", "процент", "взаимовыгод", "договоримся"]):
+            score += 0.4
+        # Средний риск
+        if any(w in text_lower for w in ["условия", "предложение", "детали"]):
+            score += 0.2
+        # Низкий риск
+        if any(w in text_lower for w in ["регламент", "официальн", "строго", "техническ"]):
+            score -= 0.1
+
+        # Немного шума
+        score += local_rng.uniform(-0.05, 0.05)
+        score = max(0.0, min(1.0, score))
+        return f"{score:.2f}"
 
     async def generate(
         self,
@@ -281,13 +390,18 @@ class MockLLMProvider:
         prompt_hash = hash((system, user, self.seed))
         local_rng = Random(prompt_hash)
 
-        # Определяем тип и выбираем шаблон
+        # Определяем тип и генерируем ответ
         prompt_type = self._detect_prompt_type(system, user)
-        base_response = self.response_templates.get(prompt_type, self.response_templates["default"])
 
-        # Добавляем вариативность на основе хэша
-        variation_suffix = f" [mock#{self.call_count}]"
-        text = base_response + variation_suffix
+        if prompt_type == "negotiation":
+            text = self._generate_negotiation(system, user, local_rng)
+        elif prompt_type == "decision":
+            text = self._generate_decision(system, user, local_rng)
+        elif prompt_type == "audit":
+            text = self._generate_audit_score(system, user, local_rng)
+        else:
+            base_response = self.response_templates.get(prompt_type, self.response_templates["default"])
+            text = base_response
 
         # Симулируем реалистичное время ответа (100-600ms)
         fake_time = 100 + local_rng.randint(0, 500)
