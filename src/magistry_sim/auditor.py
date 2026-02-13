@@ -58,30 +58,32 @@ class Auditor:
         risk = 0.05  # baseline
 
         # 1. Graph analysis (публичные связи)
+        graph_score = 0.0
         if data.social_tie_strength >= 0.8:
             reasons.append("Strong social tie (graph)")
-            risk += data.social_tie_strength * 0.35
+            graph_score = data.social_tie_strength * 0.35
         elif data.social_tie_strength >= 0.4:
             reasons.append("Moderate social tie (graph)")
-            risk += data.social_tie_strength * 0.15
+            graph_score = data.social_tie_strength * 0.15
+        risk += graph_score
 
         # 2. Bid analysis (отклонение от fair price)
-        bid_deviation = self._analyze_bids(data.bids, data.winner_id)
-        if bid_deviation > 0.15:
-            reasons.append(f"Bid deviation anomaly: {bid_deviation:.0%}")
-            risk += bid_deviation * 0.25
+        bid_score = self._analyze_bids(data.bids, data.winner_id)
+        if bid_score > 0.15:
+            reasons.append(f"Bid deviation anomaly: {bid_score:.0%}")
+            risk += bid_score * 0.25
 
         # 3. LLM text analysis (ключевое изменение!)
-        text_risk = await self._analyze_text(data.messages)
-        if text_risk > 0.3:
-            reasons.append(f"Suspicious communication (LLM): {text_risk:.2f}")
-            risk += text_risk * 0.30
+        text_score = await self._analyze_text(data.messages)
+        if text_score > 0.3:
+            reasons.append(f"Suspicious communication (LLM): {text_score:.2f}")
+            risk += text_score * 0.30
 
         # 4. Behavioral analysis (timing)
-        timing_risk = self._analyze_timing(data.response_times_ms)
-        if timing_risk > 0.2:
-            reasons.append(f"Timing anomaly: {timing_risk:.2f}")
-            risk += timing_risk * 0.15
+        timing_score = self._analyze_timing(data.response_times_ms)
+        if timing_score > 0.2:
+            reasons.append(f"Timing anomaly: {timing_score:.2f}")
+            risk += timing_score * 0.15
 
         # 5. Noise penalty
         if data.noise_level >= 0.4:
@@ -97,6 +99,10 @@ class Auditor:
             risk_score=risk,
             reasons=reasons,
             critical=risk >= self.config.critical_threshold,
+            graph_score=graph_score,
+            bid_score=bid_score,
+            text_score=text_score,
+            timing_score=timing_score,
         )
 
     async def _analyze_text(self, messages: list[NegotiationMessage]) -> float:

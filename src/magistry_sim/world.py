@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +23,7 @@ class World:
     - events: глобальный лог событий
     - agent_memories: память каждого агента (по архитектуре Codex)
     - state: произвольное состояние симуляции
+    - on_event: необязательный обратный вызов при каждом событии
     """
 
     agents: dict[str, Agent]
@@ -30,10 +32,14 @@ class World:
     agent_memories: dict[str, "AgentMemory"] = field(default_factory=dict)
 
     state: dict[str, Any] = field(default_factory=dict)
+    on_event: Callable[[Event], None] | None = None
 
     def log(self, tick: int, event_type: str, **payload: Any) -> None:
         """Записать событие в глобальный лог."""
-        self.events.append(Event(tick=tick, event_type=event_type, payload=dict(payload)))
+        event = Event(tick=tick, event_type=event_type, payload=dict(payload))
+        self.events.append(event)
+        if self.on_event is not None:
+            self.on_event(event)
 
     def get_memory(self, agent_id: str) -> "AgentMemory":
         """

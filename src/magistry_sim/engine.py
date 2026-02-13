@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from random import Random
 
@@ -11,6 +12,7 @@ from magistry_sim.llm import LLMProvider
 from magistry_sim.memory import MemoryItemType
 from magistry_sim.models import (
     Agent,
+    Event,
     GovernanceConfig,
     NegotiationResult,
     PublicTenderData,
@@ -79,7 +81,14 @@ class SimulationEngine:
         world.social_graph.add_node(agent_id)
         return agent
 
-    async def run(self, *, scenario_id: ScenarioId, seed: int | None = None, ticks: int | None = None) -> RunResult:
+    async def run(
+        self,
+        *,
+        scenario_id: ScenarioId,
+        seed: int | None = None,
+        ticks: int | None = None,
+        on_event: Callable[[Event], None] | None = None,
+    ) -> RunResult:
         """Запустить симуляцию сценария.
 
         Args:
@@ -94,7 +103,7 @@ class SimulationEngine:
         run_seed = scenario.seed if seed is None else seed
         rng = Random(run_seed)
 
-        world = self._init_world(scenario=scenario, rng=rng)
+        world = self._init_world(scenario=scenario, rng=rng, on_event=on_event)
 
         auditor = Auditor(config=self.governance, llm=self.llm)
         tribunal = Tribunal(self.governance)
@@ -115,7 +124,13 @@ class SimulationEngine:
             events=list(world.events),
         )
 
-    def _init_world(self, *, scenario: Scenario, rng: Random) -> World:
+    def _init_world(
+        self,
+        *,
+        scenario: Scenario,
+        rng: Random,
+        on_event: Callable[[Event], None] | None = None,
+    ) -> World:
         """Инициализировать мир с агентами и социальным графом."""
         agents: dict[str, Agent] = {}
         for i in range(scenario.num_officials):
@@ -160,7 +175,7 @@ class SimulationEngine:
         for agent_id in agents:
             social_graph.add_node(agent_id)
 
-        world = World(agents=agents, social_graph=social_graph)
+        world = World(agents=agents, social_graph=social_graph, on_event=on_event)
         world.state.update(
             next_official_index=scenario.num_officials,
             next_contractor_index=scenario.num_contractors,

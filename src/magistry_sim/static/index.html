@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MAGISTRY -- Дашборд симуляции</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #232735;
+  --border: #2e3344;
+  --text: #e1e4ed;
+  --text-muted: #8b90a0;
+  --accent: #6c8cff;
+  --accent-dim: #3d5199;
+  --green: #4caf50;
+  --red: #ef5350;
+  --orange: #ff9800;
+  --yellow: #ffd54f;
+  --radius: 8px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Control panel */
+.controls {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 24px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.controls label {
+  font-size: 13px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.controls select,
+.controls input {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 14px;
+  outline: none;
+}
+
+.controls select:focus,
+.controls input:focus {
+  border-color: var(--accent);
+}
+
+.controls button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 10px 28px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  align-self: flex-end;
+}
+
+.controls button:hover { background: #5a7af0; }
+.controls button:disabled { background: var(--accent-dim); cursor: not-allowed; }
+
+.controls .logo {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-right: 12px;
+  letter-spacing: 1px;
+}
+
+/* Main grid */
+.dashboard {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto 1fr;
+  gap: 12px;
+  padding: 12px 24px;
+  overflow-y: auto;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  overflow-y: auto;
+  max-height: 420px;
+}
+
+.panel h2 {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.panel.full-width { grid-column: 1 / -1; }
+
+/* Negotiation bubbles */
+.tick-divider {
+  text-align: center;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  margin: 12px 0 8px;
+  padding: 4px 0;
+  border-top: 1px dashed var(--border);
+  letter-spacing: 1px;
+}
+
+.bubble-row {
+  display: flex;
+  margin-bottom: 6px;
+}
+
+.bubble-row.left { justify-content: flex-start; }
+.bubble-row.right { justify-content: flex-end; }
+
+.bubble {
+  max-width: 75%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  position: relative;
+}
+
+.bubble .sender {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+.bubble-row.left .bubble {
+  background: var(--surface2);
+  border-bottom-left-radius: 4px;
+}
+
+.bubble-row.right .bubble {
+  background: var(--accent-dim);
+  border-bottom-right-radius: 4px;
+}
+
+.deal-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  margin: 8px 0;
+}
+
+.deal-badge.deal { background: rgba(239,83,80,0.2); color: var(--red); }
+.deal-badge.no-deal { background: rgba(76,175,80,0.2); color: var(--green); }
+
+/* Tender */
+.tender-info {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.tender-info .item {
+  padding: 8px;
+  background: var(--surface2);
+  border-radius: var(--radius);
+}
+
+.tender-info .item .label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tender-info .item .value {
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.corruption-flag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.corruption-flag.yes { background: rgba(239,83,80,0.2); color: var(--red); }
+.corruption-flag.no { background: rgba(76,175,80,0.2); color: var(--green); }
+
+/* Auditor bars */
+.risk-meter {
+  margin-bottom: 12px;
+}
+
+.risk-meter .header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.risk-meter .bar-bg {
+  height: 8px;
+  background: var(--surface2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.risk-meter .bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+
+.risk-low { background: var(--green); }
+.risk-medium { background: var(--orange); }
+.risk-high { background: var(--red); }
+
+.reasons-list {
+  list-style: none;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+
+.reasons-list li::before {
+  content: "\25B8 ";
+  color: var(--orange);
+}
+
+/* Tribunal cards */
+.juror-grid {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.juror-card {
+  background: var(--surface2);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  min-width: 100px;
+  text-align: center;
+  font-size: 12px;
+  border: 2px solid transparent;
+}
+
+.juror-card.guilty { border-color: var(--red); }
+.juror-card.not-guilty { border-color: var(--green); }
+
+.juror-card .juror-id { font-weight: 600; margin-bottom: 4px; }
+.juror-card .honesty { color: var(--text-muted); font-size: 11px; }
+.juror-card .vote {
+  margin-top: 4px;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.verdict {
+  display: inline-block;
+  padding: 6px 16px;
+  border-radius: var(--radius);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.verdict.guilty-verdict { background: rgba(239,83,80,0.2); color: var(--red); }
+.verdict.acquitted-verdict { background: rgba(76,175,80,0.2); color: var(--green); }
+
+/* Events log */
+.event-log-item {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.event-log-item .ev-tick {
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 50px;
+}
+
+.event-log-item .ev-type {
+  color: var(--yellow);
+  min-width: 160px;
+}
+
+.event-log-item .ev-detail {
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+/* Status bar */
+.status-bar {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 8px 24px;
+  display: flex;
+  gap: 24px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.status-bar .indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+.indicator.connected { background: var(--green); }
+.indicator.disconnected { background: var(--red); }
+.indicator.running { background: var(--orange); animation: pulse 1s infinite; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.empty-state {
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px;
+}
+</style>
+</head>
+<body>
+
+<div class="controls">
+  <span class="logo">MAGISTRY</span>
+  <label>
+    Сценарий
+    <select id="scenario"></select>
+  </label>
+  <label>
+    Режим управления
+    <select id="governance"></select>
+  </label>
+  <label>
+    Seed
+    <input type="number" id="seed" value="42" min="0" max="99999" style="width:90px">
+  </label>
+  <label>
+    <span>&nbsp;</span>
+    <label style="flex-direction:row; gap:6px; align-items:center; cursor:pointer">
+      <input type="checkbox" id="mock" checked> Mock LLM
+    </label>
+  </label>
+  <button id="btn-run">Запуск</button>
+</div>
+
+<div class="dashboard">
+  <div class="panel" id="panel-negotiation">
+    <h2>Переговоры</h2>
+    <div id="negotiation-content"><div class="empty-state">Ожидание запуска...</div></div>
+  </div>
+
+  <div class="panel" id="panel-tender">
+    <h2>Тендер</h2>
+    <div id="tender-content"><div class="empty-state">Ожидание запуска...</div></div>
+  </div>
+
+  <div class="panel" id="panel-auditor">
+    <h2>Аудитор</h2>
+    <div id="auditor-content"><div class="empty-state">Ожидание запуска...</div></div>
+  </div>
+
+  <div class="panel" id="panel-tribunal">
+    <h2>Трибунал</h2>
+    <div id="tribunal-content"><div class="empty-state">Ожидание запуска...</div></div>
+  </div>
+
+  <div class="panel full-width" id="panel-events" style="max-height:280px">
+    <h2>Репутация и события</h2>
+    <div id="events-content"><div class="empty-state">Ожидание запуска...</div></div>
+  </div>
+</div>
+
+<div class="status-bar">
+  <span><span class="indicator disconnected" id="ws-indicator"></span> <span id="ws-status">Отключено</span></span>
+  <span>Тик: <strong id="status-tick">--</strong></span>
+  <span>Событий: <strong id="status-events">0</strong></span>
+</div>
+
+<script>
+(function() {
+  const $ = (sel) => document.querySelector(sel);
+  let ws = null;
+  let eventCount = 0;
+  let currentTick = -1;
+  let lastNegTick = -1;
+  let lastTenderTick = -1;
+  let lastAuditTick = -1;
+
+  // --- Init: load scenarios and governance modes ---
+  async function init() {
+    try {
+      const [scenarios, modes] = await Promise.all([
+        fetch('/api/scenarios').then(r => r.json()),
+        fetch('/api/governance-modes').then(r => r.json()),
+      ]);
+
+      const selScenario = $('#scenario');
+      scenarios.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.id + ' -- ' + s.title;
+        opt.title = s.description;
+        selScenario.appendChild(opt);
+      });
+      // Default to S3
+      selScenario.value = 'S3';
+
+      const selGov = $('#governance');
+      modes.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.label;
+        selGov.appendChild(opt);
+      });
+      // Default to G3
+      selGov.value = 'G3';
+    } catch (e) {
+      console.error('Init failed:', e);
+    }
+  }
+
+  // --- Run button ---
+  $('#btn-run').addEventListener('click', () => {
+    startRun();
+  });
+
+  function startRun() {
+    if (ws) {
+      ws.close();
+    }
+    resetPanels();
+
+    const params = {
+      scenario: $('#scenario').value,
+      governance: $('#governance').value,
+      seed: parseInt($('#seed').value) || 42,
+      mock: $('#mock').checked,
+    };
+
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(proto + '//' + location.host + '/ws/run');
+
+    setStatus('running', 'Подключение...');
+
+    ws.onopen = () => {
+      setStatus('running', 'Запущено');
+      ws.send(JSON.stringify(params));
+      $('#btn-run').disabled = true;
+    };
+
+    ws.onmessage = (evt) => {
+      const msg = JSON.parse(evt.data);
+      if (msg.type === 'event') {
+        handleEvent(msg);
+      } else if (msg.type === 'run_complete') {
+        handleComplete(msg.metrics);
+      } else if (msg.type === 'error') {
+        setStatus('disconnected', 'Ошибка: ' + msg.message);
+        $('#btn-run').disabled = false;
+      }
+    };
+
+    ws.onclose = () => {
+      setStatus('disconnected', 'Отключено');
+      $('#btn-run').disabled = false;
+    };
+
+    ws.onerror = () => {
+      setStatus('disconnected', 'Ошибка соединения');
+      $('#btn-run').disabled = false;
+    };
+  }
+
+  function resetPanels() {
+    eventCount = 0;
+    currentTick = -1;
+    lastNegTick = -1;
+    lastTenderTick = -1;
+    lastAuditTick = -1;
+    $('#negotiation-content').innerHTML = '';
+    $('#tender-content').innerHTML = '';
+    $('#auditor-content').innerHTML = '';
+    $('#tribunal-content').innerHTML = '';
+    $('#events-content').innerHTML = '';
+    $('#status-tick').textContent = '--';
+    $('#status-events').textContent = '0';
+  }
+
+  function setStatus(state, text) {
+    const ind = $('#ws-indicator');
+    ind.className = 'indicator ' + state;
+    $('#ws-status').textContent = text;
+  }
+
+  // --- Event handling ---
+  function handleEvent(msg) {
+    eventCount++;
+    $('#status-events').textContent = eventCount;
+
+    if (msg.tick !== currentTick) {
+      currentTick = msg.tick;
+      $('#status-tick').textContent = currentTick;
+    }
+
+    const p = msg.payload;
+    const t = msg.event_type;
+
+    if (t === 'shadow_negotiation' || t === 'shadow_negotiation_initial') {
+      renderNegotiation(msg.tick, p);
+    } else if (t === 'official_award') {
+      renderTender(msg.tick, p);
+    } else if (t === 'audit_report') {
+      renderAudit(msg.tick, p);
+    } else if (t === 'tribunal_vote') {
+      renderTribunal(msg.tick, p);
+    } else if (t === 'reputation_update' || t === 'market_entry' || t === 'whistleblower_signal' || t === 'adaptation') {
+      renderEventLog(msg.tick, t, p);
+    } else {
+      renderEventLog(msg.tick, t, p);
+    }
+  }
+
+  function handleComplete(metrics) {
+    setStatus('connected', 'Завершено');
+    $('#btn-run').disabled = false;
+
+    // Summary in events
+    const el = $('#events-content');
+    const div = document.createElement('div');
+    div.className = 'tick-divider';
+    div.textContent = 'СИМУЛЯЦИЯ ЗАВЕРШЕНА';
+    el.appendChild(div);
+
+    if (metrics.outcomes) {
+      metrics.outcomes.forEach(o => {
+        const row = document.createElement('div');
+        row.className = 'event-log-item';
+        const corr = o.corruption ? 'ДА' : 'НЕТ';
+        const risk = o.audit_risk !== null ? (o.audit_risk * 100).toFixed(0) + '%' : '--';
+        row.innerHTML = `
+          <span class="ev-tick">Тик ${o.tick}</span>
+          <span class="ev-type">Итог</span>
+          <span class="ev-detail">Коррупция: ${corr} | Риск: ${risk} | Флаг: ${o.audit_flagged ? 'ДА' : 'НЕТ'} | Трибунал: ${o.tribunal_triggered ? (o.tribunal_guilty ? 'ВИНОВЕН' : 'ОПРАВДАН') : '--'}</span>
+        `;
+        el.appendChild(row);
+      });
+    }
+    el.scrollTop = el.scrollHeight;
+  }
+
+  // --- Panel renderers ---
+
+  function renderNegotiation(tick, p) {
+    const el = $('#negotiation-content');
+
+    if (tick !== lastNegTick) {
+      lastNegTick = tick;
+      const div = document.createElement('div');
+      div.className = 'tick-divider';
+      div.textContent = 'ТИК ' + tick;
+      el.appendChild(div);
+    }
+
+    if (p.messages && p.messages.length > 0) {
+      p.messages.forEach(m => {
+        const isLpr = m.sender_id === p.lpr_id;
+        const row = document.createElement('div');
+        row.className = 'bubble-row ' + (isLpr ? 'right' : 'left');
+        row.innerHTML = `
+          <div class="bubble">
+            <div class="sender">${m.sender_id} (R${m.round})</div>
+            ${escapeHtml(m.text)}
+          </div>
+        `;
+        el.appendChild(row);
+      });
+    }
+
+    // Deal result
+    const badge = document.createElement('div');
+    if (p.deal_reached) {
+      const pct = p.kickback_percent !== null ? (p.kickback_percent * 100).toFixed(0) + '%' : '?';
+      badge.innerHTML = `<span class="deal-badge deal">Сделка: откат ${pct}</span>`;
+    } else {
+      badge.innerHTML = `<span class="deal-badge no-deal">Сделка не состоялась</span>`;
+    }
+    el.appendChild(badge);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderTender(tick, p) {
+    const el = $('#tender-content');
+
+    if (tick !== lastTenderTick) {
+      lastTenderTick = tick;
+      const div = document.createElement('div');
+      div.className = 'tick-divider';
+      div.textContent = 'ТИК ' + tick;
+      el.appendChild(div);
+    }
+
+    const corr = p.corruption;
+    const flagClass = corr ? 'yes' : 'no';
+    const flagText = corr ? 'КОРРУПЦИЯ' : 'ЧИСТО';
+
+    const html = `
+      <div class="tender-info">
+        <div class="item">
+          <div class="label">Справедливый победитель</div>
+          <div class="value">${p.fair_winner_id}</div>
+        </div>
+        <div class="item">
+          <div class="label">Фактический победитель</div>
+          <div class="value">${p.actual_winner_id} <span class="corruption-flag ${flagClass}">${flagText}</span></div>
+        </div>
+        <div class="item">
+          <div class="label">Ставка справедливая</div>
+          <div class="value">${formatNum(p.bid_fair)}</div>
+        </div>
+        <div class="item">
+          <div class="label">Ставка фактическая</div>
+          <div class="value">${formatNum(p.bid_actual)}</div>
+        </div>
+      </div>
+    `;
+
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderAudit(tick, p) {
+    const el = $('#auditor-content');
+
+    if (tick !== lastAuditTick) {
+      lastAuditTick = tick;
+      const div = document.createElement('div');
+      div.className = 'tick-divider';
+      div.textContent = 'ТИК ' + tick;
+      el.appendChild(div);
+    }
+
+    const riskPct = ((p.risk_score || 0) * 100).toFixed(0);
+    const riskClass = riskPct >= 85 ? 'risk-high' : riskPct >= 50 ? 'risk-medium' : 'risk-low';
+
+    let html = renderMeter('Общий риск', p.risk_score, riskClass);
+
+    if (p.graph_score !== null && p.graph_score !== undefined) {
+      html += renderMeter('Граф (связи)', p.graph_score);
+    }
+    if (p.bid_score !== null && p.bid_score !== undefined) {
+      html += renderMeter('Ставки', p.bid_score);
+    }
+    if (p.text_score !== null && p.text_score !== undefined) {
+      html += renderMeter('Текст (LLM)', p.text_score);
+    }
+    if (p.timing_score !== null && p.timing_score !== undefined) {
+      html += renderMeter('Тайминг', p.timing_score);
+    }
+
+    if (p.reasons && p.reasons.length > 0) {
+      html += '<ul class="reasons-list">';
+      p.reasons.forEach(r => {
+        html += '<li>' + escapeHtml(r) + '</li>';
+      });
+      html += '</ul>';
+    }
+
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderMeter(label, score, forceClass) {
+    const pct = ((score || 0) * 100).toFixed(0);
+    const cls = forceClass || (pct >= 70 ? 'risk-high' : pct >= 30 ? 'risk-medium' : 'risk-low');
+    return `
+      <div class="risk-meter">
+        <div class="header"><span>${label}</span><span>${pct}%</span></div>
+        <div class="bar-bg"><div class="bar-fill ${cls}" style="width:${pct}%"></div></div>
+      </div>
+    `;
+  }
+
+  function renderTribunal(tick, p) {
+    const el = $('#tribunal-content');
+
+    const divider = document.createElement('div');
+    divider.className = 'tick-divider';
+    divider.textContent = 'ТИК ' + tick;
+    el.appendChild(divider);
+
+    // Juror cards
+    const grid = document.createElement('div');
+    grid.className = 'juror-grid';
+
+    if (p.juror_details && p.juror_details.length > 0) {
+      p.juror_details.forEach(jv => {
+        const card = document.createElement('div');
+        card.className = 'juror-card ' + (jv.voted_guilty ? 'guilty' : 'not-guilty');
+        card.innerHTML = `
+          <div class="juror-id">${jv.juror_id}</div>
+          <div class="honesty">Честность: ${(jv.honesty * 100).toFixed(0)}%</div>
+          <div class="vote" style="color:${jv.voted_guilty ? 'var(--red)' : 'var(--green)'}">
+            ${jv.voted_guilty ? 'ВИНОВЕН' : 'НЕВИНОВЕН'}
+          </div>
+        `;
+        grid.appendChild(card);
+      });
+    } else if (p.jurors) {
+      p.jurors.forEach(id => {
+        const card = document.createElement('div');
+        card.className = 'juror-card';
+        card.innerHTML = `<div class="juror-id">${id}</div>`;
+        grid.appendChild(card);
+      });
+    }
+    el.appendChild(grid);
+
+    // Verdict
+    const verdictDiv = document.createElement('div');
+    const verdictCls = p.guilty ? 'guilty-verdict' : 'acquitted-verdict';
+    const verdictText = p.guilty ? 'ВИНОВЕН' : 'ОПРАВДАН';
+    verdictDiv.innerHTML = `
+      <span class="verdict ${verdictCls}">${verdictText}</span>
+      <span style="margin-left:12px; font-size:13px; color:var(--text-muted)">
+        Голосов: ${p.votes_guilty} / ${p.votes_total}
+      </span>
+    `;
+    el.appendChild(verdictDiv);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function renderEventLog(tick, type, p) {
+    const el = $('#events-content');
+    const row = document.createElement('div');
+    row.className = 'event-log-item';
+
+    let detail = '';
+    if (type === 'reputation_update') {
+      detail = `ЛПР ${p.lpr_id}: ${fmtCap(p.lpr_before)} -> ${fmtCap(p.lpr_after)}${p.frozen_lpr ? ' [ЗАМОРОЖЕН]' : ''} | ` +
+               `Победитель ${p.winner_id}: ${fmtCap(p.winner_before)} -> ${fmtCap(p.winner_after)}${p.frozen_winner ? ' [ЗАМОРОЖЕН]' : ''}`;
+    } else if (type === 'market_entry') {
+      detail = `Новый агент: ${p.agent_id} (${p.role}), причина: ${p.reason}`;
+    } else if (type === 'whistleblower_signal') {
+      detail = `Информатор ${p.from_id} сообщает о ${p.about_lpr} + ${p.about_contractor}`;
+    } else if (type === 'adaptation') {
+      detail = `Агент ${p.agent_id}: жадность ${fmtPct(p.greed_before)} -> ${fmtPct(p.greed_after)}`;
+    } else {
+      const keys = Object.keys(p).slice(0, 4);
+      detail = keys.map(k => k + '=' + JSON.stringify(p[k])).join(', ');
+    }
+
+    row.innerHTML = `
+      <span class="ev-tick">Тик ${tick}</span>
+      <span class="ev-type">${type}</span>
+      <span class="ev-detail">${escapeHtml(detail)}</span>
+    `;
+    el.appendChild(row);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  // --- Helpers ---
+  function escapeHtml(text) {
+    const d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
+  }
+
+  function formatNum(n) {
+    if (n === null || n === undefined) return '--';
+    return Number(n).toLocaleString('ru-RU', { maximumFractionDigits: 0 });
+  }
+
+  function fmtCap(v) {
+    if (v === null || v === undefined) return '--';
+    return Number(v).toFixed(2);
+  }
+
+  function fmtPct(v) {
+    if (v === null || v === undefined) return '--';
+    return (Number(v) * 100).toFixed(0) + '%';
+  }
+
+  // --- Start ---
+  init();
+})();
+</script>
+</body>
+</html>

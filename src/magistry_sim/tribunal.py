@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from random import Random
 
 from magistry_sim.enums import AgentRole
-from magistry_sim.models import GovernanceConfig, RiskReport, TribunalResult
+from magistry_sim.models import GovernanceConfig, JurorVote, RiskReport, TribunalResult
 from magistry_sim.reputation import unfreeze
 from magistry_sim.world import World
 
@@ -45,14 +45,19 @@ class Tribunal:
 
         votes_guilty = 0
         votes_total = 0
+        juror_details: list[JurorVote] = []
         for juror in jurors:
             votes_total += 1
             # Чем честнее присяжный, тем ближе голос к доказательствам.
             base = report.risk_score
             bias = (0.5 - juror.honesty) * 0.25
             p_guilty = max(0.0, min(1.0, base + bias))
-            if rng.random() < p_guilty:
+            voted_guilty = rng.random() < p_guilty
+            if voted_guilty:
                 votes_guilty += 1
+            juror_details.append(
+                JurorVote(juror_id=juror.id, honesty=juror.honesty, voted_guilty=voted_guilty)
+            )
 
         guilty = votes_guilty > (votes_total / 2)
         juror_ids = [j.id for j in jurors]
@@ -66,6 +71,7 @@ class Tribunal:
             votes_guilty=votes_guilty,
             votes_total=votes_total,
             guilty=guilty,
+            juror_details=[jv.model_dump() for jv in juror_details],
         )
 
         lpr = world.agents[report.lpr_id]
@@ -85,4 +91,5 @@ class Tribunal:
             juror_ids=juror_ids,
             votes_guilty=votes_guilty,
             votes_total=votes_total,
+            juror_details=juror_details,
         )

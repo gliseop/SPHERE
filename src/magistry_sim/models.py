@@ -154,6 +154,21 @@ class RiskReport(BaseModel):
     reasons: list[str]
     critical: bool
 
+    graph_score: float | None = None
+    bid_score: float | None = None
+    text_score: float | None = None
+    timing_score: float | None = None
+
+
+class JurorVote(BaseModel):
+    """Голос одного присяжного в трибунале."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    juror_id: str
+    honesty: float
+    voted_guilty: bool
+
 
 class TribunalResult(BaseModel):
     """Результат трибунала с полной информацией о голосовании."""
@@ -164,6 +179,7 @@ class TribunalResult(BaseModel):
     juror_ids: list[str]
     votes_guilty: int
     votes_total: int
+    juror_details: list[JurorVote] = Field(default_factory=list)
 
 
 class TickOutcome(BaseModel):

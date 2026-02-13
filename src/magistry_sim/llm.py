@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 from abc import ABC, abstractmethod
@@ -13,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from random import Random
 from typing import Any, Protocol, runtime_checkable
+
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
 from pydantic import BaseModel
 
@@ -197,8 +200,11 @@ class OpenAICompatibleProvider:
                 )
                 elapsed_ms = (time.perf_counter() - start) * 1000
 
+                raw_text = response.choices[0].message.content or ""
+                clean_text = _THINK_RE.sub("", raw_text).strip()
+
                 result = LLMResponse(
-                    text=response.choices[0].message.content or "",
+                    text=clean_text,
                     response_time_ms=elapsed_ms,
                     prompt_tokens=response.usage.prompt_tokens if response.usage else 0,
                     completion_tokens=response.usage.completion_tokens
