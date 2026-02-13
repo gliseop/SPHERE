@@ -59,8 +59,10 @@ class NegotiationProtocol:
         lpr: Agent,
         contractor: Agent,
         scenario: Scenario,
+        tick: int,
         lpr_memory: AgentMemory,
         contractor_memory: AgentMemory,
+        force_deal_reached: bool | None = None,
         rng: Random,
     ) -> NegotiationResult:
         """Провести переговоры.
@@ -69,8 +71,10 @@ class NegotiationProtocol:
             lpr: Агент-чиновник (ЛПР).
             contractor: Агент-подрядчик.
             scenario: Текущий сценарий.
+            tick: Тик симуляции для записи в AgentMemory.
             lpr_memory: Память чиновника.
             contractor_memory: Память подрядчика.
+            force_deal_reached: Принудительно задать результат сделки (например, для режима "карусель").
             rng: Генератор случайных чисел.
 
         Returns:
@@ -80,11 +84,11 @@ class NegotiationProtocol:
 
         # Записать начало переговоров в память
         contractor_memory.add_event(
-            0, MemoryItemType.NEGOTIATION_START,
+            tick, MemoryItemType.NEGOTIATION_START,
             f"Начаты переговоры с {lpr.name} по тендеру на {scenario.tender_budget:,.0f}",
         )
         lpr_memory.add_event(
-            0, MemoryItemType.NEGOTIATION_START,
+            tick, MemoryItemType.NEGOTIATION_START,
             f"Начаты переговоры с {contractor.name} по тендеру на {scenario.tender_budget:,.0f}",
         )
 
@@ -142,25 +146,35 @@ class NegotiationProtocol:
             messages.append(official_msg)
             conversation_context += f"{lpr.name}: {official_msg.text}\n"
 
-        # Финальное решение через LLM
-        decision_prompt = f"Переговоры:\n{conversation_context}\nОпредели результат."
-        decision_response = await self.llm.generate(
-            DECISION_SYSTEM, decision_prompt, temperature=0.2,
-        )
-        deal_reached, kickback_percent = self._parse_decision(
-            decision_response.text, contractor=contractor, lpr=lpr, rng=rng,
-        )
+        # Финальное решение через LLM (или принудительно)
+        if force_deal_reached is None:
+            decision_prompt = f"Переговоры:\n{conversation_context}\nОпредели результат."
+            decision_response = await self.llm.generate(
+                DECISION_SYSTEM, decision_prompt, temperature=0.2,
+            )
+            deal_reached, kickback_percent = self._parse_decision(
+                decision_response.text, contractor=contractor, lpr=lpr, rng=rng,
+            )
+        else:
+            deal_reached = bool(force_deal_reached)
+            kickback_percent = None
+            if deal_reached:
+                kickback_percent = rng.uniform(5, 20)
+                kickback_percent = max(0.0, min(30.0, float(kickback_percent)))
 
         # Записать результат в память обоих агентов
         if deal_reached:
+            if kickback_percent is None:
+                kickback_percent = rng.uniform(5, 20)
+                kickback_percent = max(0.0, min(30.0, float(kickback_percent)))
             result_text = f"Достигнута договорённость с откатом {kickback_percent:.0f}%"
             mem_type = MemoryItemType.DEAL_REACHED
         else:
             result_text = "Переговоры завершены без договорённости"
             mem_type = MemoryItemType.DEAL_REJECTED
 
-        contractor_memory.add_event(0, mem_type, result_text)
-        lpr_memory.add_event(0, mem_type, result_text)
+        contractor_memory.add_event(tick, mem_type, result_text)
+        lpr_memory.add_event(tick, mem_type, result_text)
 
         return NegotiationResult(
             lpr_id=lpr.id,
@@ -197,11 +211,17 @@ class NegotiationProtocol:
             if json_match:
                 data = json.loads(json_match.group())
                 deal = bool(data.get("deal_reached", False))
-                kickback = data.get("kickback_percent")
-                if deal and kickback is not None:
-                    kickback = max(0.0, min(30.0, float(kickback)))
-                return deal, kickback if deal else None
-        except (json.JSONDecodeError, ValueError, TypeError):
+                if not deal:
+                    return False, None
+
+                kickback_raw = data.get("kickback_percent")
+                try:
+                    kickback = float(kickback_raw) if kickback_raw is not None else rng.uniform(5, 20)
+                except (ValueError, TypeError):
+                    kickback = rng.uniform(5, 20)
+                kickback = max(0.0, min(30.0, kickback))
+                return True, kickback
+        except json.JSONDecodeError:
             pass
 
         # Fallback: на основе traits агентов

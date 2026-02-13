@@ -231,6 +231,7 @@ class SimulationEngine:
         lpr_id = self._choose_lpr(world, rng, tick=tick)
         contractors = self._get_contractors_for_tender(world, rng, tick=tick, min_required=2)
 
+        enable_carousel = bool(world.state.get("enable_carousel", False))
         target_contractor = rng.choice(contractors).id if contractors else "biz_0"
 
         # Социальная связь ЛПР ↔ целевой подрядчик.
@@ -243,22 +244,14 @@ class SimulationEngine:
 
         # Shadow layer: многораундовые LLM-переговоры
         negotiation = NegotiationProtocol(self.llm)
-        negotiation_result: NegotiationResult = await negotiation.negotiate(
+        negotiation_result_initial: NegotiationResult = await negotiation.negotiate(
             lpr=world.agents[lpr_id],
             contractor=world.agents[target_contractor],
             scenario=scenario,
+            tick=tick,
             lpr_memory=world.get_memory(lpr_id),
             contractor_memory=world.get_memory(target_contractor),
             rng=rng,
-        )
-        world.log(
-            tick, "shadow_negotiation",
-            lpr_id=lpr_id,
-            contractor_id=target_contractor,
-            deal_reached=negotiation_result.deal_reached,
-            kickback_percent=negotiation_result.kickback_percent,
-            total_rounds=negotiation_result.total_rounds,
-            messages=[m.model_dump() for m in negotiation_result.messages],
         )
 
         # Official layer: генерируем предложения.
@@ -271,15 +264,54 @@ class SimulationEngine:
         fair_winner_id = min(bids.items(), key=lambda kv: kv[1])[0] if bids else target_contractor
 
         # Коррупция определяется РЕЗУЛЬТАТОМ переговоров
-        corruption = negotiation_result.deal_reached
+        corruption = negotiation_result_initial.deal_reached
 
         # Карусель: переопределяет победителя циклом
-        if bool(world.state.get("enable_carousel", False)):
+        if enable_carousel:
             idx = tick % max(1, len(contractors))
             target_contractor = contractors[idx].id
             corruption = True
+            # Социальная связь ЛПР ↔ фактический победитель (карусель).
+            world.social_graph.add_edge(
+                lpr_id,
+                target_contractor,
+                strength=float(world.state.get("relationship_strength", 0.0)),
+                kind="school/work",
+            )
 
         actual_winner_id = target_contractor if corruption else fair_winner_id
+
+        negotiation_result = negotiation_result_initial
+        if enable_carousel and actual_winner_id != negotiation_result_initial.contractor_id:
+            world.log(
+                tick, "shadow_negotiation_initial",
+                lpr_id=lpr_id,
+                contractor_id=negotiation_result_initial.contractor_id,
+                deal_reached=negotiation_result_initial.deal_reached,
+                kickback_percent=negotiation_result_initial.kickback_percent,
+                total_rounds=negotiation_result_initial.total_rounds,
+                messages=[m.model_dump() for m in negotiation_result_initial.messages],
+            )
+            negotiation_result = await negotiation.negotiate(
+                lpr=world.agents[lpr_id],
+                contractor=world.agents[actual_winner_id],
+                scenario=scenario,
+                tick=tick,
+                lpr_memory=world.get_memory(lpr_id),
+                contractor_memory=world.get_memory(actual_winner_id),
+                force_deal_reached=True,
+                rng=rng,
+            )
+
+        world.log(
+            tick, "shadow_negotiation",
+            lpr_id=lpr_id,
+            contractor_id=negotiation_result.contractor_id,
+            deal_reached=negotiation_result.deal_reached,
+            kickback_percent=negotiation_result.kickback_percent,
+            total_rounds=negotiation_result.total_rounds,
+            messages=[m.model_dump() for m in negotiation_result.messages],
+        )
 
         # --- Memory: записать результат тендера для каждого подрядчика ---
         for contractor in contractors:
@@ -331,17 +363,18 @@ class SimulationEngine:
         if self.governance.mode != GovernanceMode.G0_BASELINE:
             # Формируем PublicTenderData (только то, что видит аудитор)
             edge = world.social_graph.get_edge_data(lpr_id, actual_winner_id) or {}
+            public_messages = negotiation_result.messages if negotiation_result.contractor_id == actual_winner_id else []
             public_data = PublicTenderData(
                 tick=tick,
                 lpr_id=lpr_id,
                 contractor_id=actual_winner_id,
-                messages=negotiation_result.messages,
+                messages=public_messages,
                 bids=bids,
                 winner_id=actual_winner_id,
                 tender_budget=scenario.tender_budget,
                 social_tie_strength=float(edge.get("strength", 0.0)),
                 social_tie_kind=edge.get("kind"),
-                response_times_ms=[m.response_time_ms for m in negotiation_result.messages],
+                response_times_ms=[m.response_time_ms for m in public_messages],
                 noise_level=float(world.state.get("noise_level", 0.0)),
             )
             report = await auditor.assess(data=public_data)

@@ -44,6 +44,7 @@ async def test_honest_agents_reject_deal() -> None:
     result = await protocol.negotiate(
         lpr=lpr, contractor=contractor,
         scenario=_make_scenario(),
+        tick=0,
         lpr_memory=AgentMemory("off_0"),
         contractor_memory=AgentMemory("biz_0"),
         rng=Random(42),
@@ -66,6 +67,7 @@ async def test_greedy_agents_reach_deal() -> None:
     result = await protocol.negotiate(
         lpr=lpr, contractor=contractor,
         scenario=_make_scenario(),
+        tick=0,
         lpr_memory=AgentMemory("off_0"),
         contractor_memory=AgentMemory("biz_0"),
         rng=Random(42),
@@ -89,9 +91,11 @@ async def test_negotiation_recorded_in_memory() -> None:
     lpr_mem = AgentMemory("off_0")
     contractor_mem = AgentMemory("biz_0")
 
+    tick = 5
     await protocol.negotiate(
         lpr=lpr, contractor=contractor,
         scenario=_make_scenario(),
+        tick=tick,
         lpr_memory=lpr_mem,
         contractor_memory=contractor_mem,
         rng=Random(42),
@@ -100,6 +104,8 @@ async def test_negotiation_recorded_in_memory() -> None:
     # Должны быть события начала и завершения переговоров
     assert lpr_mem.count_by_type(MemoryItemType.NEGOTIATION_START) >= 1
     assert contractor_mem.count_by_type(MemoryItemType.NEGOTIATION_START) >= 1
+    assert lpr_mem.get_recent_items(1, item_types=[MemoryItemType.NEGOTIATION_START])[0].tick == tick
+    assert contractor_mem.get_recent_items(1, item_types=[MemoryItemType.NEGOTIATION_START])[0].tick == tick
 
     # Должно быть либо DEAL_REACHED, либо DEAL_REJECTED
     deal_events = (
@@ -107,6 +113,12 @@ async def test_negotiation_recorded_in_memory() -> None:
         lpr_mem.count_by_type(MemoryItemType.DEAL_REJECTED)
     )
     assert deal_events >= 1
+    assert lpr_mem.get_recent_items(
+        1, item_types=[MemoryItemType.DEAL_REACHED, MemoryItemType.DEAL_REJECTED],
+    )[0].tick == tick
+    assert contractor_mem.get_recent_items(
+        1, item_types=[MemoryItemType.DEAL_REACHED, MemoryItemType.DEAL_REJECTED],
+    )[0].tick == tick
 
 
 @pytest.mark.asyncio
@@ -122,6 +134,7 @@ async def test_max_rounds_respected() -> None:
     result = await protocol.negotiate(
         lpr=lpr, contractor=contractor,
         scenario=_make_scenario(),
+        tick=0,
         lpr_memory=AgentMemory("off_0"),
         contractor_memory=AgentMemory("biz_0"),
         rng=Random(42),
@@ -146,3 +159,18 @@ async def test_engine_with_negotiation() -> None:
     assert outcome.negotiation is not None
     assert len(outcome.negotiation.messages) > 0
     assert outcome.negotiation.total_rounds > 0
+
+
+def test_parse_decision_missing_kickback_percent_fallback() -> None:
+    """Если deal_reached=True, но kickback_percent отсутствует, используется fallback."""
+    llm = MockLLMProvider(seed=42)
+    protocol = NegotiationProtocol(llm)
+    lpr = _make_agent("off_0", AgentRole.OFFICIAL, greed=0.9, fear=0.1, honesty=0.1)
+    contractor = _make_agent("biz_0", AgentRole.CONTRACTOR, greed=0.9, fear=0.1, honesty=0.1)
+
+    deal, kickback = protocol._parse_decision(
+        '{"deal_reached": true}', contractor=contractor, lpr=lpr, rng=Random(42),
+    )
+    assert deal is True
+    assert kickback is not None
+    assert 0 < kickback <= 30
