@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magistry-sim"
+version = "0.2.0"
+description = "Мета-двигатель управления: симуляция организационных процессов с AI-агентами"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.0",
+    "networkx>=3.0",
+    "rich>=13.7",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+llm = ["openai>=1.0"]
+crew = ["crewai[tools]>=0.100"]
+dev = ["pytest>=9.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+magistry-sim = "magistry_sim.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
