@@ -126,6 +126,116 @@ class LLMCache:
         self._conn.close()
 
 
+@runtime_checkable
+class EmbeddingProvider(Protocol):
+    """Протокол для провайдеров эмбеддингов."""
+
+    def embed(self, text: str) -> list[float]:
+        """Получить эмбеддинг текста.
+
+        Args:
+            text: Входной текст.
+
+        Returns:
+            Вектор эмбеддинга.
+        """
+        ...
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Получить эмбеддинги для списка текстов.
+
+        Args:
+            texts: Список входных текстов.
+
+        Returns:
+            Список векторов эмбеддингов.
+        """
+        ...
+
+
+class MockEmbeddingProvider:
+    """Детерминированный провайдер эмбеддингов для тестов.
+
+    Генерирует воспроизводимые векторы на основе хеша текста.
+
+    Attributes:
+        dimensions: Размерность выходного вектора.
+    """
+
+    def __init__(self, dimensions: int = 64) -> None:
+        self.dimensions = dimensions
+
+    def embed(self, text: str) -> list[float]:
+        """Получить детерминированный эмбеддинг текста.
+
+        Args:
+            text: Входной текст.
+
+        Returns:
+            Вектор фиксированной размерности.
+        """
+        h = hashlib.sha256(text.encode()).digest()
+        raw = [b / 255.0 for b in h]
+        while len(raw) < self.dimensions:
+            raw.extend(raw)
+        return raw[: self.dimensions]
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Получить эмбеддинги для списка текстов.
+
+        Args:
+            texts: Список входных текстов.
+
+        Returns:
+            Список векторов эмбеддингов.
+        """
+        return [self.embed(t) for t in texts]
+
+
+class OpenAIEmbeddingProvider:
+    """Провайдер эмбеддингов через OpenAI-совместимый API.
+
+    Attributes:
+        _client: Клиент OpenAI API.
+        _model: Имя модели эмбеддингов.
+    """
+
+    def __init__(
+        self,
+        model: str = "text-embedding-3-small",
+        api_key: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        from openai import OpenAI
+
+        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        self._model = model
+
+    def embed(self, text: str) -> list[float]:
+        """Получить эмбеддинг текста через API.
+
+        Args:
+            text: Входной текст.
+
+        Returns:
+            Вектор эмбеддинга.
+        """
+        resp = self._client.embeddings.create(input=[text], model=self._model)
+        return resp.data[0].embedding
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Получить эмбеддинги для списка текстов через API.
+
+        Args:
+            texts: Список входных текстов.
+
+        Returns:
+            Список векторов эмбеддингов, упорядоченных по индексу.
+        """
+        resp = self._client.embeddings.create(input=texts, model=self._model)
+        return [d.embedding for d in sorted(resp.data, key=lambda x: x.index)]
+
+
 class MockLLMProvider:
     """Детерминированный mock-провайдер для тестов и отладки."""
 
