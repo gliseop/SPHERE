@@ -1,6 +1,9 @@
 """Тесты среды исполнения."""
 
+from unittest.mock import MagicMock
+
 from magistry_sim.agents import MockAgentRunner
+from magistry_sim.cognitive_runner import CognitiveAgentRunner
 from magistry_sim.enums import GovernanceMode, ScenarioId
 from magistry_sim.environment import Environment, SimulationResult
 from magistry_sim.scenarios import get_scenario
@@ -99,3 +102,71 @@ class TestEnvironment:
 
         assert len(result1.cases) == len(result2.cases)
         assert len(result1.events) == len(result2.events)
+
+
+class TestObservationPhase:
+    def test_agents_observe_prior_public_actions(self):
+        """Агенты, ходящие позже, видят публичные действия предыдущих."""
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = MagicMock(text="[]")
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.5] * 8
+
+        runner = CognitiveAgentRunner(
+            llm_provider=mock_llm, embedder=mock_embedder
+        )
+
+        config = get_scenario(ScenarioId.S0)
+        env = Environment(scenario=config, runner=runner)
+
+        # Симулируем публичное действие в раунде 0
+        env.state.event_log.log(
+            round=0,
+            event_type="message_sent",
+            agent_id="biz_2",
+            payload={"to_id": "off_1", "private": False},
+        )
+
+        # off_1 должен наблюдать это перед своим ходом
+        env._deliver_observations("off_1", prior_events_this_round=[
+            {"agent_id": "biz_2", "event_type": "message_sent",
+             "payload": {"to_id": "off_1", "private": False}}
+        ])
+
+        stream = runner.get_or_create_memory("off_1")
+        assert len(stream) >= 1
+
+    def test_no_observations_with_mock_runner(self):
+        """С MockAgentRunner наблюдения не доставляются."""
+        config = get_scenario(ScenarioId.S0)
+        runner = MockAgentRunner()
+        env = Environment(scenario=config, runner=runner)
+
+        # Метод не должен падать с MockAgentRunner
+        env._deliver_observations("off_1", prior_events_this_round=[
+            {"agent_id": "biz_1", "event_type": "message_sent",
+             "payload": {"to_id": "off_1", "private": False}}
+        ])
+
+    def test_private_events_not_observed(self):
+        """Приватные события не доставляются как наблюдения."""
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = MagicMock(text="[]")
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.5] * 8
+
+        runner = CognitiveAgentRunner(
+            llm_provider=mock_llm, embedder=mock_embedder
+        )
+
+        config = get_scenario(ScenarioId.S0)
+        env = Environment(scenario=config, runner=runner)
+
+        # Приватное событие — не должно наблюдаться off_2
+        env._deliver_observations("off_2", prior_events_this_round=[
+            {"agent_id": "biz_1", "event_type": "message_sent",
+             "payload": {"to_id": "off_1", "private": True}}
+        ])
+
+        stream = runner.get_or_create_memory("off_2")
+        assert len(stream) == 0

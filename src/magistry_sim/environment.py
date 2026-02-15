@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
+from typing import Any
 
 from .agents import AgentRunner, MockAgentRunner
+from .cognitive_runner import CognitiveAgentRunner
 from .cases import CASE_REGISTRY, apply_transition, check_condition
 from .config import ScenarioConfig
 from .context import build_situation
@@ -115,12 +117,65 @@ class Environment:
             agent_ids = list(self._state.agents.keys())
             self._rng.shuffle(agent_ids)
 
+            events_before_round = len(
+                self._state.event_log.all_events
+            )
+
             for agent_id in agent_ids:
+                all_events = self._state.event_log.all_events
+                prior_events = [
+                    {
+                        "agent_id": e.agent_id,
+                        "event_type": e.event_type,
+                        "payload": e.payload,
+                    }
+                    for e in all_events[events_before_round:]
+                    if e.round == round_num
+                ]
+                self._deliver_observations(agent_id, prior_events)
                 self._run_agent_turn(agent_id)
 
             self._apply_round_end_effects()
 
         return self._build_result()
+
+    def _deliver_observations(
+        self,
+        agent_id: str,
+        prior_events_this_round: list[dict[str, Any]],
+    ) -> None:
+        """Доставляет наблюдения о публичных событиях раунда агенту.
+
+        Работает только когда runner является CognitiveAgentRunner.
+        Приватные события (payload.private == True) пропускаются,
+        за исключением случаев, когда агент — адресат.
+
+        Args:
+            agent_id: Идентификатор агента-наблюдателя.
+            prior_events_this_round: События, произошедшие до хода агента.
+        """
+        if not isinstance(self._runner, CognitiveAgentRunner):
+            return
+
+        for event in prior_events_this_round:
+            payload = event.get("payload", {})
+            is_private = payload.get("private", False)
+            event_agent = event.get("agent_id", "")
+
+            if event_agent == agent_id:
+                continue
+
+            if is_private:
+                to_id = payload.get("to_id", "")
+                if to_id != agent_id:
+                    continue
+
+            event_text = (
+                f"{event_agent} выполнил {event.get('event_type', 'действие')}"
+            )
+            self._runner.observe(
+                agent_id, event_text, self._state.round
+            )
 
     def _generate_needs(self, round_num: int) -> None:
         """Сгенерировать потребности для текущего раунда.
