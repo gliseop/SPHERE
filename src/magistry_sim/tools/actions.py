@@ -243,7 +243,8 @@ def resolve_case(
     apply_transition(case, target_stage)
     case.decision = decision
     case.justification = justification
-    case.closed_at = state.round
+    is_terminal = target_stage in schema.terminal_stages
+    case.closed_at = state.round if is_terminal else None
 
     state.event_log.log(
         round=state.round,
@@ -255,7 +256,12 @@ def resolve_case(
         },
     )
 
-    return f"Дело {case_id} закрыто. Решение: {decision}"
+    if is_terminal:
+        return f"Дело {case_id} закрыто. Решение: {decision}"
+    return (
+        f"Дело {case_id} переведено в стадию {target_stage}. "
+        f"Решение: {decision}"
+    )
 
 
 def file_report(
@@ -340,6 +346,15 @@ def cast_vote(case_id: str, verdict: str, reasoning: str) -> str:
 
     if not state.has_capability(caller_id, "vote", ""):
         return "Ошибка: у вас нет полномочий голосовать."
+
+    if (
+        case.case_type != "investigation"
+        or case.stage != "tribunal"
+    ):
+        return (
+            "Ошибка: голосование доступно только для дела "
+            "типа investigation в стадии tribunal."
+        )
 
     already = any(v.voter_id == caller_id for v in case.votes)
     if already:

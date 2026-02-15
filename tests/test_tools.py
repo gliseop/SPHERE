@@ -299,6 +299,32 @@ class TestResolveCase:
         finally:
             _reset_context(tokens)
 
+    def test_resolve_intermediate_stage_not_closed(self):
+        state = _make_state()
+        state.agents["off_1"].capabilities.append(
+            Capability(action="resolve_case", case_types=["hiring"])
+        )
+        case = Case(
+            id="H-001",
+            case_type="hiring",
+            title="Найм",
+            description="Test",
+            owner_id="off_1",
+            stage="screening",
+        )
+        state.cases["H-001"] = case
+
+        tokens = _setup_context(state, "off_1")
+        try:
+            result = resolve_case(
+                "H-001", "Переход к интервью", "Кандидаты отобраны"
+            )
+            assert "переведено в стадию decision" in result
+            assert case.stage == "decision"
+            assert case.closed_at is None
+        finally:
+            _reset_context(tokens)
+
 
 class TestFileReport:
     def test_auditor_report(self):
@@ -407,6 +433,26 @@ class TestCastVote:
             cast_vote("T-001", "виновен", "Причина")
             result = cast_vote("T-001", "невиновен", "Передумал")
             assert "Ошибка" in result
+        finally:
+            _reset_context(tokens)
+
+    def test_vote_rejected_for_non_tribunal_case(self):
+        state = _make_state()
+        case = Case(
+            id="D-001",
+            case_type="procurement",
+            title="Закупка",
+            description="Test",
+            owner_id="off_1",
+            stage="evaluation",
+        )
+        state.cases["D-001"] = case
+
+        tokens = _setup_context(state, "juror_0")
+        try:
+            result = cast_vote("D-001", "виновен", "Причина")
+            assert "Ошибка" in result
+            assert len(case.votes) == 0
         finally:
             _reset_context(tokens)
 

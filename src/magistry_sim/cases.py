@@ -197,7 +197,10 @@ def validate_transition(
 
 
 def check_condition(
-    condition: str, case: Case, current_round: int
+    condition: str,
+    case: Case,
+    current_round: int,
+    quorum_size: int = 3,
 ) -> bool:
     """Проверить условие для условного перехода.
 
@@ -205,6 +208,7 @@ def check_condition(
         condition: Имя условия (deadline_expired, has_proposals, quorum_reached).
         case: Дело.
         current_round: Текущий раунд.
+        quorum_size: Требуемое число голосов для кворума трибунала.
 
     Returns:
         True, если условие выполнено.
@@ -217,7 +221,8 @@ def check_condition(
     if condition == "has_proposals":
         return len(case.proposals) > 0
     if condition == "quorum_reached":
-        return len(case.votes) >= 3
+        required_votes = max(1, quorum_size)
+        return len(case.votes) >= required_votes
     return False
 
 

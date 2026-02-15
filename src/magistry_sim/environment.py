@@ -239,7 +239,10 @@ class Environment:
             if cond:
                 target_stage, condition = cond
                 if check_condition(
-                    condition, case, self._state.round
+                    condition,
+                    case,
+                    self._state.round,
+                    quorum_size=self._scenario.governance.jury_size,
                 ):
                     old_stage = case.stage
                     apply_transition(case, target_stage)
@@ -311,15 +314,22 @@ class Environment:
                 and case.stage == "tribunal"
             ):
                 if check_condition(
-                    "quorum_reached", case, self._state.round
+                    "quorum_reached",
+                    case,
+                    self._state.round,
+                    quorum_size=self._scenario.governance.jury_size,
                 ):
                     apply_transition(case, "verdict")
                     guilty = sum(
                         1
                         for v in case.votes
-                        if "виновен" in v.verdict.lower()
+                        if v.verdict.strip().lower() == "виновен"
                     )
-                    not_guilty = len(case.votes) - guilty
+                    not_guilty = sum(
+                        1
+                        for v in case.votes
+                        if v.verdict.strip().lower() == "невиновен"
+                    )
                     verdict = (
                         "виновен"
                         if guilty > not_guilty

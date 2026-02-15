@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 from magistry_sim.agents import MockAgentRunner
+from magistry_sim.cases import Case, Vote
 from magistry_sim.cognitive_runner import CognitiveAgentRunner
 from magistry_sim.enums import GovernanceMode, ScenarioId
 from magistry_sim.environment import Environment, SimulationResult
@@ -102,6 +103,97 @@ class TestEnvironment:
 
         assert len(result1.cases) == len(result2.cases)
         assert len(result1.events) == len(result2.events)
+
+    def test_tribunal_verdict_uses_exact_vote_values(self):
+        scenario = get_scenario(ScenarioId.S0)
+        env = Environment(
+            scenario=scenario,
+            governance=GovernanceMode.G3,
+            runner=MockAgentRunner(),
+        )
+        case = Case(
+            id="T-001",
+            case_type="investigation",
+            title="Трибунал",
+            description="Test",
+            owner_id="auditor",
+            stage="tribunal",
+        )
+        case.votes.extend([
+            Vote(
+                voter_id="juror_0",
+                case_id="T-001",
+                verdict="невиновен",
+                reasoning="Нет доказательств",
+                round=0,
+            ),
+            Vote(
+                voter_id="juror_1",
+                case_id="T-001",
+                verdict="невиновен",
+                reasoning="Сомнения",
+                round=0,
+            ),
+            Vote(
+                voter_id="juror_2",
+                case_id="T-001",
+                verdict="виновен",
+                reasoning="Есть основания",
+                round=0,
+            ),
+        ])
+        env.state.cases["T-001"] = case
+        env.state.round = 0
+
+        env._apply_round_end_effects()
+
+        assert case.stage == "verdict"
+        assert case.decision == "невиновен"
+
+    def test_tribunal_quorum_respects_configured_jury_size(self):
+        scenario = get_scenario(ScenarioId.S0)
+        scenario = scenario.model_copy(
+            update={
+                "governance": scenario.governance.model_copy(
+                    update={"jury_size": 2}
+                )
+            }
+        )
+        env = Environment(
+            scenario=scenario,
+            governance=GovernanceMode.G3,
+            runner=MockAgentRunner(),
+        )
+        case = Case(
+            id="T-002",
+            case_type="investigation",
+            title="Трибунал",
+            description="Test",
+            owner_id="auditor",
+            stage="tribunal",
+        )
+        case.votes.extend([
+            Vote(
+                voter_id="juror_0",
+                case_id="T-002",
+                verdict="виновен",
+                reasoning="Причина 1",
+                round=0,
+            ),
+            Vote(
+                voter_id="juror_1",
+                case_id="T-002",
+                verdict="невиновен",
+                reasoning="Причина 2",
+                round=0,
+            ),
+        ])
+        env.state.cases["T-002"] = case
+        env.state.round = 0
+
+        env._apply_round_end_effects()
+
+        assert case.stage == "verdict"
 
 
 class TestObservationPhase:

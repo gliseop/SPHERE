@@ -19,6 +19,7 @@ from magistry_sim.cases import (
     CaseSchema,
     Note,
     Proposal,
+    Vote,
     apply_transition,
     check_condition,
     validate_transition,
@@ -171,6 +172,41 @@ class TestFSM:
             )
         )
         assert check_condition("has_proposals", case, 0)
+
+    def test_check_condition_quorum_reached_respects_size(self):
+        case = Case(
+            id="T-001",
+            case_type="investigation",
+            title="Трибунал",
+            description="Test",
+            owner_id="auditor",
+            stage="tribunal",
+        )
+        case.votes.append(
+            Vote(
+                voter_id="juror_0",
+                case_id="T-001",
+                verdict="виновен",
+                reasoning="Причина 1",
+                round=0,
+            )
+        )
+        case.votes.append(
+            Vote(
+                voter_id="juror_1",
+                case_id="T-001",
+                verdict="невиновен",
+                reasoning="Причина 2",
+                round=0,
+            )
+        )
+
+        assert not check_condition(
+            "quorum_reached", case, 0, quorum_size=3
+        )
+        assert check_condition(
+            "quorum_reached", case, 0, quorum_size=2
+        )
 
     def test_apply_transition(self):
         case = Case(
