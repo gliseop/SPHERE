@@ -1,5 +1,7 @@
 """Тесты потока памяти агента."""
 
+import math
+
 import pytest
 from magistry_sim.memory import MemoryRecord, MemoryStream
 
@@ -110,3 +112,76 @@ class TestMemoryStream:
         stream.add(content="r1b", importance=5.0, kind="observation", round_num=1)
         round1 = stream.get_by_round(1)
         assert len(round1) == 2
+
+
+class TestMemoryRetrieval:
+    def _make_stream_with_embeddings(self):
+        stream = MemoryStream(agent_id="off_1")
+        stream.add(
+            content="biz_1 предложил встретиться для обсуждения",
+            importance=7.0,
+            kind="observation",
+            round_num=0,
+            embedding=[1.0, 0.0, 0.0],
+        )
+        stream.add(
+            content="biz_1 подал заявку на тендер D-001",
+            importance=6.0,
+            kind="observation",
+            round_num=2,
+            embedding=[0.9, 0.1, 0.0],
+        )
+        stream.add(
+            content="juror_0 обсудил процедуру с juror_1",
+            importance=3.0,
+            kind="observation",
+            round_num=5,
+            embedding=[0.0, 0.0, 1.0],
+        )
+        return stream
+
+    def test_retrieve_returns_scored_results(self):
+        stream = self._make_stream_with_embeddings()
+        results = stream.retrieve(
+            query_embedding=[1.0, 0.0, 0.0],
+            current_round=5,
+            top_k=2,
+        )
+        assert len(results) == 2
+        assert "biz_1" in results[0].content
+
+    def test_retrieve_respects_top_k(self):
+        stream = self._make_stream_with_embeddings()
+        results = stream.retrieve(
+            query_embedding=[1.0, 0.0, 0.0],
+            current_round=5,
+            top_k=1,
+        )
+        assert len(results) == 1
+
+    def test_retrieve_empty_stream(self):
+        stream = MemoryStream(agent_id="off_1")
+        results = stream.retrieve(
+            query_embedding=[1.0, 0.0, 0.0],
+            current_round=0,
+            top_k=5,
+        )
+        assert results == []
+
+    def test_retrieve_skips_records_without_embedding(self):
+        stream = MemoryStream(agent_id="off_1")
+        stream.add(content="no embedding", importance=5.0, kind="observation", round_num=0)
+        stream.add(
+            content="with embedding",
+            importance=5.0,
+            kind="observation",
+            round_num=0,
+            embedding=[1.0, 0.0],
+        )
+        results = stream.retrieve(
+            query_embedding=[1.0, 0.0],
+            current_round=0,
+            top_k=5,
+        )
+        assert len(results) == 1
+        assert results[0].content == "with embedding"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import uuid
 from typing import Literal
 
@@ -9,6 +10,32 @@ from pydantic import BaseModel, Field
 
 
 MemoryKind = Literal["observation", "reflection", "plan"]
+
+# Коэффициенты формулы Park et al. (2023)
+RECENCY_WEIGHT = 0.5
+RELEVANCE_WEIGHT = 3.0
+IMPORTANCE_WEIGHT = 2.0
+RECENCY_DECAY = 0.995
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Косинусное сходство двух векторов.
+
+    Args:
+        a: Первый вектор.
+        b: Второй вектор.
+
+    Returns:
+        Значение косинусного сходства от -1 до 1 или 0 при невалидных входах.
+    """
+    if len(a) != len(b) or not a:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 class MemoryRecord(BaseModel, extra="forbid"):
@@ -122,6 +149,46 @@ class MemoryStream:
             Список записей из указанного раунда.
         """
         return [r for r in self.records if r.created_at == round_num]
+
+    def retrieve(
+        self,
+        query_embedding: list[float],
+        current_round: int,
+        top_k: int = 20,
+    ) -> list[MemoryRecord]:
+        """Извлекает наиболее релевантные записи из потока памяти.
+
+        Формула оценки: score = alpha*recency + beta*relevance + gamma*importance
+        (Park et al., 2023).
+
+        Args:
+            query_embedding: Вектор запроса для семантического поиска.
+            current_round: Номер текущего раунда (для расчёта давности).
+            top_k: Максимальное количество возвращаемых записей.
+
+        Returns:
+            Список записей, отсортированных по убыванию оценки.
+        """
+        candidates = [r for r in self.records if r.embedding]
+        if not candidates:
+            return []
+
+        scored: list[tuple[float, MemoryRecord]] = []
+        for rec in candidates:
+            rounds_ago = current_round - rec.created_at
+            recency = RECENCY_DECAY ** rounds_ago
+            relevance = _cosine_similarity(query_embedding, rec.embedding)
+            importance = rec.importance / 10.0
+
+            score = (
+                RECENCY_WEIGHT * recency
+                + RELEVANCE_WEIGHT * relevance
+                + IMPORTANCE_WEIGHT * importance
+            )
+            scored.append((score, rec))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [rec for _, rec in scored[:top_k]]
 
     def reset_importance_accumulator(self) -> None:
         """Сбрасывает счётчик важности после рефлексии."""
