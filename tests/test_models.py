@@ -225,3 +225,49 @@ class TestResources:
         assert not rm.free_slot("unknown")
         assert not rm.use_capacity("unknown")
         assert not rm.free_capacity("unknown")
+
+
+class TestAgentProfileV4:
+    def test_profile_with_personality(self):
+        from magistry_sim.personality import (
+            AgentPersonality,
+            HEXACOProfile,
+            DarkTriadProfile,
+            NeutralizationTechnique,
+        )
+
+        personality = AgentPersonality(
+            hexaco=HEXACOProfile(
+                honesty_humility=20,
+                emotionality=30,
+                extraversion=80,
+                agreeableness=25,
+                conscientiousness=60,
+                openness=70,
+            ),
+            dark_triad=DarkTriadProfile(
+                narcissism=80, machiavellianism=90, psychopathy=70
+            ),
+            neutralization_techniques=[NeutralizationTechnique.EVERYONE_DOES_IT],
+        )
+        profile = AgentProfile(
+            id="test_1",
+            name="Тестов Т.Т.",
+            position="чиновник",
+            capabilities=[],
+            personality=personality,
+        )
+        assert profile.personality.hexaco.honesty_humility == 20
+        assert profile.personality.classify_archetype() == "initiator"
+
+    def test_legacy_profile_still_works(self):
+        """Обратная совместимость: старые профили без personality."""
+        profile = AgentProfile(
+            id="old_1",
+            name="Старый Т.Т.",
+            position="чиновник",
+            capabilities=[],
+            greed=0.8,
+            honesty=0.2,
+        )
+        assert profile.greed == 0.8

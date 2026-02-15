@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from .enums import GovernanceMode, ScenarioId
+from .personality import AgentPersonality
 
 
 class Capability(BaseModel):
@@ -50,6 +51,7 @@ class AgentProfile(BaseModel):
     fear: float = 0.5
     honesty: float = 0.5
     competence: float | None = None
+    personality: AgentPersonality | None = None
     immune: bool = False
     connections: list[Connection] = Field(default_factory=list)
     initial_resources: ResourcePool = Field(default_factory=ResourcePool)
