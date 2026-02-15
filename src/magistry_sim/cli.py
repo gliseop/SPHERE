@@ -121,6 +121,64 @@ def _print_result(result, metrics) -> None:
     console.print()
 
 
+def _create_runner(runner_type: str) -> object:
+    """Создать runner указанного типа.
+
+    Для runner-ов, требующих API-ключей (llm, crewai), загружает
+    переменные окружения через dotenv. Для cognitive при отсутствии
+    API-ключей использует mock-провайдеры.
+
+    Args:
+        runner_type: Тип runner-а (mock, llm, crewai, cognitive).
+
+    Returns:
+        Экземпляр runner-а.
+    """
+    if runner_type == "mock":
+        return MockAgentRunner()
+
+    if runner_type in ("llm", "crewai"):
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        if runner_type == "crewai":
+            from .agents import CrewAIAgentRunner
+            return CrewAIAgentRunner(verbose=True)
+
+        from .agents import LLMAgentRunner
+        from .llm import create_provider
+        provider = create_provider(mock=False)
+        return LLMAgentRunner(llm_provider=provider, verbose=True)
+
+    if runner_type == "cognitive":
+        import os
+        from .cognitive_runner import CognitiveAgentRunner
+        from .llm import (
+            MockEmbeddingProvider,
+            MockLLMProvider,
+            create_provider,
+        )
+
+        has_api_key = bool(os.getenv("OPENAI_API_KEY"))
+        if has_api_key:
+            from dotenv import load_dotenv
+            load_dotenv()
+            llm = create_provider(mock=False)
+            from .llm import OpenAIEmbeddingProvider
+            embedder = OpenAIEmbeddingProvider()
+        else:
+            llm = MockLLMProvider()
+            embedder = MockEmbeddingProvider(dimensions=64)
+
+        return CognitiveAgentRunner(
+            llm_provider=llm,
+            embedder=embedder,
+            verbose=True,
+        )
+
+    return MockAgentRunner()
+
+
 def main() -> None:
     """Точка входа CLI."""
     parser = argparse.ArgumentParser(
@@ -151,16 +209,23 @@ def main() -> None:
         help="Количество раундов",
     )
     parser.add_argument(
+        "--runner",
+        type=str,
+        default=None,
+        choices=["mock", "llm", "crewai", "cognitive"],
+        help="Тип runner-а: mock, llm, crewai, cognitive",
+    )
+    parser.add_argument(
         "--mock",
         action="store_true",
         default=True,
-        help="Использовать mock-runner (по умолчанию)",
+        help="Использовать mock-runner (устаревший, используйте --runner mock)",
     )
     parser.add_argument(
         "--no-mock",
         action="store_true",
         default=False,
-        help="Использовать CrewAI-runner",
+        help="Использовать CrewAI-runner (устаревший, используйте --runner crewai)",
     )
     parser.add_argument(
         "--list-scenarios",
@@ -211,16 +276,11 @@ def main() -> None:
             )
             sys.exit(1)
 
-    use_mock = not args.no_mock
-    runner = MockAgentRunner() if use_mock else None
+    runner_type = args.runner
+    if runner_type is None:
+        runner_type = "crewai" if args.no_mock else "mock"
 
-    if not use_mock:
-        from dotenv import load_dotenv
-        load_dotenv()
-
-        from .agents import CrewAIAgentRunner
-
-        runner = CrewAIAgentRunner(verbose=True)
+    runner = _create_runner(runner_type)
 
     env = Environment(
         scenario=scenario,
