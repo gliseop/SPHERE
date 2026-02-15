@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
+from typing import Any
 
 from .environment import SimulationResult
 
@@ -159,3 +161,107 @@ def compute_metrics(result: SimulationResult) -> SimulationMetrics:
     )
 
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Метрики v4: когнитивный агент
+# ---------------------------------------------------------------------------
+
+# Паттерны действий, характерные для каждого архетипа.
+# Ключ — название архетипа, значение — множество инструментов,
+# которые архетип использует чаще других.
+_ARCHETYPE_ACTION_PATTERNS: dict[str, set[str]] = {
+    "initiator": {"talk_to", "submit_proposal", "open_case"},
+    "machiavellist": {"talk_to", "submit_proposal"},
+    "conformist": {"submit_proposal", "add_note", "cast_vote"},
+    "idealist": {"file_report", "cast_vote", "add_note"},
+    "opportunist": {"talk_to", "submit_proposal", "open_case"},
+}
+
+
+def compute_personality_consistency(
+    actions: list[dict[str, Any]],
+    archetype: str,
+) -> float:
+    """Оценить согласованность действий агента с его архетипом.
+
+    Вычисляет долю действий, соответствующих паттерну архетипа,
+    и масштабирует результат к шкале 0..5.
+
+    Args:
+        actions: Список действий агента (словари с ключом "tool").
+        archetype: Название архетипа личности.
+
+    Returns:
+        Оценка согласованности от 0.0 до 5.0.
+    """
+    if not actions:
+        return 0.0
+
+    pattern = _ARCHETYPE_ACTION_PATTERNS.get(
+        archetype, {"talk_to", "open_case"}
+    )
+    matching = sum(
+        1 for a in actions if a.get("tool", "") in pattern
+    )
+    ratio = matching / len(actions)
+    return round(ratio * 5.0, 2)
+
+
+def compute_memory_utilization(
+    total_memories: int,
+    retrieved_memories: int,
+    actions_influenced: int,
+) -> float:
+    """Оценить эффективность использования памяти агента.
+
+    Вычисляет долю воспоминаний, которые были извлечены и повлияли
+    на действия агента.
+
+    Args:
+        total_memories: Общее число воспоминаний в потоке.
+        retrieved_memories: Число извлечённых воспоминаний.
+        actions_influenced: Число действий, на которые повлияла память.
+
+    Returns:
+        Оценка утилизации от 0.0 до 1.0.
+    """
+    if total_memories == 0:
+        return 0.0
+
+    retrieval_ratio = retrieved_memories / total_memories
+    if retrieved_memories == 0:
+        return 0.0
+
+    influence_ratio = actions_influenced / retrieved_memories
+    utilization = retrieval_ratio * influence_ratio
+    return min(utilization, 1.0)
+
+
+def compute_information_asymmetry(
+    memory_sizes: dict[str, int],
+) -> float:
+    """Вычислить информационную асимметрию между агентами.
+
+    Использует коэффициент вариации размеров потоков памяти
+    как меру неравномерности распределения информации.
+
+    Args:
+        memory_sizes: Словарь {agent_id: число воспоминаний}.
+
+    Returns:
+        Коэффициент вариации (>= 0.0). Ноль означает
+        равное распределение информации.
+    """
+    if len(memory_sizes) <= 1:
+        return 0.0
+
+    values = list(memory_sizes.values())
+    n = len(values)
+    mean = sum(values) / n
+    if mean == 0.0:
+        return 0.0
+
+    variance = sum((v - mean) ** 2 for v in values) / n
+    std = math.sqrt(variance)
+    return round(std / mean, 4)
