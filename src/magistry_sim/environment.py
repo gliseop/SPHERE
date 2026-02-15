@@ -186,13 +186,14 @@ class Environment:
                 if check_condition(
                     condition, case, self._state.round
                 ):
+                    old_stage = case.stage
                     apply_transition(case, target_stage)
                     self._state.event_log.log(
                         round=self._state.round,
                         event_type="auto_transition",
                         payload={
                             "case_id": case.id,
-                            "from": case.stage,
+                            "from": old_stage,
                             "to": target_stage,
                             "condition": condition,
                         },

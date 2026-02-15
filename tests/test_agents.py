@@ -2,6 +2,7 @@
 
 from magistry_sim.agents import (
     AgentRunner,
+    LLMAgentRunner,
     MockAgentRunner,
     build_backstory,
     _greed_text,
@@ -14,6 +15,7 @@ from magistry_sim.config import (
     Capability,
     Connection,
 )
+from magistry_sim.llm import MockLLMProvider
 from magistry_sim.state import WorldState
 
 
@@ -126,3 +128,92 @@ class TestMockAgentRunner:
             "off_1", "Привет", "biz_1", "", state
         )
         assert "сотрудничеств" in reply
+
+
+class TestJsonParser:
+    """Тесты парсера JSON-действий LLMAgentRunner."""
+
+    def _make_runner(self) -> LLMAgentRunner:
+        return LLMAgentRunner(
+            llm_provider=MockLLMProvider(), verbose=False
+        )
+
+    def test_clean_json(self):
+        runner = self._make_runner()
+        text = '[{"tool": "open_case", "args": {"case_type": "procurement"}}]'
+        result = runner._parse_json_actions(text)
+        assert len(result) == 1
+        assert result[0]["tool"] == "open_case"
+
+    def test_markdown_fences(self):
+        runner = self._make_runner()
+        text = '```json\n[{"tool": "talk_to", "args": {"agent_id": "biz_1", "message": "hi"}}]\n```'
+        result = runner._parse_json_actions(text)
+        assert len(result) == 1
+        assert result[0]["tool"] == "talk_to"
+
+    def test_mixed_text_and_json(self):
+        runner = self._make_runner()
+        text = (
+            "Я решил открыть дело.\n\n"
+            '[{"tool": "open_case", "args": {"case_type": "procurement", '
+            '"title": "Закупка", "description": "Нужно оборудование"}}]\n'
+        )
+        result = runner._parse_json_actions(text)
+        assert len(result) == 1
+        assert result[0]["tool"] == "open_case"
+
+    def test_narrative_with_embedded_json(self):
+        runner = self._make_runner()
+        text = (
+            "Анализирую ситуацию. Вижу потребность в закупке.\n"
+            "Мои действия:\n"
+            '[\n'
+            '  {"tool": "talk_to", "args": {"agent_id": "biz_1", '
+            '"message": "Привет", "private": true}},\n'
+            '  {"tool": "open_case", "args": {"case_type": "procurement", '
+            '"title": "Серверы", "description": "Нужны серверы"}}\n'
+            ']\n\n'
+            "Жду результата."
+        )
+        result = runner._parse_json_actions(text)
+        assert len(result) == 2
+
+    def test_trailing_garbage(self):
+        runner = self._make_runner()
+        text = (
+            '[{"tool": "talk_to", "args": {"agent_id": "biz_1", '
+            '"message": "Привет", "private": false}}]\n}\n```'
+        )
+        result = runner._parse_json_actions(text)
+        assert len(result) == 1
+        assert result[0]["tool"] == "talk_to"
+
+    def test_single_object_without_array(self):
+        runner = self._make_runner()
+        text = (
+            "Вот моё действие:\n"
+            '{"tool": "add_note", "args": {"case_id": "D-001", '
+            '"content": "Запись"}}'
+        )
+        result = runner._parse_json_actions(text)
+        assert len(result) == 1
+        assert result[0]["tool"] == "add_note"
+
+    def test_empty_array(self):
+        runner = self._make_runner()
+        text = "[]"
+        result = runner._parse_json_actions(text)
+        assert result == []
+
+    def test_invalid_items_filtered(self):
+        runner = self._make_runner()
+        text = '[{"tool": "talk_to", "args": {}}, "not_a_dict", 42]'
+        result = runner._parse_json_actions(text)
+        assert len(result) == 1
+
+    def test_no_json_at_all(self):
+        runner = self._make_runner()
+        text = "Я просто хочу подождать и ничего не делать."
+        result = runner._parse_json_actions(text)
+        assert result == []

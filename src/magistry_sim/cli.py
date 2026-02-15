@@ -215,18 +215,12 @@ def main() -> None:
     runner = MockAgentRunner() if use_mock else None
 
     if not use_mock:
-        try:
-            from .agents import CrewAIAgentRunner
-            from .llm import create_provider
+        from dotenv import load_dotenv
+        load_dotenv()
 
-            provider = create_provider(mock=False)
-            runner = CrewAIAgentRunner(provider)
-        except ImportError:
-            console.print(
-                "[yellow]CrewAI недоступен, "
-                "используется mock-runner[/yellow]"
-            )
-            runner = MockAgentRunner()
+        from .agents import CrewAIAgentRunner
+
+        runner = CrewAIAgentRunner(verbose=True)
 
     env = Environment(
         scenario=scenario,

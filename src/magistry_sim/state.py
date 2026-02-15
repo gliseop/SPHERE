@@ -90,14 +90,17 @@ class WorldState:
         return f"N-{self._note_counter:03d}"
 
     def has_capability(
-        self, agent_id: str, action: str, case_type: str
+        self, agent_id: str, action: str, case_type: str = ""
     ) -> bool:
         """Проверить, обладает ли агент полномочием.
+
+        Если case_type пуст, проверяет наличие полномочия для любого типа.
+        Если case_type указан, проверяет наличие полномочия для этого типа.
 
         Args:
             agent_id: Идентификатор агента.
             action: Действие (open_case, submit_proposal и т.д.).
-            case_type: Тип дела.
+            case_type: Тип дела (пустая строка — любой тип).
 
         Returns:
             True, если полномочие есть.
@@ -107,7 +110,11 @@ class WorldState:
             return False
         for cap in profile.capabilities:
             if cap.action == action:
-                if not cap.case_types or case_type in cap.case_types:
+                if (
+                    not case_type
+                    or not cap.case_types
+                    or case_type in cap.case_types
+                ):
                     return True
         return False
 

@@ -4,10 +4,29 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+
+def _strip_think_tags(text: str) -> str:
+    """Убрать блоки <think>...</think> из ответа модели.
+
+    MiniMax-M2.5 оборачивает внутренние рассуждения в теги <think>.
+    Для агентов нужен только чистый ответ.
+
+    Args:
+        text: Исходный текст ответа.
+
+    Returns:
+        Текст без блоков рассуждений.
+    """
+    cleaned = re.sub(
+        r"<think>.*?</think>", "", text, flags=re.DOTALL
+    )
+    return cleaned.strip()
 
 
 @dataclass
@@ -195,16 +214,21 @@ class OpenAICompatibleProvider:
             if cached is not None:
                 return LLMResponse(text=cached, model=self._model)
 
+        # MiniMax API допускает temperature только в (0, 1].
+        # Значение 0.0 заменяется на минимальное положительное.
+        safe_temperature = max(temperature, 0.01)
+
         response = self._client.chat.completions.create(
             model=self._model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=temperature,
+            temperature=safe_temperature,
         )
 
-        text = response.choices[0].message.content or ""
+        raw_text = response.choices[0].message.content or ""
+        text = _strip_think_tags(raw_text)
         usage = {}
         if response.usage:
             usage = {
@@ -220,18 +244,21 @@ class OpenAICompatibleProvider:
 
 def create_provider(
     mock: bool = True,
-    model: str = "gpt-4o-mini",
+    model: str | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
     cache_path: str | None = None,
 ) -> LLMProvider:
     """Фабрика LLM-провайдеров.
 
+    При mock=False читает переменные окружения:
+    LLM_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL.
+
     Args:
         mock: Использовать mock-провайдер.
-        model: Имя модели для OpenAI-провайдера.
-        api_key: API-ключ.
-        base_url: Базовый URL.
+        model: Имя модели (по умолчанию из LLM_MODEL или gpt-4o-mini).
+        api_key: API-ключ (по умолчанию из OPENAI_API_KEY).
+        base_url: Базовый URL (по умолчанию из OPENAI_BASE_URL).
         cache_path: Путь к кешу.
 
     Returns:
@@ -239,9 +266,16 @@ def create_provider(
     """
     if mock:
         return MockLLMProvider()
+
+    import os
+
+    resolved_model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
+    resolved_key = api_key or os.getenv("OPENAI_API_KEY")
+    resolved_url = base_url or os.getenv("OPENAI_BASE_URL")
+
     return OpenAICompatibleProvider(
-        model=model,
-        api_key=api_key,
-        base_url=base_url,
+        model=resolved_model,
+        api_key=resolved_key,
+        base_url=resolved_url,
         cache_path=cache_path,
     )
