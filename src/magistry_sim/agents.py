@@ -588,6 +588,20 @@ class LLMAgentRunner:
         Returns:
             Список действий [{tool, args}].
         """
+        def _normalize_actions(parsed: list) -> list[dict] | None:
+            """Нормализовать JSON-массив в список действий.
+
+            Возвращает:
+                list[dict]: Валидные действия (включая пустой список).
+                None: Если массив не похож на список действий.
+            """
+            validated = self._validate_actions(parsed)
+            if validated:
+                return validated
+            if parsed == []:
+                return []
+            return None
+
         # Попытка 1: весь текст — JSON
         cleaned = text.strip()
         if cleaned.startswith("```"):
@@ -600,7 +614,9 @@ class LLMAgentRunner:
         try:
             parsed = json.loads(cleaned)
             if isinstance(parsed, list):
-                return self._validate_actions(parsed)
+                actions = _normalize_actions(parsed)
+                if actions is not None:
+                    return actions
         except json.JSONDecodeError:
             pass
 
@@ -612,14 +628,32 @@ class LLMAgentRunner:
             try:
                 parsed = json.loads(code_match.group(1))
                 if isinstance(parsed, list):
-                    return self._validate_actions(parsed)
+                    actions = _normalize_actions(parsed)
+                    if actions is not None:
+                        return actions
             except json.JSONDecodeError:
                 pass
 
         # Попытка 3: сбалансированные скобки
-        result = self._extract_json_array(text)
-        if result is not None:
-            return self._validate_actions(result)
+        # (ищем все JSON-массивы и пропускаем нерелевантные, например [1])
+        saw_empty_array = False
+        search_from = 0
+        while True:
+            start = text.find("[", search_from)
+            if start == -1:
+                break
+
+            result = self._extract_json_array(text[start:])
+            if result is not None:
+                actions = _normalize_actions(result)
+                if actions:
+                    return actions
+                if actions == []:
+                    saw_empty_array = True
+            search_from = start + 1
+
+        if saw_empty_array:
+            return []
 
         # Попытка 4: жадный regex
         match = re.search(r"\[.*\]", text, re.DOTALL)
@@ -627,7 +661,9 @@ class LLMAgentRunner:
             try:
                 parsed = json.loads(match.group())
                 if isinstance(parsed, list):
-                    return self._validate_actions(parsed)
+                    actions = _normalize_actions(parsed)
+                    if actions is not None:
+                        return actions
             except json.JSONDecodeError:
                 pass
 
@@ -938,6 +974,7 @@ class CrewAIAgentRunner:
                 "pip install magistry-sim[crew]"
             ) from exc
 
+        self._model = model
         self._api_key = api_key or os.getenv("OPENAI_API_KEY")
         self._base_url = base_url or os.getenv("OPENAI_BASE_URL")
 
@@ -961,7 +998,11 @@ class CrewAIAgentRunner:
         if self._reply_llm_provider is None:
             from .llm import create_provider
             self._reply_llm_provider = create_provider(
-                mock=False, cache_path=".llm_cache.db"
+                mock=False,
+                model=self._model,
+                api_key=self._api_key,
+                base_url=self._base_url,
+                cache_path=".llm_cache.db",
             )
         return self._reply_llm_provider
 
