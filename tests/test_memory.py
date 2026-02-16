@@ -185,3 +185,130 @@ class TestMemoryRetrieval:
         )
         assert len(results) == 1
         assert results[0].content == "with embedding"
+
+
+class TestBM25Index:
+    def test_bm25_index_built_on_add(self):
+        """BM25-индекс пересоздаётся при каждом add()."""
+        stream = MemoryStream(agent_id="off_1")
+        assert stream._bm25 is None
+        stream.add(
+            content="закупка серверного оборудования",
+            importance=5.0,
+            kind="observation",
+            round_num=0,
+        )
+        assert stream._bm25 is not None
+
+    def test_bm25_scores_lexical_match(self):
+        """BM25 даёт ненулевой скор при лексическом совпадении."""
+        stream = MemoryStream(agent_id="off_1")
+        stream.add(
+            content="закупка серверного оборудования на 10 млн",
+            importance=5.0,
+            kind="observation",
+            round_num=0,
+        )
+        stream.add(
+            content="прогулка в парке с коллегами",
+            importance=3.0,
+            kind="observation",
+            round_num=1,
+        )
+        scores = stream.bm25_scores("закупка оборудования")
+        assert len(scores) == 2
+        assert scores[0] > scores[1]
+
+    def test_bm25_scores_empty_stream(self):
+        stream = MemoryStream(agent_id="off_1")
+        scores = stream.bm25_scores("любой запрос")
+        assert scores == []
+
+    def test_bm25_tokenization_case_insensitive(self):
+        """Токенизация нечувствительна к регистру."""
+        stream = MemoryStream(agent_id="off_1")
+        stream.add(
+            content="Закупка СЕРВЕРНОГО оборудования",
+            importance=5.0,
+            kind="observation",
+            round_num=0,
+        )
+        scores = stream.bm25_scores("закупка серверного")
+        assert scores[0] > 0.0
+
+
+class TestHybridRetrieval:
+    def _make_hybrid_stream(self):
+        stream = MemoryStream(agent_id="off_1")
+        stream.add(
+            content="закупка серверного оборудования на тендере",
+            importance=7.0,
+            kind="observation",
+            round_num=0,
+            embedding=[1.0, 0.0, 0.0],
+        )
+        stream.add(
+            content="biz_1 подал заявку на тендер D-001",
+            importance=6.0,
+            kind="observation",
+            round_num=2,
+            embedding=[0.9, 0.1, 0.0],
+        )
+        stream.add(
+            content="juror_0 обсудил процедуру с juror_1",
+            importance=3.0,
+            kind="observation",
+            round_num=5,
+            embedding=[0.0, 0.0, 1.0],
+        )
+        return stream
+
+    def test_hybrid_retrieve_uses_bm25(self):
+        """Гибридный retrieve использует BM25 в дополнение к косинусу."""
+        stream = self._make_hybrid_stream()
+        results = stream.retrieve(
+            query_embedding=[1.0, 0.0, 0.0],
+            current_round=5,
+            top_k=3,
+            query_text="тендер закупка",
+        )
+        assert len(results) == 3
+        assert "закупка" in results[0].content or "тендер" in results[0].content
+
+    def test_hybrid_retrieve_without_query_text_fallback(self):
+        """Без query_text работает как раньше (только косинус)."""
+        stream = self._make_hybrid_stream()
+        results = stream.retrieve(
+            query_embedding=[1.0, 0.0, 0.0],
+            current_round=5,
+            top_k=2,
+        )
+        assert len(results) == 2
+
+    def test_hybrid_retrieve_bm25_boost(self):
+        """BM25 повышает ранг записи с точным лексическим совпадением."""
+        stream = MemoryStream(agent_id="off_1")
+        # Семантически далёкая, но лексически точная
+        stream.add(
+            content="закупка оборудования",
+            importance=3.0,
+            kind="observation",
+            round_num=0,
+            embedding=[0.0, 0.0, 1.0],
+        )
+        # Семантически близкая, но лексически далёкая
+        stream.add(
+            content="приобретение техники",
+            importance=3.0,
+            kind="observation",
+            round_num=0,
+            embedding=[1.0, 0.0, 0.0],
+        )
+        results = stream.retrieve(
+            query_embedding=[1.0, 0.0, 0.0],
+            current_round=0,
+            top_k=2,
+            query_text="закупка оборудования",
+        )
+        # BM25-бонус должен поднять первую запись
+        assert results[0].content == "закупка оборудования"
