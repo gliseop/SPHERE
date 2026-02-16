@@ -121,7 +121,10 @@ def _print_result(result, metrics) -> None:
     console.print()
 
 
-def _create_runner(runner_type: str) -> object:
+def _create_runner(
+    runner_type: str,
+    interview_path: str | None = None,
+) -> object:
     """Создать runner указанного типа.
 
     Для runner-ов, требующих API-ключей (llm, crewai), загружает
@@ -130,6 +133,7 @@ def _create_runner(runner_type: str) -> object:
 
     Args:
         runner_type: Тип runner-а (mock, llm, crewai, cognitive).
+        interview_path: Путь к библиотеке интервью (JSONL).
 
     Returns:
         Экземпляр runner-а.
@@ -152,6 +156,8 @@ def _create_runner(runner_type: str) -> object:
 
     if runner_type == "cognitive":
         import os
+        from pathlib import Path
+
         from dotenv import load_dotenv
         load_dotenv()
 
@@ -159,30 +165,32 @@ def _create_runner(runner_type: str) -> object:
         from .llm import (
             MockEmbeddingProvider,
             MockLLMProvider,
+            create_embedding_provider,
             create_provider,
         )
 
         has_api_key = bool(os.getenv("OPENAI_API_KEY"))
         if has_api_key:
             llm = create_provider(mock=False)
-            # Пробуем реальный эмбеддер; если API не поддерживает —
-            # используем детерминированный mock-эмбеддер.
-            use_real_embedder = os.getenv(
-                "EMBEDDING_PROVIDER", "mock"
-            ).lower()
-            if use_real_embedder == "openai":
+            embed_mode = os.getenv("EMBEDDING_PROVIDER", "mock").lower()
+            if embed_mode == "local":
+                embedder = create_embedding_provider(mock=False)
+            elif embed_mode == "openai":
                 from .llm import OpenAIEmbeddingProvider
                 embedder = OpenAIEmbeddingProvider()
             else:
-                embedder = MockEmbeddingProvider(dimensions=64)
+                embedder = MockEmbeddingProvider(dimensions=384)
         else:
             llm = MockLLMProvider()
-            embedder = MockEmbeddingProvider(dimensions=64)
+            embedder = MockEmbeddingProvider(dimensions=384)
+
+        lib_path = Path(interview_path) if interview_path else None
 
         return CognitiveAgentRunner(
             llm_provider=llm,
             embedder=embedder,
             verbose=True,
+            interview_library_path=lib_path,
         )
 
     return MockAgentRunner()
@@ -253,6 +261,12 @@ def main() -> None:
         default=None,
         help="Сохранить метрики в JSON",
     )
+    parser.add_argument(
+        "--interviews",
+        type=str,
+        default=None,
+        help="Путь к библиотеке интервью (JSONL)",
+    )
 
     args = parser.parse_args()
 
@@ -289,7 +303,7 @@ def main() -> None:
     if runner_type is None:
         runner_type = "crewai" if args.no_mock else "mock"
 
-    runner = _create_runner(runner_type)
+    runner = _create_runner(runner_type, interview_path=args.interviews)
 
     env = Environment(
         scenario=scenario,

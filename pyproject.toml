@@ -17,7 +17,8 @@ dependencies = [
 [project.optional-dependencies]
 llm = ["openai>=1.0"]
 crew = ["crewai[tools]>=0.100"]
-dev = ["pytest>=9.0", "pytest-asyncio>=0.23"]
+search = ["rank-bm25>=0.2.2", "sentence-transformers>=3.0"]
+dev = ["pytest>=9.0", "pytest-asyncio>=0.23", "rank-bm25>=0.2.2"]
 
 [project.scripts]
 magistry-sim = "magistry_sim.cli:main"
