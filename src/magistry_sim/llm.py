@@ -192,6 +192,58 @@ class MockEmbeddingProvider:
         return [self.embed(t) for t in texts]
 
 
+class LocalEmbeddingProvider:
+    """Локальный провайдер эмбеддингов на базе sentence-transformers.
+
+    Использует мультиязычную модель paraphrase-multilingual-MiniLM-L12-v2
+    (384 измерения). Модель загружается лениво при первом вызове embed().
+
+    Attributes:
+        _model_name: Имя модели HuggingFace.
+        _model: Экземпляр SentenceTransformer (None до первого вызова).
+    """
+
+    def __init__(
+        self,
+        model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    ) -> None:
+        self._model_name = model_name
+        self._model = None
+
+    def _ensure_model(self) -> None:
+        """Загрузить модель при первом обращении."""
+        if self._model is None:
+            from sentence_transformers import SentenceTransformer
+
+            self._model = SentenceTransformer(self._model_name)
+
+    def embed(self, text: str) -> list[float]:
+        """Получить эмбеддинг текста.
+
+        Args:
+            text: Входной текст.
+
+        Returns:
+            Вектор эмбеддинга (384 измерения).
+        """
+        self._ensure_model()
+        vector = self._model.encode(text, normalize_embeddings=True)
+        return vector.tolist()
+
+    def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Получить эмбеддинги для списка текстов.
+
+        Args:
+            texts: Список входных текстов.
+
+        Returns:
+            Список векторов эмбеддингов.
+        """
+        self._ensure_model()
+        vectors = self._model.encode(texts, normalize_embeddings=True)
+        return [v.tolist() for v in vectors]
+
+
 class OpenAIEmbeddingProvider:
     """Провайдер эмбеддингов через OpenAI-совместимый API.
 
@@ -388,4 +440,26 @@ def create_provider(
         api_key=resolved_key,
         base_url=resolved_url,
         cache_path=cache_path,
+    )
+
+
+def create_embedding_provider(
+    mock: bool = True,
+    model_name: str | None = None,
+) -> EmbeddingProvider:
+    """Фабрика провайдеров эмбеддингов.
+
+    Args:
+        mock: Использовать mock-провайдер.
+        model_name: Имя модели sentence-transformers.
+
+    Returns:
+        Экземпляр провайдера эмбеддингов.
+    """
+    if mock:
+        return MockEmbeddingProvider(dimensions=384)
+
+    return LocalEmbeddingProvider(
+        model_name=model_name
+        or "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     )
