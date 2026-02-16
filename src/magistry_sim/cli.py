@@ -152,6 +152,9 @@ def _create_runner(runner_type: str) -> object:
 
     if runner_type == "cognitive":
         import os
+        from dotenv import load_dotenv
+        load_dotenv()
+
         from .cognitive_runner import CognitiveAgentRunner
         from .llm import (
             MockEmbeddingProvider,
@@ -161,11 +164,17 @@ def _create_runner(runner_type: str) -> object:
 
         has_api_key = bool(os.getenv("OPENAI_API_KEY"))
         if has_api_key:
-            from dotenv import load_dotenv
-            load_dotenv()
             llm = create_provider(mock=False)
-            from .llm import OpenAIEmbeddingProvider
-            embedder = OpenAIEmbeddingProvider()
+            # Пробуем реальный эмбеддер; если API не поддерживает —
+            # используем детерминированный mock-эмбеддер.
+            use_real_embedder = os.getenv(
+                "EMBEDDING_PROVIDER", "mock"
+            ).lower()
+            if use_real_embedder == "openai":
+                from .llm import OpenAIEmbeddingProvider
+                embedder = OpenAIEmbeddingProvider()
+            else:
+                embedder = MockEmbeddingProvider(dimensions=64)
         else:
             llm = MockLLMProvider()
             embedder = MockEmbeddingProvider(dimensions=64)
