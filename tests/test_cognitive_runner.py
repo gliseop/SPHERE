@@ -213,3 +213,41 @@ class TestCognitiveAgentRunner:
         plan = runner.get_or_create_plan("off_1")
         assert isinstance(plan, AgentPlan)
         assert runner.get_or_create_plan("off_1") is plan
+
+    def test_interview_library_loading(self, tmp_path):
+        """CognitiveAgentRunner загружает библиотеку интервью из JSONL."""
+        from magistry_sim.interviews import Interview, InterviewLibrary
+        from magistry_sim.llm import MockLLMProvider, MockEmbeddingProvider
+
+        lib = InterviewLibrary()
+        lib.add(Interview(
+            id="int_001",
+            archetype="opportunist",
+            role="чиновник",
+            hexaco={"honesty_humility": 30, "emotionality": 50,
+                    "extraversion": 60, "agreeableness": 40,
+                    "conscientiousness": 45, "openness": 55},
+            dark_triad={"narcissism": 60, "machiavellianism": 70,
+                        "psychopathy": 30},
+            interview={"q1": "Я всегда ищу выгоду в сделках"},
+            expert_psychologist="склонен к рискованным решениям",
+            expert_economist="высокая склонность к оппортунизму",
+        ))
+        path = tmp_path / "interviews.jsonl"
+        lib.save_jsonl(path)
+
+        runner = CognitiveAgentRunner(
+            llm_provider=MockLLMProvider(),
+            embedder=MockEmbeddingProvider(dimensions=384),
+            verbose=False,
+            interview_library_path=path,
+        )
+        assert runner._interview_library is not None
+        assert len(runner._interview_library) == 1
+
+    def test_interview_library_none_by_default(self):
+        """Без пути библиотека интервью = None."""
+        mock_llm = MagicMock()
+        mock_embedder = MagicMock()
+        runner = CognitiveAgentRunner(llm_provider=mock_llm, embedder=mock_embedder)
+        assert runner._interview_library is None

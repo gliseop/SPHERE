@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from magistry_sim.agents import ACTION_FORMAT_INSTRUCTIONS, TOOL_DESCRIPTIONS
@@ -44,12 +45,21 @@ class CognitiveAgentRunner:
         llm_provider: LLMProvider,
         embedder: EmbeddingProvider,
         verbose: bool = False,
+        interview_library_path: Path | None = None,
     ) -> None:
         self._llm = llm_provider
         self._embedder = embedder
         self._verbose = verbose
         self._memories: dict[str, MemoryStream] = {}
         self._plans: dict[str, AgentPlan] = {}
+        self._interview_library = None
+
+        if interview_library_path:
+            from magistry_sim.interviews import InterviewLibrary
+
+            self._interview_library = InterviewLibrary.load_jsonl(
+                interview_library_path
+            )
 
     def get_or_create_memory(self, agent_id: str) -> MemoryStream:
         """Возвращает поток памяти агента, создавая при необходимости.
@@ -174,11 +184,13 @@ class CognitiveAgentRunner:
 
         # Раздел памяти
         current_round = state.round
-        query_emb = self._embedder.embed(situation[:500])
+        query_text = situation[:500]
+        query_emb = self._embedder.embed(query_text)
         retrieved = stream.retrieve(
             query_embedding=query_emb,
             current_round=current_round,
             top_k=20,
+            query_text=query_text,
         )
         memories_text = ""
         if retrieved:
@@ -200,13 +212,25 @@ class CognitiveAgentRunner:
                 for s in plan.tactical_steps:
                     plan_text += f"- {s}\n"
 
+        # Раздел интервью
+        interview_text = ""
+        if self._interview_library and len(self._interview_library) > 0:
+            position = profile.position if profile else "участник"
+            query = f"роль: {position}"
+            results = self._interview_library.search(query, top_k=1)
+            if results:
+                interview_text = (
+                    f"\n## Нарративное интервью (похожая личность)\n"
+                    f"{results[0].full_text()}\n"
+                )
+
         # Описание инструментов
         tools_text = TOOL_DESCRIPTIONS
 
         system_prompt = (
             f"Ты — агент в симуляции организационных процессов. "
             f"Действуй в соответствии со своей личностью, воспоминаниями и планом.\n"
-            f"{personality_text}{memories_text}{plan_text}\n"
+            f"{personality_text}{interview_text}{memories_text}{plan_text}\n"
             f"## Доступные инструменты\n{tools_text}\n\n"
             f"{ACTION_FORMAT_INSTRUCTIONS}"
         )
@@ -332,11 +356,13 @@ class CognitiveAgentRunner:
         self.observe(agent_id, obs_text, state.round)
 
         # Извлекаем релевантные воспоминания
-        query_emb = self._embedder.embed(message[:500])
+        query_text = message[:500]
+        query_emb = self._embedder.embed(query_text)
         retrieved = stream.retrieve(
             query_embedding=query_emb,
             current_round=state.round,
             top_k=10,
+            query_text=query_text,
         )
         memories_text = "\n".join(f"- {r.content}" for r in retrieved)
 
