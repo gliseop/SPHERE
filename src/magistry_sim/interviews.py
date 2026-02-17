@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -96,6 +97,22 @@ class InterviewLibrary:
         tokens = interview.full_text().lower().split()
         self._corpus.append(tokens)
         self._bm25 = BM25L(self._corpus)
+
+    def sample(self, n: int = 1, seed: int | None = None) -> list[Interview]:
+        """Случайная выборка из библиотеки.
+
+        Args:
+            n: Количество интервью.
+            seed: Зерно для воспроизводимости.
+
+        Returns:
+            Список случайных интервью.
+        """
+        if not self._interviews:
+            return []
+        rng = random.Random(seed)
+        k = min(n, len(self._interviews))
+        return rng.sample(self._interviews, k)
 
     def search(
         self,
@@ -236,35 +253,62 @@ def generate_interview(
         f"затем ответ.\n\n{questions_block}"
     )
 
-    interview_response = llm.generate(
+    # Схема для ответов на 10 вопросов
+    answer_schema = {
+        "type": "object",
+        "properties": {
+            f"q{i+1}": {"type": "string", "description": q}
+            for i, q in enumerate(INTERVIEW_QUESTIONS)
+        },
+        "required": [f"q{i+1}" for i in range(len(INTERVIEW_QUESTIONS))],
+    }
+
+    interview_response = llm.generate_structured(
         system="Ты участник глубинного интервью о личности и карьере.",
         user=interview_prompt,
+        schema=answer_schema,
     )
 
-    # Парсинг ответов — простое разбиение по номерам
+    # Маппинг ответов на вопросы
     answers: dict[str, str] = {}
-    raw_text = interview_response.text
-    for q in INTERVIEW_QUESTIONS:
-        answers[q] = raw_text
+    for i, q in enumerate(INTERVIEW_QUESTIONS):
+        key = f"q{i+1}"
+        answers[q] = interview_response.data.get(key, "")
+
+    # Формируем текст ответов для экспертных оценок
+    answers_text = "\n".join(
+        f"{i+1}. {q}\n{a}" for i, (q, a) in enumerate(answers.items())
+    )
+
+    # Схема для экспертных оценок
+    expert_schema = {
+        "type": "object",
+        "properties": {
+            "analysis": {"type": "string"},
+        },
+        "required": ["analysis"],
+    }
 
     # Экспертная оценка психолога
-    psych_response = llm.generate(
+    psych_response = llm.generate_structured(
         system="Ты клинический психолог, анализирующий результаты интервью.",
         user=(
             f"Проанализируй следующее интервью и дай экспертную оценку: "
             f"личностные черты, мотивация, зоны уязвимости, вероятные паттерны "
-            f"поведения в стрессовых ситуациях.\n\n{raw_text}"
+            f"поведения в стрессовых ситуациях.\n\n{answers_text}"
         ),
+        schema=expert_schema,
     )
 
     # Экспертная оценка экономиста
-    econ_response = llm.generate(
+    econ_response = llm.generate_structured(
         system="Ты поведенческий экономист, анализирующий результаты интервью.",
         user=(
             f"Проанализируй следующее интервью и дай экспертную оценку: "
             f"отношение к риску, склонность к оппортунизму, реакция "
-            f"на экономические стимулы.\n\n{raw_text}"
+            f"на экономические стимулы.\n\n{answers_text}"
         ),
+        schema=expert_schema,
     )
 
     interview = Interview(
@@ -285,8 +329,8 @@ def generate_interview(
             "psychopathy": d.psychopathy,
         },
         interview=answers,
-        expert_psychologist=psych_response.text,
-        expert_economist=econ_response.text,
+        expert_psychologist=psych_response.data.get("analysis", ""),
+        expert_economist=econ_response.data.get("analysis", ""),
     )
 
     interview.embedding = embedder.embed(interview.full_text())
