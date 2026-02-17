@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import random
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from magistry_sim.llm import LLMProvider
 
 
 class ScheduledEvent(BaseModel):
@@ -109,3 +112,73 @@ class EventGenerator:
                 })
 
         return events
+
+
+_LLM_EVENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "has_event": {"type": "boolean"},
+        "event_type": {"type": "string"},
+        "description": {"type": "string"},
+        "affected_agents": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+    "required": ["has_event"],
+}
+
+
+class LLMEventGenerator:
+    """Генератор событий через LLM на основе контекста мира.
+
+    Вместо захардкоженного набора типов событий с фиксированными
+    вероятностями, передаёт LLM текущее состояние мира и позволяет
+    модели решить, происходит ли внешнее событие, и сгенерировать
+    его описание.
+
+    Args:
+        llm: Провайдер языковой модели с поддержкой generate_structured.
+    """
+
+    def __init__(self, llm: LLMProvider) -> None:
+        self._llm = llm
+
+    def generate(
+        self,
+        round_num: int,
+        world_context: str,
+    ) -> list[dict[str, Any]]:
+        """Генерирует события для раунда на основе контекста мира.
+
+        Args:
+            round_num: Номер раунда.
+            world_context: Текстовое описание текущего состояния мира.
+
+        Returns:
+            Список событий (пустой, если LLM решила, что ничего не происходит).
+        """
+        result = self._llm.generate_structured(
+            system=(
+                "Ты — генератор мировых событий для симуляции организационных "
+                "процессов. На основе текущего состояния мира реши, происходит "
+                "ли внешнее событие в этом раунде. Событие должно логически "
+                "следовать из контекста."
+            ),
+            user=(
+                f"Раунд {round_num}.\n\n"
+                f"Состояние мира:\n{world_context}\n\n"
+                f"Произойдёт ли внешнее событие в этом раунде?"
+            ),
+            schema=_LLM_EVENT_SCHEMA,
+        )
+
+        if not result.data.get("has_event", False):
+            return []
+
+        return [{
+            "event_type": result.data.get("event_type", "unknown"),
+            "description": result.data.get("description", ""),
+            "affected_agents": result.data.get("affected_agents", []),
+            "source": "llm",
+        }]

@@ -5,7 +5,9 @@ from magistry_sim.event_generator import (
     ScheduledEvent,
     StochasticConfig,
     EventGenerator,
+    LLMEventGenerator,
 )
+from magistry_sim.llm import StructuredLLMResponse
 
 
 class TestScheduledEvent:
@@ -182,3 +184,86 @@ class TestEventGenerator:
         events = gen.generate(round_num=1, world_state=None)
         assert events[0]["params"]["target"] == "off_1"
         assert events[0]["params"]["severity"] == "high"
+
+
+class TestLLMEventGenerator:
+    """Тесты LLM-генератора мировых событий."""
+
+    def test_uses_world_context_in_prompt(self):
+        """LLM-генератор передаёт контекст мира в промпт."""
+        captured = []
+
+        class CaptureLLM:
+            def generate_structured(self, system, user, schema, temperature=0.0):
+                captured.append(user)
+                return StructuredLLMResponse(data={
+                    "has_event": True,
+                    "event_type": "journalist_investigation",
+                    "description": "Журналист обнаружил подозрительные закупки",
+                    "affected_agents": ["off_1"],
+                })
+
+        gen = LLMEventGenerator(llm=CaptureLLM())
+        events = gen.generate(round_num=5, world_context="Бюджет исчерпан на 90%")
+
+        assert len(events) >= 1
+        assert "Бюджет исчерпан" in captured[0]
+        assert events[0]["description"] == "Журналист обнаружил подозрительные закупки"
+
+    def test_returns_no_events_when_llm_decides(self):
+        """LLM может решить, что в этом раунде ничего не происходит."""
+        class NoEventLLM:
+            def generate_structured(self, system, user, schema, temperature=0.0):
+                return StructuredLLMResponse(data={"has_event": False})
+
+        gen = LLMEventGenerator(llm=NoEventLLM())
+        events = gen.generate(round_num=1, world_context="Всё спокойно")
+        assert events == []
+
+    def test_event_has_source_llm(self):
+        """События от LLM-генератора помечены source=llm."""
+        class EventLLM:
+            def generate_structured(self, system, user, schema, temperature=0.0):
+                return StructuredLLMResponse(data={
+                    "has_event": True,
+                    "event_type": "citizen_complaint",
+                    "description": "Жалоба граждан",
+                    "affected_agents": [],
+                })
+
+        gen = LLMEventGenerator(llm=EventLLM())
+        events = gen.generate(round_num=3, world_context="Контекст")
+        assert len(events) == 1
+        assert events[0]["source"] == "llm"
+
+    def test_event_contains_all_fields(self):
+        """Событие содержит event_type, description, affected_agents, source."""
+        class FullEventLLM:
+            def generate_structured(self, system, user, schema, temperature=0.0):
+                return StructuredLLMResponse(data={
+                    "has_event": True,
+                    "event_type": "external_audit",
+                    "description": "Внешняя проверка",
+                    "affected_agents": ["off_1", "biz_1"],
+                })
+
+        gen = LLMEventGenerator(llm=FullEventLLM())
+        events = gen.generate(round_num=2, world_context="Контекст")
+        event = events[0]
+        assert event["event_type"] == "external_audit"
+        assert event["description"] == "Внешняя проверка"
+        assert event["affected_agents"] == ["off_1", "biz_1"]
+        assert event["source"] == "llm"
+
+    def test_round_num_in_prompt(self):
+        """Номер раунда передаётся в промпт LLM."""
+        captured = []
+
+        class CaptureLLM:
+            def generate_structured(self, system, user, schema, temperature=0.0):
+                captured.append(user)
+                return StructuredLLMResponse(data={"has_event": False})
+
+        gen = LLMEventGenerator(llm=CaptureLLM())
+        gen.generate(round_num=7, world_context="Контекст")
+        assert "7" in captured[0]
