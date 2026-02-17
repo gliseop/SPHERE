@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -265,3 +266,158 @@ def compute_information_asymmetry(
     variance = sum((v - mean) ** 2 for v in values) / n
     std = math.sqrt(variance)
     return round(std / mean, 4)
+
+
+# ---------------------------------------------------------------------------
+# Метрики v5: качество симуляции
+# ---------------------------------------------------------------------------
+
+_TECHNIQUE_PATTERN = re.compile(r"\[technique:\s*(\w+)\]")
+
+
+def corruption_rate(result: SimulationResult) -> float:
+    """Вычислить долю коррупционных сделок.
+
+    Подсчитывает соотношение дел с выявленными нарушениями
+    к общему числу закрытых дел (исключая расследования).
+
+    Args:
+        result: Результат симуляции.
+
+    Returns:
+        Доля от 0.0 до 1.0.
+    """
+    closed = []
+    for case_id, case in result.cases.items():
+        if case.get("case_type") == "investigation":
+            continue
+        if case.get("closed_at") is None:
+            continue
+        closed.append(case)
+
+    if not closed:
+        return 0.0
+
+    violations = sum(
+        1 for c in closed
+        if classify_case_outcome(c, result.events, result.messages)
+    )
+    return violations / len(closed)
+
+
+def detection_rate(result: SimulationResult) -> float:
+    """Вычислить долю обнаруженных нарушений.
+
+    Подсчитывает соотношение нарушений, по которым был подан
+    отчёт аудитора, к общему числу нарушений.
+
+    Args:
+        result: Результат симуляции.
+
+    Returns:
+        Доля от 0.0 до 1.0.
+    """
+    reported_cases = set()
+    for event in result.events:
+        if event.get("event_type") == "report_filed":
+            reported_cases.add(event.get("payload", {}).get("case_id"))
+
+    violations_total = 0
+    violations_detected = 0
+    for case_id, case in result.cases.items():
+        if case.get("case_type") == "investigation":
+            continue
+        if case.get("closed_at") is None:
+            continue
+        if classify_case_outcome(case, result.events, result.messages):
+            violations_total += 1
+            if case_id in reported_cases:
+                violations_detected += 1
+
+    if violations_total == 0:
+        return 0.0
+    return violations_detected / violations_total
+
+
+def false_positive_rate(result: SimulationResult) -> float:
+    """Вычислить долю ложных обвинений.
+
+    Подсчитывает соотношение ложных обвинений (отчёт подан,
+    но нарушения нет) к общему числу поданных отчётов.
+
+    Args:
+        result: Результат симуляции.
+
+    Returns:
+        Доля от 0.0 до 1.0.
+    """
+    reported_cases = set()
+    for event in result.events:
+        if event.get("event_type") == "report_filed":
+            reported_cases.add(event.get("payload", {}).get("case_id"))
+
+    if not reported_cases:
+        return 0.0
+
+    false_positives = 0
+    for case_id in reported_cases:
+        case = result.cases.get(case_id)
+        if case is None:
+            continue
+        if not classify_case_outcome(case, result.events, result.messages):
+            false_positives += 1
+
+    return false_positives / len(reported_cases)
+
+
+def network_evolution(result: SimulationResult) -> dict[str, Any]:
+    """Вычислить характеристики эволюции коммуникационной сети.
+
+    Анализирует события talk_to для построения графа коммуникаций
+    и подсчёта рёбер.
+
+    Args:
+        result: Результат симуляции.
+
+    Returns:
+        Словарь с ключами: edges (общее число коммуникаций),
+        unique_pairs (число уникальных пар агентов).
+    """
+    edges = 0
+    pairs: set[tuple[str, str]] = set()
+    for event in result.events:
+        if event.get("event_type") == "talk_to":
+            agent_id = event.get("agent_id", "")
+            to_id = event.get("payload", {}).get("to_id", "")
+            if agent_id and to_id:
+                edges += 1
+                pair = tuple(sorted([agent_id, to_id]))
+                pairs.add(pair)
+
+    return {
+        "edges": edges,
+        "unique_pairs": len(pairs),
+    }
+
+
+def neutralization_usage(result: SimulationResult) -> dict[str, int]:
+    """Подсчитать частоту техник нейтрализации в рефлексиях.
+
+    Ищет паттерн [technique: название] в содержимом событий
+    рефлексии.
+
+    Args:
+        result: Результат симуляции.
+
+    Returns:
+        Словарь {название техники: количество упоминаний}.
+    """
+    usage: dict[str, int] = {}
+    for event in result.events:
+        if event.get("event_type") != "reflection":
+            continue
+        content = event.get("payload", {}).get("content", "")
+        for match in _TECHNIQUE_PATTERN.finditer(content):
+            technique = match.group(1)
+            usage[technique] = usage.get(technique, 0) + 1
+    return usage

@@ -163,3 +163,196 @@ class TestV4Metrics:
 
         score = compute_information_asymmetry(memory_sizes={"a": 100})
         assert score == 0.0
+
+
+class TestCorruptionRate:
+    """Тесты доли коррупционных сделок."""
+
+    def test_corruption_rate_with_violations(self):
+        from magistry_sim.metrics import corruption_rate
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+            cases={
+                "D-001": {"id": "D-001", "owner_id": "off_1",
+                           "case_type": "procurement", "closed_at": 3,
+                           "decision": "Выбран biz_1", "proposals": [{"author_id": "biz_1"}]},
+                "D-002": {"id": "D-002", "owner_id": "off_1",
+                           "case_type": "procurement", "closed_at": 4,
+                           "decision": "Выбран biz_2", "proposals": [{"author_id": "biz_2"}]},
+            },
+            events=[],
+            messages=[
+                {"from_id": "off_1", "to_id": "biz_1", "private": True},
+            ],
+        )
+        rate = corruption_rate(result)
+        assert 0.0 <= rate <= 1.0
+        assert rate == 0.5  # 1 из 2 дел — нарушение
+
+    def test_corruption_rate_no_cases(self):
+        from magistry_sim.metrics import corruption_rate
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+        )
+        rate = corruption_rate(result)
+        assert rate == 0.0
+
+
+class TestDetectionRate:
+    """Тесты доли обнаруженных нарушений."""
+
+    def test_detection_rate_some_detected(self):
+        from magistry_sim.metrics import detection_rate
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G2", seed=42,
+            rounds_completed=5,
+            cases={
+                "D-001": {"id": "D-001", "owner_id": "off_1",
+                           "case_type": "procurement", "closed_at": 3,
+                           "decision": "Выбран biz_1",
+                           "proposals": [{"author_id": "biz_1"}]},
+                "D-002": {"id": "D-002", "owner_id": "off_1",
+                           "case_type": "procurement", "closed_at": 4,
+                           "decision": "Выбран biz_2",
+                           "proposals": [{"author_id": "biz_2"}]},
+            },
+            events=[
+                {"event_type": "report_filed", "payload": {"case_id": "D-001"}},
+            ],
+            messages=[
+                {"from_id": "off_1", "to_id": "biz_1", "private": True},
+                {"from_id": "off_1", "to_id": "biz_2", "private": True},
+            ],
+        )
+        rate = detection_rate(result)
+        assert rate == 0.5  # 1 обнаружено из 2 нарушений
+
+    def test_detection_rate_no_violations(self):
+        from magistry_sim.metrics import detection_rate
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+        )
+        rate = detection_rate(result)
+        assert rate == 0.0
+
+
+class TestFalsePositiveRate:
+    """Тесты ложных обвинений."""
+
+    def test_false_positive_rate(self):
+        from magistry_sim.metrics import false_positive_rate
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G2", seed=42,
+            rounds_completed=5,
+            cases={
+                "D-001": {"id": "D-001", "owner_id": "off_1",
+                           "case_type": "procurement", "closed_at": 3,
+                           "decision": "Выбран biz_1",
+                           "proposals": [{"author_id": "biz_1"}]},
+            },
+            events=[
+                {"event_type": "report_filed", "payload": {"case_id": "D-001"}},
+            ],
+            messages=[],  # нет приватных — нет нарушения → ложное обвинение
+        )
+        rate = false_positive_rate(result)
+        assert rate == 1.0  # 1 FP из 1 обвинения
+
+    def test_false_positive_rate_no_reports(self):
+        from magistry_sim.metrics import false_positive_rate
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+        )
+        rate = false_positive_rate(result)
+        assert rate == 0.0
+
+
+class TestNetworkEvolution:
+    """Тесты изменения сетевой структуры."""
+
+    def test_network_evolution_basic(self):
+        from magistry_sim.metrics import network_evolution
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+            agents=["off_1", "biz_1", "biz_2"],
+            events=[
+                {"event_type": "talk_to", "agent_id": "off_1",
+                 "payload": {"to_id": "biz_1"}},
+                {"event_type": "talk_to", "agent_id": "off_1",
+                 "payload": {"to_id": "biz_2"}},
+                {"event_type": "talk_to", "agent_id": "biz_1",
+                 "payload": {"to_id": "biz_2"}},
+            ],
+        )
+        evo = network_evolution(result)
+        assert "edges" in evo
+        assert "unique_pairs" in evo
+        assert evo["edges"] == 3
+        assert evo["unique_pairs"] >= 1
+
+    def test_network_evolution_no_events(self):
+        from magistry_sim.metrics import network_evolution
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+        )
+        evo = network_evolution(result)
+        assert evo["edges"] == 0
+
+
+class TestNeutralizationUsage:
+    """Тесты подсчёта техник нейтрализации в рефлексиях."""
+
+    def test_neutralization_usage_found(self):
+        from magistry_sim.metrics import neutralization_usage
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+            events=[
+                {"event_type": "reflection", "agent_id": "off_1",
+                 "payload": {"content": "используя [technique: denial_of_injury], я считаю"}},
+                {"event_type": "reflection", "agent_id": "off_1",
+                 "payload": {"content": "по технике [technique: everyone_does_it], это нормально"}},
+                {"event_type": "reflection", "agent_id": "off_1",
+                 "payload": {"content": "обычная рефлексия без техник"}},
+            ],
+        )
+        usage = neutralization_usage(result)
+        assert "denial_of_injury" in usage
+        assert usage["denial_of_injury"] == 1
+        assert "everyone_does_it" in usage
+        assert usage["everyone_does_it"] == 1
+
+    def test_neutralization_usage_none(self):
+        from magistry_sim.metrics import neutralization_usage
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+        )
+        usage = neutralization_usage(result)
+        assert usage == {}
