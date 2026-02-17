@@ -167,3 +167,53 @@ class TestNeutralizationTechniques:
             neutralization_techniques=techniques,
         )
         assert any("denial_of_injury" in p for p in captured_prompts)
+
+
+class TestUniversalFocalPoints:
+    """Тесты: фокальные точки рефлексии не содержат хардкода о коррупции."""
+
+    def test_generate_focal_points_no_corruption_hardcode(self):
+        """Промпт генерации фокальных точек не содержит хардкода о коррупции."""
+        captured_prompts = []
+
+        class CaptureLLM:
+            def generate(self, system, user, temperature=0.0):
+                captured_prompts.append(user)
+                return LLMResponse(text='["Вопрос 1", "Вопрос 2", "Вопрос 3"]')
+
+        stream = MemoryStream(agent_id="test")
+        stream.add(
+            content="тестовое наблюдение",
+            importance=5.0,
+            kind="observation",
+            round_num=0,
+            embedding=[0.1] * 8,
+        )
+
+        generate_focal_points(stream, CaptureLLM())
+        prompt = captured_prompts[-1].lower()
+        assert "разоблач" not in prompt
+        assert "рационализац" not in prompt
+        assert "стоит ли игра свеч" not in prompt
+
+    def test_generate_focal_points_mentions_significant_themes(self):
+        """Промпт упоминает значимые темы из наблюдений."""
+        captured_prompts = []
+
+        class CaptureLLM:
+            def generate(self, system, user, temperature=0.0):
+                captured_prompts.append(user)
+                return LLMResponse(text='["Вопрос 1", "Вопрос 2", "Вопрос 3"]')
+
+        stream = MemoryStream(agent_id="test")
+        stream.add(
+            content="тестовое наблюдение",
+            importance=5.0,
+            kind="observation",
+            round_num=0,
+            embedding=[0.1] * 8,
+        )
+
+        generate_focal_points(stream, CaptureLLM())
+        prompt = captured_prompts[-1].lower()
+        assert "значим" in prompt
