@@ -251,3 +251,110 @@ class TestCognitiveAgentRunner:
         mock_embedder = MagicMock()
         runner = CognitiveAgentRunner(llm_provider=mock_llm, embedder=mock_embedder)
         assert runner._interview_library is None
+
+    def test_interview_assignment_uses_sample_not_search(self, tmp_path):
+        """Интервью назначаются через sample(), а не search()."""
+        from magistry_sim.interviews import Interview, InterviewLibrary
+        from magistry_sim.llm import MockLLMProvider, MockEmbeddingProvider
+        from unittest.mock import patch
+
+        lib = InterviewLibrary()
+        for i in range(5):
+            lib.add(Interview(
+                id=f"itv-{i}",
+                archetype="pragmatist",
+                role="чиновник",
+                hexaco={"honesty_humility": 30, "emotionality": 50,
+                        "extraversion": 60, "agreeableness": 40,
+                        "conscientiousness": 45, "openness": 55},
+                dark_triad={"narcissism": 60, "machiavellianism": 70,
+                            "psychopathy": 30},
+                interview={"q": f"answer-{i}"},
+                expert_psychologist=f"psych-{i}",
+                expert_economist=f"econ-{i}",
+            ))
+        path = tmp_path / "interviews.jsonl"
+        lib.save_jsonl(path)
+
+        llm = MockLLMProvider()
+        embedder = MockEmbeddingProvider(dimensions=8)
+        runner = CognitiveAgentRunner(
+            llm_provider=llm,
+            embedder=embedder,
+            interview_library_path=path,
+        )
+
+        state = WorldState()
+        state.agents["off_1"] = AgentProfile(
+            id="off_1",
+            name="Козлов И.М.",
+            position="начальник отдела закупок",
+            personality=_make_corrupt_personality(),
+        )
+
+        # Подменяем sample чтобы убедиться что вызывается именно он
+        sample_called = False
+        original_sample = runner._interview_library.sample
+
+        def track_sample(*args, **kwargs):
+            nonlocal sample_called
+            sample_called = True
+            return original_sample(*args, **kwargs)
+
+        runner._interview_library.sample = track_sample
+
+        system_prompt, _ = runner._build_cognitive_prompt(
+            agent_id="off_1",
+            situation="Раунд 0.",
+            tools=["talk_to"],
+            state=state,
+        )
+        assert sample_called, "sample() должен вызываться вместо search()"
+        assert "Нарративное интервью" in system_prompt
+
+    def test_interview_assignment_deterministic_per_agent(self, tmp_path):
+        """Один и тот же agent_id всегда получает одно и то же интервью."""
+        from magistry_sim.interviews import Interview, InterviewLibrary
+        from magistry_sim.llm import MockLLMProvider, MockEmbeddingProvider
+
+        lib = InterviewLibrary()
+        for i in range(5):
+            lib.add(Interview(
+                id=f"itv-{i}",
+                archetype="pragmatist",
+                role="чиновник",
+                hexaco={"honesty_humility": 30, "emotionality": 50,
+                        "extraversion": 60, "agreeableness": 40,
+                        "conscientiousness": 45, "openness": 55},
+                dark_triad={"narcissism": 60, "machiavellianism": 70,
+                            "psychopathy": 30},
+                interview={"q": f"answer-{i}"},
+                expert_psychologist=f"psych-{i}",
+                expert_economist=f"econ-{i}",
+            ))
+        path = tmp_path / "interviews.jsonl"
+        lib.save_jsonl(path)
+
+        llm = MockLLMProvider()
+        embedder = MockEmbeddingProvider(dimensions=8)
+        runner = CognitiveAgentRunner(
+            llm_provider=llm,
+            embedder=embedder,
+            interview_library_path=path,
+        )
+
+        state = WorldState()
+        state.agents["off_1"] = AgentProfile(
+            id="off_1",
+            name="Козлов И.М.",
+            position="начальник отдела закупок",
+            personality=_make_corrupt_personality(),
+        )
+
+        prompt1, _ = runner._build_cognitive_prompt(
+            "off_1", "Раунд 0.", ["talk_to"], state,
+        )
+        prompt2, _ = runner._build_cognitive_prompt(
+            "off_1", "Раунд 0.", ["talk_to"], state,
+        )
+        assert prompt1 == prompt2, "Один agent_id должен получать одинаковое интервью"
