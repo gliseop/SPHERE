@@ -31,6 +31,7 @@ from .tools.actions import (
     submit_proposal,
     add_note,
 )
+from .narrator import WorldNarrator
 from .tools.communication import talk_to
 
 
@@ -59,6 +60,7 @@ class SimulationResult:
     final_reputation: dict = field(default_factory=dict)
     agents: list = field(default_factory=list)
     messages: list = field(default_factory=list)
+    round_summaries: list = field(default_factory=list)
 
 
 class Environment:
@@ -74,6 +76,8 @@ class Environment:
         governance: GovernanceMode | None = None,
         runner: AgentRunner | None = None,
         seed: int | None = None,
+        narrator: WorldNarrator | None = None,
+        llm: Any | None = None,
     ) -> None:
         gov = governance or scenario.governance.mode
         self._scenario = add_governance_agents(scenario, gov)
@@ -82,6 +86,8 @@ class Environment:
         self._rng = random.Random(self._seed)
         self._state = WorldState()
         self._max_rounds = scenario.max_rounds
+        self._narrator = narrator
+        self._llm = llm
         self._init_state()
 
     def _init_state(self) -> None:
@@ -167,6 +173,7 @@ class Environment:
                 self._run_agent_turn(agent_id)
 
             self._apply_round_end_effects()
+            self._narrate_round(round_num)
 
         return self._build_result()
 
@@ -389,6 +396,36 @@ class Environment:
                         },
                     )
 
+    def _narrate_round(self, round_num: int) -> None:
+        """Сформировать нарративную сводку раунда.
+
+        Работает только если narrator и llm указаны при создании среды.
+
+        Args:
+            round_num: Номер раунда.
+        """
+        if self._narrator is None or self._llm is None:
+            return
+
+        round_events = [
+            {
+                "agent_id": e.agent_id,
+                "event_type": e.event_type,
+                "payload": e.payload,
+            }
+            for e in self._state.event_log.all_events
+            if e.round == round_num
+        ]
+
+        agent_ids = list(self._state.agents.keys())
+
+        self._narrator.summarize_round(
+            round_num=round_num,
+            events=round_events,
+            agent_ids=agent_ids,
+            llm=self._llm,
+        )
+
     def _form_tribunal(
         self, case_id: str, accused_id: str
     ) -> None:
@@ -448,6 +485,19 @@ class Environment:
 
         msg_data = [m.model_dump() for m in self._state.messages]
 
+        summaries_data = []
+        if self._narrator:
+            summaries_data = [
+                {
+                    "round_num": s.round_num,
+                    "events_summary": s.events_summary,
+                    "key_decisions": s.key_decisions,
+                    "tensions": s.tensions,
+                    "agent_motivations": s.agent_motivations,
+                }
+                for s in self._narrator.round_summaries
+            ]
+
         return SimulationResult(
             scenario_id=self._scenario.id.value,
             governance=self._scenario.governance.mode.value,
@@ -458,6 +508,7 @@ class Environment:
             final_reputation=rep_data,
             agents=[a.id for a in self._scenario.agents],
             messages=msg_data,
+            round_summaries=summaries_data,
         )
 
     @property

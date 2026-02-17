@@ -7,6 +7,8 @@ from magistry_sim.cases import Case, Vote
 from magistry_sim.cognitive_runner import CognitiveAgentRunner
 from magistry_sim.enums import GovernanceMode, ScenarioId
 from magistry_sim.environment import Environment, SimulationResult
+from magistry_sim.llm import StructuredLLMResponse
+from magistry_sim.narrator import WorldNarrator
 from magistry_sim.scenarios import get_scenario
 
 
@@ -262,3 +264,42 @@ class TestObservationPhase:
 
         stream = runner.get_or_create_memory("off_2")
         assert len(stream) == 0
+
+
+class TestNarratorIntegration:
+    """Тесты интеграции нарратора с средой симуляции."""
+
+    def test_run_without_narrator_produces_empty_summaries(self):
+        """Без нарратора round_summaries пуст."""
+        scenario = get_scenario(ScenarioId.S0)
+        env = Environment(
+            scenario=scenario,
+            governance=GovernanceMode.G0,
+            runner=MockAgentRunner(),
+        )
+        result = env.run()
+        assert result.round_summaries == []
+
+    def test_run_with_narrator_produces_round_summaries(self):
+        """С нарратором round_summaries содержит сводку за каждый раунд."""
+        class NarratorLLM:
+            def generate_structured(self, system, user, schema, temperature=0.0):
+                return StructuredLLMResponse(data={
+                    "events_summary": "Сводка раунда.",
+                    "key_decisions": [],
+                    "tensions": [],
+                    "agent_motivations": {},
+                })
+
+        scenario = get_scenario(ScenarioId.S0)
+        narrator = WorldNarrator()
+        env = Environment(
+            scenario=scenario,
+            governance=GovernanceMode.G0,
+            runner=MockAgentRunner(),
+            narrator=narrator,
+            llm=NarratorLLM(),
+        )
+        result = env.run()
+        assert len(result.round_summaries) == scenario.max_rounds
+        assert result.round_summaries[0]["events_summary"] == "Сводка раунда."
