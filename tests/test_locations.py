@@ -101,3 +101,38 @@ class TestLocationManager:
         mgr.place_agent("off_1", "hall")
         assert mgr.can_observe("off_1", "unknown") is False
         assert mgr.can_observe("unknown", "off_1") is False
+
+    def test_get_colocation_log(self):
+        """get_colocation_log возвращает журнал совместных посещений непубличных локаций."""
+        mgr = LocationManager()
+        mgr.add_location(Location(id="office", name="Кабинет", public=False))
+        mgr.add_location(Location(id="hall", name="Зал", public=True))
+        mgr.place_agent("off_1", "office")
+        mgr.place_agent("biz_1", "office")
+        mgr.place_agent("biz_2", "hall")
+
+        log = mgr.get_colocation_log()
+        assert len(log) >= 1
+        entry = log[0]
+        assert entry["location_id"] == "office"
+        assert "off_1" in entry["agents"]
+        assert "biz_1" in entry["agents"]
+
+    def test_get_colocation_log_ignores_public(self):
+        """get_colocation_log не включает публичные локации."""
+        mgr = LocationManager()
+        mgr.add_location(Location(id="hall", name="Зал", public=True))
+        mgr.place_agent("off_1", "hall")
+        mgr.place_agent("biz_1", "hall")
+
+        log = mgr.get_colocation_log()
+        assert len(log) == 0
+
+    def test_get_colocation_log_ignores_single_agent(self):
+        """get_colocation_log не включает локации с одним агентом."""
+        mgr = LocationManager()
+        mgr.add_location(Location(id="office", name="Кабинет", public=False))
+        mgr.place_agent("off_1", "office")
+
+        log = mgr.get_colocation_log()
+        assert len(log) == 0

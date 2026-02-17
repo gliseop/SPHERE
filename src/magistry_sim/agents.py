@@ -448,6 +448,10 @@ TOOL_DESCRIPTIONS = """\
    - case_id: идентификатор дела трибунала
    - verdict: "виновен" или "невиновен"
    - reasoning: обоснование
+
+8. move_to(location_id)
+   Переместиться в другую локацию.
+   - location_id: идентификатор локации ("office", "meeting_room", "restaurant", "corridor")
 """
 
 ACTION_FORMAT_INSTRUCTIONS = """\

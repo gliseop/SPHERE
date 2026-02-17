@@ -8,6 +8,7 @@ from .cases import Case, CASE_REGISTRY
 from .config import AgentProfile, Capability, Need
 from .events import EventLog
 from .graph import SocialGraph
+from .locations import LocationManager
 from .resources import ResourceManager
 
 
@@ -53,6 +54,7 @@ class WorldState:
         self.resources: ResourceManager = ResourceManager()
         self.graph: SocialGraph = SocialGraph()
         self.event_log: EventLog = EventLog()
+        self.locations: LocationManager | None = None
         self.messages: list[Message] = []
         self.complaints: list[Complaint] = []
         self.active_needs: list[Need] = []

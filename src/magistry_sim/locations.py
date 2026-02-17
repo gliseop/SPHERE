@@ -98,6 +98,28 @@ class LocationManager:
             if lid == location_id
         ]
 
+    def get_colocation_log(self) -> list[dict[str, object]]:
+        """Возвращает журнал совместных посещений непубличных локаций.
+
+        Формирует список записей для каждой непубличной локации,
+        где находятся два и более агента одновременно (данные СКУД).
+
+        Returns:
+            Список записей с полями location_id, location_name, agents.
+        """
+        log: list[dict[str, object]] = []
+        for loc_id, location in self._locations.items():
+            if location.public:
+                continue
+            agents = self.agents_at(loc_id)
+            if len(agents) >= 2:
+                log.append({
+                    "location_id": loc_id,
+                    "location_name": location.name,
+                    "agents": agents,
+                })
+        return log
+
     def can_observe(self, observer_id: str, target_id: str) -> bool:
         """Проверяет, может ли наблюдатель видеть цель.
 

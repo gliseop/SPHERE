@@ -326,6 +326,41 @@ def file_report(
         )
 
 
+def move_to(location_id: str) -> str:
+    """Переместиться в указанную локацию.
+
+    Args:
+        location_id: Идентификатор целевой локации.
+
+    Returns:
+        Подтверждение или сообщение об ошибке.
+    """
+    state = get_state()
+    caller_id = get_caller_id()
+
+    if state.locations is None:
+        return "Ошибка: система локаций не инициализирована."
+
+    location = state.locations.get_location(location_id)
+    if location is None:
+        return f"Ошибка: локация «{location_id}» не найдена."
+
+    old_location = state.locations.get_agent_location(caller_id)
+    state.locations.move_agent(caller_id, location_id)
+
+    state.event_log.log(
+        round=state.round,
+        event_type="agent_moved",
+        agent_id=caller_id,
+        payload={
+            "from": old_location or "",
+            "to": location_id,
+        },
+    )
+
+    return f"Вы переместились в «{location.name}»."
+
+
 def cast_vote(case_id: str, verdict: str, reasoning: str) -> str:
     """Проголосовать по делу трибунала.
 

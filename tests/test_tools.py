@@ -19,7 +19,9 @@ from magistry_sim.tools.actions import (
     resolve_case,
     submit_proposal,
 )
+from magistry_sim.tools.actions import move_to
 from magistry_sim.tools.communication import talk_to
+from magistry_sim.locations import Location, LocationManager
 
 
 def _setup_context(state, agent_id, runner=None):
@@ -484,6 +486,71 @@ class TestTalkTo:
         tokens = _setup_context(state, "off_1")
         try:
             result = talk_to("nonexistent", "Привет")
+            assert "Ошибка" in result
+        finally:
+            _reset_context(tokens)
+
+
+class TestMoveTo:
+    def _make_state_with_locations(self):
+        """Состояние с локациями для тестов move_to."""
+        state = _make_state()
+        locations = LocationManager()
+        locations.add_location(Location(
+            id="office", name="Кабинет", public=False,
+        ))
+        locations.add_location(Location(
+            id="restaurant", name="Ресторан", public=False,
+            suspicion_modifier=0.3,
+        ))
+        locations.add_location(Location(
+            id="hall", name="Зал заседаний", public=True,
+        ))
+        state.locations = locations
+        locations.place_agent("off_1", "office")
+        locations.place_agent("biz_1", "hall")
+        return state
+
+    def test_move_to_changes_location(self):
+        """move_to перемещает агента в указанную локацию."""
+        state = self._make_state_with_locations()
+        tokens = _setup_context(state, "off_1")
+        try:
+            result = move_to(location_id="restaurant")
+            assert "Ресторан" in result
+            assert state.locations.get_agent_location("off_1") == "restaurant"
+        finally:
+            _reset_context(tokens)
+
+    def test_move_to_unknown_location(self):
+        """move_to в несуществующую локацию возвращает ошибку."""
+        state = self._make_state_with_locations()
+        tokens = _setup_context(state, "off_1")
+        try:
+            result = move_to(location_id="nonexistent")
+            assert "Ошибка" in result
+        finally:
+            _reset_context(tokens)
+
+    def test_move_to_logs_event(self):
+        """move_to логирует событие перемещения."""
+        state = self._make_state_with_locations()
+        tokens = _setup_context(state, "off_1")
+        try:
+            move_to(location_id="restaurant")
+            events = state.event_log.get_events(event_type="agent_moved")
+            assert len(events) == 1
+            assert events[0].payload["to"] == "restaurant"
+            assert events[0].agent_id == "off_1"
+        finally:
+            _reset_context(tokens)
+
+    def test_move_to_without_locations(self):
+        """move_to без LocationManager в state возвращает ошибку."""
+        state = _make_state()
+        tokens = _setup_context(state, "off_1")
+        try:
+            result = move_to(location_id="office")
             assert "Ошибка" in result
         finally:
             _reset_context(tokens)
