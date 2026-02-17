@@ -196,6 +196,52 @@ def _create_runner(
     return MockAgentRunner()
 
 
+def _run_batch(args, scenario) -> None:
+    """Выполнить пакетный запуск симуляций.
+
+    Args:
+        args: Аргументы командной строки.
+        scenario: Конфигурация сценария.
+    """
+    from pathlib import Path
+
+    from .batch import BatchRunner
+
+    if args.batch_modes:
+        try:
+            modes = [
+                GovernanceMode(m.strip())
+                for m in args.batch_modes.split(",")
+            ]
+        except ValueError as exc:
+            console.print(f"[red]Ошибка в --batch-modes: {exc}[/red]")
+            sys.exit(1)
+    else:
+        modes = list(GovernanceMode)
+
+    output_dir = Path(args.output_dir) if args.output_dir else Path("batch_results")
+    base_seed = args.seed or 42
+
+    console.print(
+        f"[bold]Пакетный запуск: {scenario.title}, "
+        f"{args.batch_runs} прогонов × {len(modes)} режимов[/bold]"
+    )
+
+    runner = BatchRunner(
+        scenario=scenario,
+        modes=modes,
+        runs_per_mode=args.batch_runs,
+        output_dir=output_dir,
+        base_seed=base_seed,
+    )
+    results = runner.run()
+
+    console.print(
+        f"[green]Завершено: {len(results)} симуляций. "
+        f"Результаты в {output_dir}[/green]"
+    )
+
+
 def main() -> None:
     """Точка входа CLI."""
     parser = argparse.ArgumentParser(
@@ -267,6 +313,30 @@ def main() -> None:
         default=None,
         help="Путь к библиотеке интервью (JSONL)",
     )
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        default=False,
+        help="Пакетный запуск: N прогонов по каждому режиму governance",
+    )
+    parser.add_argument(
+        "--batch-runs",
+        type=int,
+        default=10,
+        help="Количество прогонов на режим (для --batch)",
+    )
+    parser.add_argument(
+        "--batch-modes",
+        type=str,
+        default=None,
+        help="Режимы governance через запятую, например G0,G2,G3 (для --batch)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Директория для результатов пакетного запуска",
+    )
 
     args = parser.parse_args()
 
@@ -288,6 +358,10 @@ def main() -> None:
         scenario = scenario.model_copy(
             update={"max_rounds": args.rounds}
         )
+
+    if args.batch:
+        _run_batch(args, scenario)
+        return
 
     governance = None
     if args.governance:
