@@ -18,12 +18,14 @@ from .reputation import (
     compute_round_growth,
     freeze,
 )
+from .resources import apply_maintenance
 from .scenarios import add_governance_agents
 from .state import ReputationRecord, WorldState
 from .tools import current_agent_id, current_runner, current_state
 from .tools.actions import (
     cast_vote,
     file_report,
+    move_to,
     open_case,
     resolve_case,
     submit_proposal,
@@ -40,6 +42,7 @@ TOOL_DISPATCH = {
     "file_report": file_report,
     "cast_vote": cast_vote,
     "talk_to": talk_to,
+    "move_to": move_to,
 }
 
 
@@ -83,6 +86,8 @@ class Environment:
 
     def _init_state(self) -> None:
         """Инициализировать состояние мира из конфигурации."""
+        from .locations import Location, LocationManager
+
         for profile in self._scenario.agents:
             self._state.agents[profile.id] = profile
             self._state.graph.add_agent(profile.id)
@@ -103,6 +108,31 @@ class Environment:
                     relation=conn.relation,
                     strength=conn.strength,
                 )
+
+        # Инициализация физических локаций
+        locations = LocationManager()
+        locations.add_location(Location(
+            id="office", name="Кабинет", public=False,
+            available_actions=["talk_to", "open_case", "resolve_case"],
+        ))
+        locations.add_location(Location(
+            id="meeting_room", name="Зал заседаний", public=True,
+            available_actions=["talk_to", "cast_vote"],
+        ))
+        locations.add_location(Location(
+            id="restaurant", name="Ресторан", public=False,
+            suspicion_modifier=0.3,
+            available_actions=["talk_to"],
+        ))
+        locations.add_location(Location(
+            id="corridor", name="Коридор", public=True,
+            available_actions=["talk_to"],
+        ))
+        self._state.locations = locations
+
+        # Размещение агентов в стартовых локациях
+        for profile in self._scenario.agents:
+            locations.place_agent(profile.id, "office")
 
     def run(self) -> SimulationResult:
         """Запустить симуляцию.
@@ -261,6 +291,13 @@ class Environment:
     def _apply_round_end_effects(self) -> None:
         """Применить эффекты конца раунда."""
         governance = self._scenario.governance.mode
+
+        # Обслуживание и доход за контракты
+        for agent_id in self._state.agents:
+            res = self._state.resources.get(agent_id)
+            if res is None:
+                continue
+            apply_maintenance(res)
 
         # Пересчёт репутации
         decay_factor = self._scenario.governance.reputation_decay

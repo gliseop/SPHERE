@@ -6,7 +6,19 @@ from pydantic import BaseModel, Field
 
 
 class AgentResources(BaseModel):
-    """Текущие ресурсы агента."""
+    """Текущие ресурсы агента.
+
+    Attributes:
+        budget_limit: Бюджетный лимит.
+        budget_spent: Израсходованный бюджет.
+        staffing_slots: Количество ставок.
+        staffing_filled: Заполненные ставки.
+        contract_capacity: Контрактная ёмкость.
+        contracts_active: Активные контракты.
+        maintenance_cost: Стоимость обслуживания за раунд.
+        bribe_fund: Скрытый фонд взяток.
+        revenue_per_contract: Доход за каждый активный контракт.
+    """
 
     model_config = {"extra": "forbid"}
 
@@ -16,6 +28,44 @@ class AgentResources(BaseModel):
     staffing_filled: int = 0
     contract_capacity: int = 0
     contracts_active: int = 0
+    maintenance_cost: float = 0.0
+    bribe_fund: float = 0.0
+    revenue_per_contract: float = 0.0
+
+    def add_to_bribe_fund(self, amount: float) -> None:
+        """Добавить средства в фонд взяток.
+
+        Args:
+            amount: Сумма для добавления.
+        """
+        self.bribe_fund += amount
+
+    def has_bribe_fund(self) -> bool:
+        """Проверить наличие средств в фонде взяток.
+
+        Returns:
+            True, если фонд не пуст.
+        """
+        return self.bribe_fund > 0.0
+
+    def clear_bribe_fund(self) -> None:
+        """Обнулить фонд взяток."""
+        self.bribe_fund = 0.0
+
+
+def apply_maintenance(resources: AgentResources) -> None:
+    """Списать стоимость обслуживания из бюджета.
+
+    Списывает maintenance_cost, но не превышая доступный остаток.
+
+    Args:
+        resources: Ресурсы агента.
+    """
+    if resources.maintenance_cost <= 0.0:
+        return
+    available = resources.budget_limit - resources.budget_spent
+    cost = min(resources.maintenance_cost, available)
+    resources.budget_spent += cost
 
 
 class ResourceManager:

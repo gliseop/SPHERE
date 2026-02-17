@@ -32,6 +32,14 @@ def build_situation(agent_id: str, state: WorldState) -> str:
         f"Вы — {profile.name} ({agent_id}), {profile.position}."
     )
 
+    # Текущая локация
+    if state.locations is not None:
+        loc_id = state.locations.get_agent_location(agent_id)
+        if loc_id:
+            loc = state.locations.get_location(loc_id)
+            if loc:
+                parts.append(f"Ваше местоположение: {loc.name}.")
+
     # Репутация и карьера
     rep = state.reputation.get(agent_id)
     if rep:
@@ -72,8 +80,17 @@ def build_situation(agent_id: str, state: WorldState) -> str:
                 f"Контрактная ёмкость: {free} из "
                 f"{res.contract_capacity}"
             )
+        if res.maintenance_cost > 0:
+            res_parts.append(
+                f"Расходы на обслуживание: {res.maintenance_cost:,.0f} за раунд"
+            )
         if res_parts:
             parts.append("Ресурсы: " + "; ".join(res_parts) + ".")
+        if res.has_bribe_fund():
+            parts.append(
+                f"У вас есть скрытые средства: {res.bribe_fund:,.0f}. "
+                f"При обнаружении — трибунал."
+            )
 
     # Текущие дела
     cases = state.get_cases_involving(agent_id)
@@ -220,6 +237,28 @@ def _build_auditor_section(
             parts.append(
                 f"  {aid}: бюджет {pct:.0f}% израсходован{marker}"
             )
+
+    # Обнаруженные скрытые фонды
+    bribe_agents = []
+    for aid in state.agents:
+        res = state.resources.get(aid)
+        if res and res.has_bribe_fund():
+            bribe_agents.append((aid, res.bribe_fund))
+    if bribe_agents:
+        parts.append("Обнаружены скрытые средства:")
+        for aid, amount in bribe_agents:
+            parts.append(f"  {aid}: {amount:,.0f}")
+
+    # Журнал СКУД — совместные посещения непубличных локаций
+    if state.locations is not None:
+        colocation = state.locations.get_colocation_log()
+        if colocation:
+            parts.append("Журнал СКУД (совместные посещения закрытых помещений):")
+            for entry in colocation:
+                agents_str = ", ".join(str(a) for a in entry["agents"])
+                parts.append(
+                    f"  {entry['location_name']}: {agents_str}"
+                )
 
     return parts
 
