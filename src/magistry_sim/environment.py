@@ -13,6 +13,7 @@ from .config import ScenarioConfig
 from .context import build_situation
 from .enums import GovernanceMode
 from .reputation import (
+    apply_decay,
     apply_growth,
     compute_round_growth,
     freeze,
@@ -262,7 +263,9 @@ class Environment:
         governance = self._scenario.governance.mode
 
         # Пересчёт репутации
+        decay_factor = self._scenario.governance.reputation_decay
         for agent_id, rep in self._state.reputation.items():
+            apply_decay(rep, decay_factor=decay_factor)
             cases_resolved = len([
                 e
                 for e in self._state.event_log.get_events(

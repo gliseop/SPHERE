@@ -76,6 +76,12 @@ class GovernanceConfig(BaseModel):
 
     mode: GovernanceMode = GovernanceMode.G0
     jury_size: int = 3
+    reputation_decay: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Коэффициент затухания репутации за раунд (1.0 = без затухания).",
+    )
 
 
 class ScenarioConfig(BaseModel):

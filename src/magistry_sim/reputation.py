@@ -14,6 +14,21 @@ POSITION_THRESHOLDS = [
 ]
 
 
+def apply_decay(record: ReputationRecord, decay_factor: float = 1.0) -> None:
+    """Применить затухание репутации.
+
+    Умножает текущую репутацию на коэффициент затухания. При значении 1.0
+    затухание не происходит (обратная совместимость). Замороженная
+    репутация не изменяется.
+
+    Args:
+        record: Запись репутации.
+        decay_factor: Коэффициент затухания (0.0-1.0).
+    """
+    if not record.frozen:
+        record.score *= decay_factor
+
+
 def compute_round_growth(
     record: ReputationRecord,
     cases_resolved: int = 0,

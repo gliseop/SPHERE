@@ -1,7 +1,9 @@
 """Тесты системы репутации."""
 
+import pytest
 from magistry_sim.state import ReputationRecord
 from magistry_sim.reputation import (
+    apply_decay,
     apply_growth,
     check_promotion,
     compute_round_growth,
@@ -54,3 +56,38 @@ class TestReputation:
         rec = ReputationRecord(score=20.0, frozen=True)
         promoted, current, next_title = check_promotion(rec)
         assert not promoted
+
+
+class TestReputationDecay:
+    """Тесты затухания репутации."""
+
+    def test_reputation_decay_over_rounds(self):
+        """Репутация затухает каждый раунд без активных действий."""
+        record = ReputationRecord(score=100.0)
+        for _ in range(10):
+            apply_decay(record, decay_factor=0.95)
+        # 100 * 0.95^10 ≈ 59.87
+        assert record.score < 100.0
+        assert record.score == pytest.approx(100.0 * 0.95**10, rel=1e-6)
+
+    def test_no_decay_when_factor_is_one(self):
+        """При decay_factor=1.0 затухания нет (обратная совместимость)."""
+        record = ReputationRecord(score=50.0)
+        apply_decay(record, decay_factor=1.0)
+        assert record.score == 50.0
+
+    def test_decay_not_applied_when_frozen(self):
+        """Замороженная репутация не затухает."""
+        record = ReputationRecord(score=80.0, frozen=True)
+        apply_decay(record, decay_factor=0.5)
+        assert record.score == 80.0
+
+    def test_decay_with_growth_net_decrease(self):
+        """При затухании без активности репутация снижается, несмотря на базовый прирост."""
+        record = ReputationRecord(score=100.0)
+        for _ in range(10):
+            apply_decay(record, decay_factor=0.95)
+            growth = compute_round_growth(record, cases_resolved=0)
+            apply_growth(record, growth)
+        # Затухание 5% от базы сильнее фиксированного прироста +1.0
+        assert record.score < 100.0
