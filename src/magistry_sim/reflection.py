@@ -11,6 +11,7 @@ import json
 from typing import TYPE_CHECKING
 
 from magistry_sim.memory import MemoryRecord, MemoryStream
+from magistry_sim.personality import NeutralizationTechnique
 
 if TYPE_CHECKING:
     from magistry_sim.llm import EmbeddingProvider, LLMProvider
@@ -79,6 +80,7 @@ def synthesize_insights(
     memories: list[MemoryRecord],
     llm: LLMProvider,
     agent_id: str,
+    neutralization_techniques: list[NeutralizationTechnique] | None = None,
 ) -> str:
     """Синтезирует высокоуровневый вывод по фокусной точке.
 
@@ -87,6 +89,7 @@ def synthesize_insights(
         memories: Релевантные воспоминания.
         llm: Провайдер языковой модели.
         agent_id: Идентификатор агента.
+        neutralization_techniques: Техники нейтрализации, доступные агенту.
 
     Returns:
         Краткий вывод (1-2 предложения).
@@ -94,12 +97,20 @@ def synthesize_insights(
     evidence_text = "\n".join(
         f"- [{r.id}] {r.content}" for r in memories
     )
+    techniques_text = ""
+    if neutralization_techniques:
+        tech_list = ", ".join(t.value for t in neutralization_techniques)
+        techniques_text = (
+            f"\n\nТехники рационализации, доступные агенту: {tech_list}. "
+            f"Если вывод связан с рационализацией, укажи использованную "
+            f"технику в формате [technique: название]."
+        )
     prompt = (
         f"Ты — внутренний голос агента {agent_id}. "
         f"На основе следующих воспоминаний ответь на вопрос: "
         f"{focal_point}\n\n"
         f"Воспоминания:\n{evidence_text}\n\n"
-        f"Сформулируй один краткий вывод (1-2 предложения)."
+        f"Сформулируй один краткий вывод (1-2 предложения).{techniques_text}"
     )
     response = llm.generate(system="", user=prompt)
     return response.text.strip()
@@ -110,6 +121,7 @@ def run_reflection_cycle(
     llm: LLMProvider,
     embedder: EmbeddingProvider,
     current_round: int,
+    neutralization_techniques: list[NeutralizationTechnique] | None = None,
 ) -> list[MemoryRecord]:
     """Выполняет полный цикл рефлексии.
 
@@ -125,6 +137,7 @@ def run_reflection_cycle(
         llm: Провайдер языковой модели.
         embedder: Провайдер эмбеддингов.
         current_round: Номер текущего раунда.
+        neutralization_techniques: Техники нейтрализации, доступные агенту.
 
     Returns:
         Список созданных записей-рефлексий.
@@ -139,7 +152,10 @@ def run_reflection_cycle(
             current_round=current_round,
             top_k=MEMORIES_PER_FOCAL,
         )
-        insight = synthesize_insights(focal, relevant, llm, stream.agent_id)
+        insight = synthesize_insights(
+            focal, relevant, llm, stream.agent_id,
+            neutralization_techniques=neutralization_techniques,
+        )
         evidence_ids = [r.id for r in relevant[:5]]
         emb = embedder.embed(insight)
 

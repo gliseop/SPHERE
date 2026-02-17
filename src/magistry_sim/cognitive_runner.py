@@ -215,12 +215,12 @@ class CognitiveAgentRunner:
         # Раздел интервью
         interview_text = ""
         if self._interview_library and len(self._interview_library) > 0:
-            position = profile.position if profile else "участник"
-            query = f"роль: {position}"
-            results = self._interview_library.search(query, top_k=1)
+            # Случайное распределение: seed = hash(agent_id) для воспроизводимости
+            seed = hash(agent_id) % (2**31)
+            results = self._interview_library.sample(n=1, seed=seed)
             if results:
                 interview_text = (
-                    f"\n## Нарративное интервью (похожая личность)\n"
+                    f"\n## Нарративное интервью (пример личности)\n"
                     f"{results[0].full_text()}\n"
                 )
 
@@ -267,11 +267,15 @@ class CognitiveAgentRunner:
 
         # Фаза 1: рефлексия (при достижении порога)
         if should_reflect(stream):
+            techniques = []
+            if profile and profile.personality:
+                techniques = profile.personality.neutralization_techniques
             run_reflection_cycle(
                 stream=stream,
                 llm=self._llm,
                 embedder=self._embedder,
                 current_round=current_round,
+                neutralization_techniques=techniques or None,
             )
 
         # Фаза 2: планирование
