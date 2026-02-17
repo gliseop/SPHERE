@@ -38,6 +38,21 @@ class LLMResponse:
     usage: dict = field(default_factory=dict)
 
 
+@dataclass
+class StructuredLLMResponse:
+    """Ответ LLM со structured output.
+
+    Attributes:
+        data: Словарь, соответствующий переданной JSON-схеме.
+        model: Имя модели.
+        usage: Статистика использования токенов.
+    """
+
+    data: dict
+    model: str = "mock"
+    usage: dict = field(default_factory=dict)
+
+
 @runtime_checkable
 class LLMProvider(Protocol):
     """Протокол LLM-провайдера."""
@@ -57,6 +72,26 @@ class LLMProvider(Protocol):
 
         Returns:
             Ответ LLM.
+        """
+        ...
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ) -> StructuredLLMResponse:
+        """Сгенерировать ответ по JSON-схеме.
+
+        Args:
+            system: Системный промпт.
+            user: Пользовательский промпт.
+            schema: JSON-схема ожидаемого ответа.
+            temperature: Температура генерации.
+
+        Returns:
+            Structured-ответ LLM.
         """
         ...
 
@@ -291,8 +326,13 @@ class OpenAIEmbeddingProvider:
 class MockLLMProvider:
     """Детерминированный mock-провайдер для тестов и отладки."""
 
-    def __init__(self, responses: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        responses: dict[str, str] | None = None,
+        structured_responses: dict[str, dict] | None = None,
+    ) -> None:
         self._responses = responses or {}
+        self._structured_responses = structured_responses or {}
         self._call_count = 0
 
     def generate(
@@ -321,6 +361,67 @@ class MockLLMProvider:
             text=f"Mock-ответ #{self._call_count}",
             model="mock",
         )
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ) -> StructuredLLMResponse:
+        """Сгенерировать structured-ответ.
+
+        Ищет совпадение ключа из structured_responses в user-промпте.
+        При отсутствии совпадения генерирует заглушку из JSON-схемы.
+
+        Args:
+            system: Системный промпт.
+            user: Пользовательский промпт.
+            schema: JSON-схема ожидаемого ответа.
+            temperature: Не используется.
+
+        Returns:
+            Structured mock-ответ.
+        """
+        self._call_count += 1
+
+        for key, response_data in self._structured_responses.items():
+            if key in user:
+                return StructuredLLMResponse(data=response_data, model="mock")
+
+        return StructuredLLMResponse(
+            data=self._generate_stub(schema), model="mock"
+        )
+
+    @staticmethod
+    def _generate_stub(schema: dict) -> dict:
+        """Сгенерировать заглушку на основе JSON-схемы.
+
+        Args:
+            schema: JSON-схема с описанием свойств.
+
+        Returns:
+            Словарь со значениями по умолчанию для каждого свойства.
+        """
+        properties = schema.get("properties", {})
+        stub: dict = {}
+        for prop_name, prop_def in properties.items():
+            prop_type = prop_def.get("type", "string")
+            if prop_type == "string":
+                stub[prop_name] = ""
+            elif prop_type == "number":
+                stub[prop_name] = 0
+            elif prop_type == "integer":
+                stub[prop_name] = 0
+            elif prop_type == "boolean":
+                stub[prop_name] = False
+            elif prop_type == "array":
+                stub[prop_name] = []
+            elif prop_type == "object":
+                stub[prop_name] = {}
+            else:
+                stub[prop_name] = None
+        return stub
 
     @property
     def call_count(self) -> int:
@@ -402,6 +503,60 @@ class OpenAICompatibleProvider:
             self._cache.put(system, user, self._model, text)
 
         return LLMResponse(text=text, model=self._model, usage=usage)
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ) -> StructuredLLMResponse:
+        """Сгенерировать structured-ответ через OpenAI API.
+
+        Использует response_format с json_schema для получения
+        гарантированного JSON-ответа по указанной схеме.
+
+        Args:
+            system: Системный промпт.
+            user: Пользовательский промпт.
+            schema: JSON-схема ожидаемого ответа.
+            temperature: Температура генерации.
+
+        Returns:
+            Structured-ответ LLM.
+        """
+        safe_temperature = max(temperature, 0.01)
+
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=safe_temperature,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_response",
+                    "strict": True,
+                    "schema": schema,
+                },
+            },
+        )
+
+        raw_text = response.choices[0].message.content or "{}"
+        text = _strip_think_tags(raw_text)
+        data = json.loads(text)
+        usage = {}
+        if response.usage:
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+            }
+
+        return StructuredLLMResponse(
+            data=data, model=self._model, usage=usage
+        )
 
 
 def create_provider(
