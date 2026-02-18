@@ -166,6 +166,29 @@ def _capability_text(cap: Capability) -> str:
     return action
 
 
+_MODEL_ARTIFACT_RE = re.compile(
+    r"<minimax:tool_call>.*?</minimax:tool_call>",
+    re.DOTALL,
+)
+
+
+def _strip_model_artifacts(text: str) -> str:
+    """Удалить артефакты модели из текста ответа.
+
+    MiniMax иногда вставляет XML-теги вида <minimax:tool_call>
+    в текстовые ответы. Они не несут полезной нагрузки и мешают
+    восприятию.
+
+    Args:
+        text: Исходный текст ответа.
+
+    Returns:
+        Очищенный текст.
+    """
+    cleaned = _MODEL_ARTIFACT_RE.sub("", text).strip()
+    return cleaned if cleaned else text
+
+
 def build_backstory(profile: AgentProfile) -> str:
     """Сформировать текстовую предысторию из профиля.
 
@@ -575,7 +598,7 @@ class LLMAgentRunner:
         )
 
         response = self._llm.generate(system=system, user=user)
-        return response.text
+        return _strip_model_artifacts(response.text)
 
     def _parse_json_actions(self, text: str) -> list[dict]:
         """Разобрать JSON-ответ LLM в список действий.
@@ -816,6 +839,7 @@ def _build_crewai_tools() -> list:
         add_note as _add_note,
         cast_vote as _cast_vote,
         file_report as _file_report,
+        move_to as _move_to,
         open_case as _open_case,
         resolve_case as _resolve_case,
         submit_proposal as _submit_proposal,
@@ -864,6 +888,11 @@ def _build_crewai_tools() -> list:
         case_id: str = Field(description="Идентификатор дела трибунала")
         verdict: str = Field(description="виновен / невиновен")
         reasoning: str = Field(description="Обоснование")
+
+    class MoveToArgs(BaseModel):
+        location_id: str = Field(
+            description="Идентификатор локации: office, meeting_room, restaurant, corridor"
+        )
 
     # --- Инструменты ---
 
@@ -939,6 +968,19 @@ def _build_crewai_tools() -> list:
         def _run(self, **kwargs) -> str:
             return _cast_vote(**kwargs)
 
+    class MoveToTool(BaseTool):
+        name: str = "move_to"
+        description: str = (
+            "Переместиться в локацию: office (кабинет), "
+            "meeting_room (зал заседаний), restaurant (ресторан), "
+            "corridor (коридор). Место встречи влияет на "
+            "публичность действий и фиксацию в СКУД."
+        )
+        args_schema: type[BaseModel] = MoveToArgs
+
+        def _run(self, **kwargs) -> str:
+            return _move_to(**kwargs)
+
     return [
         TalkToTool(),
         OpenCaseTool(),
@@ -947,6 +989,7 @@ def _build_crewai_tools() -> list:
         ResolveCaseTool(),
         FileReportTool(),
         CastVoteTool(),
+        MoveToTool(),
     ]
 
 
@@ -996,14 +1039,24 @@ class CrewAIAgentRunner:
     def _get_reply_provider(self) -> LLMProvider:
         """Получить LLM-провайдер для run_reply.
 
+        CrewAI использует формат модели «openai/Model-Name», но
+        прямой вызов OpenAI SDK ожидает только имя модели.
+        Префикс «openai/» удаляется при создании провайдера.
+
         Returns:
             Провайдер для генерации ответов на сообщения.
         """
         if self._reply_llm_provider is None:
             from .llm import create_provider
+
+            # Нормализация: «openai/MiniMax-M2.5» -> «MiniMax-M2.5»
+            raw_model = self._model or ""
+            if "/" in raw_model:
+                raw_model = raw_model.split("/", 1)[1]
+
             self._reply_llm_provider = create_provider(
                 mock=False,
-                model=self._model,
+                model=raw_model or None,
                 api_key=self._api_key,
                 base_url=self._base_url,
                 cache_path=".llm_cache.db",
@@ -1072,8 +1125,8 @@ class CrewAIAgentRunner:
             tools=self._tools,
             llm=self._llm,
             verbose=self._verbose,
-            max_iter=1,
-            max_retry_limit=1,
+            max_iter=4,
+            max_retry_limit=2,
         )
 
         task = Task(

@@ -262,7 +262,7 @@ class TestCrewAIAgentRunner:
         assert len(calls) == 1
         assert calls[0] == {
             "mock": False,
-            "model": "openai/MiniMax-M2.5",
+            "model": "MiniMax-M2.5",
             "api_key": "test-key",
             "base_url": "https://minimax.example/v1",
             "cache_path": ".llm_cache.db",
