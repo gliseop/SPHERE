@@ -139,6 +139,10 @@ def _create_runner(
         Экземпляр runner-а.
     """
     if runner_type == "mock":
+        console.print(
+            "[yellow][ТЕСТ] mock-runner: скриптованные действия, "
+            "поведение агентов не отражает реальную работу LLM.[/yellow]"
+        )
         return MockAgentRunner()
 
     if runner_type in ("llm", "crewai"):

@@ -21,7 +21,7 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
             "Базовый сценарий: одна закупка, два-три агента, "
             "без предпосылок к коррупции. Контрольный прогон."
         ),
-        max_rounds=6,
+        max_rounds=15,
         seed=42,
         agents=[
             AgentProfile(
@@ -101,7 +101,7 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
             "Закупка с предпосылкой к сговору: чиновник и один из "
             "предпринимателей — бывшие коллеги, жадность повышена."
         ),
-        max_rounds=8,
+        max_rounds=25,
         seed=42,
         agents=[
             AgentProfile(
@@ -197,7 +197,7 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
             "Найм сотрудника с предпосылкой к кумовству: один из "
             "кандидатов — родственник коллеги чиновника."
         ),
-        max_rounds=8,
+        max_rounds=25,
         seed=42,
         agents=[
             AgentProfile(

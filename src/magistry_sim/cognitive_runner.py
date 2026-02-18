@@ -53,6 +53,7 @@ class CognitiveAgentRunner:
         self._memories: dict[str, MemoryStream] = {}
         self._plans: dict[str, AgentPlan] = {}
         self._interview_library = None
+        self._agent_interviews: dict[str, str] = {}
 
         if interview_library_path:
             from magistry_sim.interviews import InterviewLibrary
@@ -86,6 +87,19 @@ class CognitiveAgentRunner:
         if agent_id not in self._plans:
             self._plans[agent_id] = AgentPlan()
         return self._plans[agent_id]
+
+    def set_agent_interview(self, agent_id: str, interview_text: str) -> None:
+        """Сохраняет текст нарративного интервью для конкретного агента.
+
+        Привязанное интервью имеет приоритет над случайной выборкой
+        из общей библиотеки: если для агента вызван этот метод, в промпте
+        будет использован именно переданный текст.
+
+        Args:
+            agent_id: Идентификатор агента.
+            interview_text: Полный текст нарративного интервью.
+        """
+        self._agent_interviews[agent_id] = interview_text
 
     def observe(
         self,
@@ -161,19 +175,9 @@ class CognitiveAgentRunner:
         personality_text = ""
         if profile and profile.personality:
             p = profile.personality
-            personality_text = (
-                f"\n## Твоя личность\n"
-                f"Биография: {p.biography}\n\n"
-                f"HEXACO: честность-скромность={p.hexaco.honesty_humility}, "
-                f"эмоциональность={p.hexaco.emotionality}, "
-                f"экстраверсия={p.hexaco.extraversion}, "
-                f"доброжелательность={p.hexaco.agreeableness}, "
-                f"добросовестность={p.hexaco.conscientiousness}, "
-                f"открытость={p.hexaco.openness}\n\n"
-                f"Тёмная триада: нарциссизм={p.dark_triad.narcissism}, "
-                f"макиавеллизм={p.dark_triad.machiavellianism}, "
-                f"психопатия={p.dark_triad.psychopathy}\n\n"
-            )
+            personality_text = "\n## Твоя личность\n"
+            if p.biography:
+                personality_text += f"Биография: {p.biography}\n\n"
             if p.neutralization_techniques:
                 techniques = ", ".join(
                     t.value for t in p.neutralization_techniques
@@ -214,8 +218,15 @@ class CognitiveAgentRunner:
 
         # Раздел интервью
         interview_text = ""
-        if self._interview_library and len(self._interview_library) > 0:
-            # Случайное распределение: seed = hash(agent_id) для воспроизводимости
+        if agent_id in self._agent_interviews:
+            # Привязанное интервью имеет приоритет над библиотекой
+            interview_text = (
+                f"\n## Нарративное интервью\n"
+                f"{self._agent_interviews[agent_id]}\n"
+            )
+        elif self._interview_library and len(self._interview_library) > 0:
+            # Запасная ветка: случайная выборка из общей библиотеки.
+            # seed = hash(agent_id) гарантирует воспроизводимость для агента.
             seed = hash(agent_id) % (2**31)
             results = self._interview_library.sample(n=1, seed=seed)
             if results:

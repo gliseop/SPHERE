@@ -335,3 +335,39 @@ def generate_interview(
 
     interview.embedding = embedder.embed(interview.full_text())
     return interview
+
+
+def prepare_scenario_interviews(
+    agents: list,
+    llm: LLMProvider,
+    embedder: EmbeddingProvider,
+) -> dict[str, str]:
+    """Генерирует интервью для каждого агента сценария.
+
+    Для каждого агента с заполненным полем personality определяет архетип
+    через classify_archetype() и вызывает generate_interview(), привязывая
+    результат к идентификатору агента. Агенты без personality пропускаются.
+
+    Args:
+        agents: Список AgentProfile из конфигурации сценария.
+        llm: Провайдер языковой модели.
+        embedder: Провайдер эмбеддингов.
+
+    Returns:
+        Словарь {agent_id: текст интервью}.
+    """
+    result: dict[str, str] = {}
+    for agent in agents:
+        if not agent.personality:
+            continue
+        archetype = agent.personality.classify_archetype()
+        interview = generate_interview(
+            personality=agent.personality,
+            role=agent.position,
+            archetype=archetype,
+            llm=llm,
+            embedder=embedder,
+            interview_id=agent.id,
+        )
+        result[agent.id] = interview.full_text()
+    return result

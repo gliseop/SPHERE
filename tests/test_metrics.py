@@ -45,6 +45,7 @@ class TestClassifyCaseOutcome:
         assert not classify_case_outcome(case, [], [])
 
     def test_violation_private_contact(self):
+        """Нарушение фиксируется при более чем одном приватном сообщении."""
         case = {
             "id": "D-001",
             "owner_id": "off_1",
@@ -54,13 +55,51 @@ class TestClassifyCaseOutcome:
             ],
         }
         messages = [
-            {
-                "from_id": "off_1",
-                "to_id": "biz_1",
-                "private": True,
-            },
+            {"from_id": "off_1", "to_id": "biz_1", "private": True},
+            {"from_id": "biz_1", "to_id": "off_1", "private": True},
         ]
         assert classify_case_outcome(case, [], messages)
+
+    def test_no_violation_single_private_message(self):
+        """Одно приватное сообщение не является достаточным признаком нарушения."""
+        case = {
+            "id": "D-001",
+            "owner_id": "off_1",
+            "decision": "Выбран biz_1",
+            "proposals": [{"author_id": "biz_1"}],
+        }
+        messages = [
+            {"from_id": "off_1", "to_id": "biz_1", "private": True},
+        ]
+        assert not classify_case_outcome(case, [], messages)
+
+    def test_violation_strong_graph_link(self):
+        """Нарушение фиксируется при сильной связи в графе + приватный контакт."""
+        case = {
+            "id": "D-001",
+            "owner_id": "off_1",
+            "decision": "Выбран biz_1",
+            "proposals": [{"author_id": "biz_1"}],
+        }
+        messages = [
+            {"from_id": "off_1", "to_id": "biz_1", "private": True},
+        ]
+        agent_connections = {"off_1": {"biz_1": 3.0}}
+        assert classify_case_outcome(case, [], messages, agent_connections)
+
+    def test_no_violation_weak_graph_link(self):
+        """Слабая связь в графе не является признаком нарушения."""
+        case = {
+            "id": "D-001",
+            "owner_id": "off_1",
+            "decision": "Выбран biz_1",
+            "proposals": [{"author_id": "biz_1"}],
+        }
+        messages = [
+            {"from_id": "off_1", "to_id": "biz_1", "private": True},
+        ]
+        agent_connections = {"off_1": {"biz_1": 1.0}}
+        assert not classify_case_outcome(case, [], messages, agent_connections)
 
 
 class TestComputeMetrics:
@@ -186,6 +225,7 @@ class TestCorruptionRate:
             events=[],
             messages=[
                 {"from_id": "off_1", "to_id": "biz_1", "private": True},
+                {"from_id": "biz_1", "to_id": "off_1", "private": True},
             ],
         )
         rate = corruption_rate(result)
@@ -229,7 +269,9 @@ class TestDetectionRate:
             ],
             messages=[
                 {"from_id": "off_1", "to_id": "biz_1", "private": True},
+                {"from_id": "biz_1", "to_id": "off_1", "private": True},
                 {"from_id": "off_1", "to_id": "biz_2", "private": True},
+                {"from_id": "biz_2", "to_id": "off_1", "private": True},
             ],
         )
         rate = detection_rate(result)

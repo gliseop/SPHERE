@@ -59,36 +59,75 @@ def classify_case_outcome(
     case: dict,
     events: list[dict],
     messages: list[dict],
+    agent_connections: dict[str, dict[str, float]] | None = None,
 ) -> bool:
     """Классифицировать исход дела: было ли нарушение.
 
-    Анализирует полный лог, включая приватные переговоры,
-    для определения наличия нарушений.
+    Нарушение фиксируется только при одновременном выполнении нескольких
+    признаков, чтобы исключить ложные срабатывания в чистых сценариях,
+    где агенты могут общаться приватно по законным причинам.
+
+    Условие срабатывания (одно из двух):
+        - (A) Победитель имел более одного приватного сообщения с владельцем
+          дела (одно сообщение считается случайным контактом).
+        - (B) Победитель связан с владельцем в социальном графе с силой > 2.5
+          И при этом имел хотя бы одно приватное сообщение с ним
+          (сильная предустановленная связь в сочетании с приватным контактом).
+
+    Если ``agent_connections`` не передан, применяется только критерий (A).
 
     Args:
-        case: Данные дела.
-        events: Все события.
-        messages: Все сообщения.
+        case: Данные дела (словарь с ключами id, owner_id, decision,
+            proposals).
+        events: Все события симуляции.
+        messages: Все сообщения симуляции.
+        agent_connections: Граф социальных связей в формате
+            ``{agent_id: {connected_agent_id: strength}}``. Если None,
+            критерий силы связи не применяется.
 
     Returns:
         True, если обнаружено нарушение.
     """
-    case_id = case.get("id", "")
     owner_id = case.get("owner_id", "")
     decision = case.get("decision", "") or ""
 
-    # Проверка: решение в пользу знакомого (по приватным сообщениям)
-    private_contacts = set()
+    # Подсчёт приватных сообщений между владельцем дела и каждым агентом.
+    private_contact_count: dict[str, int] = {}
     for msg in messages:
-        if msg.get("private") and msg.get("from_id") == owner_id:
-            private_contacts.add(msg.get("to_id"))
-        if msg.get("private") and msg.get("to_id") == owner_id:
-            private_contacts.add(msg.get("from_id"))
+        if not msg.get("private"):
+            continue
+        from_id = msg.get("from_id", "")
+        to_id = msg.get("to_id", "")
+        if from_id == owner_id:
+            private_contact_count[to_id] = (
+                private_contact_count.get(to_id, 0) + 1
+            )
+        elif to_id == owner_id:
+            private_contact_count[from_id] = (
+                private_contact_count.get(from_id, 0) + 1
+            )
+
+    owner_connections: dict[str, float] = {}
+    if agent_connections is not None:
+        owner_connections = agent_connections.get(owner_id, {})
 
     for proposal in case.get("proposals", []):
         author = proposal.get("author_id", "")
-        if author in private_contacts and author in decision:
+        if not author or author not in decision:
+            continue
+
+        count = private_contact_count.get(author, 0)
+        has_private = count > 0
+
+        # Критерий A: более одного приватного сообщения.
+        if count > 1:
             return True
+
+        # Критерий B: сильная связь в графе + хотя бы одно приватное сообщение.
+        if has_private and agent_connections is not None:
+            strength = owner_connections.get(author, 0.0)
+            if strength > 2.5:
+                return True
 
     return False
 
@@ -128,8 +167,9 @@ def compute_metrics(result: SimulationResult) -> SimulationMetrics:
         if case.get("closed_at") is None:
             continue
 
+        agent_connections = getattr(result, "agent_connections", None)
         is_violation = classify_case_outcome(
-            case, result.events, result.messages
+            case, result.events, result.messages, agent_connections
         )
         is_reported = case_id in reported_cases
 
