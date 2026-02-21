@@ -5,9 +5,12 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .environment import SimulationResult
+
+if TYPE_CHECKING:
+    from .oracle import OracleVerdict
 
 
 @dataclass
@@ -162,8 +165,6 @@ def compute_metrics(result: SimulationResult) -> SimulationMetrics:
     confusion = ConfusionMatrix()
 
     for case_id, case in result.cases.items():
-        if case.get("case_type") == "investigation":
-            continue
         if case.get("closed_at") is None:
             continue
 
@@ -171,6 +172,107 @@ def compute_metrics(result: SimulationResult) -> SimulationMetrics:
         is_violation = classify_case_outcome(
             case, result.events, result.messages, agent_connections
         )
+        is_reported = case_id in reported_cases
+
+        if is_violation:
+            violations_total += 1
+            if is_reported:
+                violations_detected += 1
+                confusion.tp += 1
+            else:
+                confusion.fn += 1
+        else:
+            if is_reported:
+                confusion.fp += 1
+            else:
+                confusion.tn += 1
+
+    metrics.violations_total = violations_total
+    metrics.violations_detected = violations_detected
+    metrics.confusion = confusion
+
+    # Приватные сообщения
+    total_messages = len(result.messages)
+    private_count = sum(
+        1 for m in result.messages if m.get("private")
+    )
+    metrics.private_message_ratio = (
+        private_count / total_messages
+        if total_messages > 0
+        else 0.0
+    )
+
+    return metrics
+
+
+def case_diversity(result: SimulationResult) -> int:
+    """Подсчитать количество уникальных типов дел.
+
+    Чем больше различных case_type встречается среди дел,
+    тем разнообразнее организационные процессы в симуляции.
+
+    Args:
+        result: Результат симуляции.
+
+    Returns:
+        Количество уникальных значений case_type.
+    """
+    unique_types: set[str] = set()
+    for case in result.cases.values():
+        ct = case.get("case_type", "")
+        if ct:
+            unique_types.add(ct)
+    return len(unique_types)
+
+
+def compute_metrics_with_oracle(
+    result: SimulationResult,
+    oracle_verdicts: list["OracleVerdict"],
+) -> SimulationMetrics:
+    """Вычислить метрики, используя вердикты оракула как ground truth.
+
+    Оракул определяет, какие дела содержат нарушения. Затем
+    на основе отчётов аудитора вычисляется матрица ошибок.
+
+    Args:
+        result: Результат симуляции.
+        oracle_verdicts: Список вердиктов оракула о нарушениях.
+
+    Returns:
+        Сводные метрики с матрицей ошибок на основе оракула.
+    """
+    metrics = SimulationMetrics(rounds=result.rounds_completed)
+
+    # Дела по типам
+    cases_by_type: dict[str, int] = {}
+    for case in result.cases.values():
+        ct = case.get("case_type", "unknown")
+        cases_by_type[ct] = cases_by_type.get(ct, 0) + 1
+    metrics.total_cases = len(result.cases)
+    metrics.cases_by_type = cases_by_type
+
+    # Множество дел с нарушениями по вердикту оракула
+    oracle_violation_cases: set[str] = {
+        v.case_id for v in oracle_verdicts
+    }
+
+    # Множество дел, по которым поданы отчёты
+    reported_cases: set[str] = set()
+    for event in result.events:
+        if event.get("event_type") == "report_filed":
+            reported_cases.add(
+                event.get("payload", {}).get("case_id")
+            )
+
+    violations_total = 0
+    violations_detected = 0
+    confusion = ConfusionMatrix()
+
+    for case_id, case in result.cases.items():
+        if case.get("closed_at") is None:
+            continue
+
+        is_violation = case_id in oracle_violation_cases
         is_reported = case_id in reported_cases
 
         if is_violation:
@@ -212,11 +314,11 @@ def compute_metrics(result: SimulationResult) -> SimulationMetrics:
 # Ключ — название архетипа, значение — множество инструментов,
 # которые архетип использует чаще других.
 _ARCHETYPE_ACTION_PATTERNS: dict[str, set[str]] = {
-    "initiator": {"talk_to", "submit_proposal", "open_case"},
-    "machiavellist": {"talk_to", "submit_proposal"},
-    "conformist": {"submit_proposal", "add_note", "cast_vote"},
-    "idealist": {"file_report", "cast_vote", "add_note"},
-    "opportunist": {"talk_to", "submit_proposal", "open_case"},
+    "initiator": {"talk_to", "submit_proposal", "open_case", "perform_action"},
+    "machiavellist": {"talk_to", "submit_proposal", "perform_action"},
+    "conformist": {"submit_proposal", "add_note", "cast_vote", "perform_action"},
+    "idealist": {"file_report", "cast_vote", "add_note", "perform_action"},
+    "opportunist": {"talk_to", "submit_proposal", "open_case", "perform_action"},
 }
 
 
@@ -329,8 +431,6 @@ def corruption_rate(result: SimulationResult) -> float:
     """
     closed = []
     for case_id, case in result.cases.items():
-        if case.get("case_type") == "investigation":
-            continue
         if case.get("closed_at") is None:
             continue
         closed.append(case)
@@ -365,8 +465,6 @@ def detection_rate(result: SimulationResult) -> float:
     violations_total = 0
     violations_detected = 0
     for case_id, case in result.cases.items():
-        if case.get("case_type") == "investigation":
-            continue
         if case.get("closed_at") is None:
             continue
         if classify_case_outcome(case, result.events, result.messages):

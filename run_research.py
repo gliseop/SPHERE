@@ -21,7 +21,6 @@ from rich.console import Console
 from rich.table import Table
 
 from magistry_sim.arbiter import Arbiter
-from magistry_sim.classifier import ViolationClassifier
 from magistry_sim.cognitive_runner import CognitiveAgentRunner
 from magistry_sim.enums import GovernanceMode, ScenarioId
 from magistry_sim.environment import Environment
@@ -29,12 +28,15 @@ from magistry_sim.llm import create_embedding_provider, create_provider
 from magistry_sim.metrics import (
     action_diversity,
     arbiter_rejection_rate,
+    case_diversity,
     compute_metrics,
+    compute_metrics_with_oracle,
     corruption_rate,
     detection_rate,
     false_positive_rate,
     scheme_depth,
 )
+from magistry_sim.oracle import ViolationOracle
 from magistry_sim.scenarios import get_scenario
 from magistry_sim.tracing import LLMTracer, TracingLLMProvider
 from magistry_sim.world_generator import WorldGenerator
@@ -186,11 +188,13 @@ def run_single(
     detect = detection_rate(result)
     fp = false_positive_rate(result)
 
-    # Классификация
-    classifier = ViolationClassifier(llm=traced_arbiter)
-    classifications = classifier.classify_all(
-        result.cases, result.events, result.messages
+    # Оракул нарушений
+    oracle = ViolationOracle(llm=traced_arbiter)
+    oracle_verdicts = oracle.analyze(
+        result.events, result.messages, result.cases
     )
+    case_div = case_diversity(result)
+    oracle_metrics = compute_metrics_with_oracle(result, oracle_verdicts)
 
     # Сохранение трассы
     trace_path = (
@@ -214,6 +218,7 @@ def run_single(
         "rounds": result.rounds_completed,
         "total_cases": metrics.total_cases,
         "cases_by_type": metrics.cases_by_type,
+        "case_diversity": case_div,
         "violations_total": metrics.violations_total,
         "violations_detected": metrics.violations_detected,
         "precision": metrics.confusion.precision,
@@ -231,7 +236,8 @@ def run_single(
         "detection_rate": detect,
         "false_positive_rate": fp,
         "total_tokens": tracer.total_tokens,
-        "classifications_count": len(classifications),
+        "oracle_violations": len(oracle_verdicts),
+        "oracle_f1": oracle_metrics.confusion.f1,
         "messages_count": len(result.messages),
     }
 
@@ -253,6 +259,7 @@ def _print_aggregate_table(
     table.add_column("Режим")
     table.add_column("N", justify="right")
     table.add_column("Дел", justify="right")
+    table.add_column("Типы дел", justify="right")
     table.add_column("Нарушений", justify="right")
     table.add_column("Обнаружено", justify="right")
     table.add_column("F1", justify="right")
@@ -272,13 +279,16 @@ def _print_aggregate_table(
             if not subset:
                 table.add_row(
                     sid.value, gov.value, "0",
-                    "-", "-", "-", "-", "-", "-", "-",
+                    "-", "-", "-", "-", "-", "-", "-", "-",
                 )
                 continue
 
             n = len(subset)
             med_cases = statistics.median(
                 [r["total_cases"] for r in subset]
+            )
+            med_case_div = statistics.median(
+                [r.get("case_diversity", 0) for r in subset]
             )
             med_violations = statistics.median(
                 [r["violations_total"] for r in subset]
@@ -304,6 +314,7 @@ def _print_aggregate_table(
                 gov.value,
                 str(n),
                 f"{med_cases:.0f}",
+                f"{med_case_div:.0f}",
                 f"{med_violations:.0f}",
                 f"{med_detected:.0f}",
                 f"{med_f1:.2f}",

@@ -158,6 +158,7 @@ def _capability_text(cap: Capability) -> str:
         "file_report": "подавать отчёты",
         "vote": "голосовать",
         "audit": "проводить проверки",
+        "manage": "управлять организационными процессами",
     }
     action = action_names.get(cap.action, cap.action)
     if cap.case_types:
@@ -434,8 +435,8 @@ TOOL_DESCRIPTIONS = """\
    - private: если true, содержание не видно аудитору
 
 2. open_case(case_type, title, description, params="")
-   Открыть новое дело (закупку, найм, согласование бюджета).
-   - case_type: "procurement", "hiring" или "budget"
+   Открыть новое дело произвольного типа (закупка, найм, бюджет, обучение, аттестация, ревизия и др.).
+   - case_type: произвольный тип дела (например, "procurement", "hiring", "budget", "training", "audit", "certification")
    - title: краткое название
    - description: описание и требования
    - params: дополнительные параметры
@@ -854,7 +855,7 @@ def _build_crewai_tools() -> list:
 
     class OpenCaseArgs(BaseModel):
         case_type: str = Field(
-            description="Тип дела: procurement, hiring или budget"
+            description="Тип дела: произвольный (procurement, hiring, budget, training, audit, certification и др.)"
         )
         title: str = Field(description="Краткое название дела")
         description: str = Field(description="Описание и требования")
