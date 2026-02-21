@@ -54,6 +54,7 @@ class CognitiveAgentRunner:
         self._plans: dict[str, AgentPlan] = {}
         self._interview_library = None
         self._agent_interviews: dict[str, str] = {}
+        self.use_free_actions: bool = False
 
         if interview_library_path:
             from magistry_sim.interviews import InterviewLibrary
@@ -236,14 +237,35 @@ class CognitiveAgentRunner:
                 )
 
         # Описание инструментов
-        tools_text = TOOL_DESCRIPTIONS
+        if self.use_free_actions:
+            tools_text = (
+                "## Доступный инструмент\n\n"
+                "У вас один универсальный инструмент:\n\n"
+                "perform_action — выполнить любое действие в мире.\n"
+                "  Аргументы:\n"
+                "    - description (str): Что вы хотите сделать. Описывайте конкретно.\n"
+                "    - target (str): На кого/что направлено действие (agent_id, case_id или \"\").\n"
+                "    - justification (str): Зачем вы это делаете.\n"
+                "  \n"
+                "  Примеры:\n"
+                '    {"tool": "perform_action", "args": {"description": "Открыть закупку серверного оборудования для ИТ-отдела", "target": "", "justification": "Организации нужны новые серверы"}}\n'
+                '    {"tool": "perform_action", "args": {"description": "Отправить приватное сообщение подрядчику с обсуждением условий", "target": "biz_1", "justification": "Обсудить детали предложения"}}\n'
+                '    {"tool": "perform_action", "args": {"description": "Подать предложение по закупке D-001", "target": "D-001", "justification": "Наша компания может выполнить заказ"}}\n'
+            )
+            format_instructions = (
+                'Верни действия в формате JSON-массива: [{"tool": "perform_action", "args": {"description": "...", "target": "...", "justification": "..."}}]\n'
+                "Можешь выполнить несколько действий за ход. Верни ТОЛЬКО JSON, без пояснений."
+            )
+        else:
+            tools_text = f"## Доступные инструменты\n{TOOL_DESCRIPTIONS}"
+            format_instructions = ACTION_FORMAT_INSTRUCTIONS
 
         system_prompt = (
             f"Ты — агент в симуляции организационных процессов. "
             f"Действуй в соответствии со своей личностью, воспоминаниями и планом.\n"
             f"{personality_text}{interview_text}{memories_text}{plan_text}\n"
-            f"## Доступные инструменты\n{tools_text}\n\n"
-            f"{ACTION_FORMAT_INSTRUCTIONS}"
+            f"{tools_text}\n\n"
+            f"{format_instructions}"
         )
 
         user_prompt = f"Текущая ситуация:\n{situation}"

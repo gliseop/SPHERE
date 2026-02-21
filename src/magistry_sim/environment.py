@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .agents import AgentRunner, MockAgentRunner
+from .arbiter import Arbiter
 from .cognitive_runner import CognitiveAgentRunner
 from .cases import CASE_REGISTRY, apply_transition, check_condition
 from .config import ScenarioConfig
@@ -21,6 +22,7 @@ from .reputation import (
 from .resources import apply_maintenance
 from .scenarios import add_governance_agents
 from .state import ReputationRecord, WorldState
+from .state_ops import apply_state_op
 from .tools import current_agent_id, current_runner, current_state
 from .tools.actions import (
     cast_vote,
@@ -33,6 +35,8 @@ from .tools.actions import (
 )
 from .narrator import WorldNarrator
 from .tools.communication import talk_to
+from .tracing import LLMTracer
+from .world_generator import WorldGenerator
 
 
 TOOL_DISPATCH = {
@@ -78,6 +82,9 @@ class Environment:
         seed: int | None = None,
         narrator: WorldNarrator | None = None,
         llm: Any | None = None,
+        arbiter: Arbiter | None = None,
+        world_generator: WorldGenerator | None = None,
+        tracer: LLMTracer | None = None,
     ) -> None:
         gov = governance or scenario.governance.mode
         self._scenario = add_governance_agents(scenario, gov)
@@ -88,6 +95,9 @@ class Environment:
         self._max_rounds = scenario.max_rounds
         self._narrator = narrator
         self._llm = llm
+        self._arbiter = arbiter
+        self._world_generator = world_generator
+        self._tracer = tracer
         self._init_state()
 
     def _init_state(self) -> None:
@@ -173,6 +183,7 @@ class Environment:
                 self._run_agent_turn(agent_id)
 
             self._apply_round_end_effects()
+            self._run_world_generator(round_num)
             self._narrate_round(round_num)
 
         return self._build_result()
@@ -218,9 +229,15 @@ class Environment:
     def _generate_needs(self, round_num: int) -> None:
         """Сгенерировать потребности для текущего раунда.
 
+        Если задан генератор мировых событий, статические потребности
+        из сценария пропускаются — они создаются динамически генератором.
+
         Args:
             round_num: Номер раунда.
         """
+        if self._world_generator is not None:
+            return
+
         for need in self._scenario.needs:
             if need.appear_round == round_num:
                 already = any(
@@ -233,6 +250,10 @@ class Environment:
 
     def _run_agent_turn(self, agent_id: str) -> None:
         """Выполнить ход одного агента.
+
+        Если задан арбитр (режим v5), действия perform_action обрабатываются
+        через LLM-арбитр, а прочие инструменты проходят через TOOL_DISPATCH
+        для обратной совместимости. Без арбитра поведение не меняется.
 
         Args:
             agent_id: Идентификатор агента.
@@ -252,19 +273,115 @@ class Environment:
                 state=self._state,
             )
 
-            for action in actions:
-                tool_name = action.get("tool", "")
-                args = action.get("args", {})
-                func = TOOL_DISPATCH.get(tool_name)
-                if func:
-                    try:
-                        func(**args)
-                    except TypeError:
-                        pass
+            if self._arbiter is not None:
+                for action in actions:
+                    tool_name = action.get("tool", "")
+                    args = action.get("args", {})
+
+                    if tool_name == "perform_action":
+                        description = args.get("description", "")
+                        target = args.get("target", "")
+                        justification = args.get("justification", "")
+
+                        verdict = self._arbiter.evaluate(
+                            agent_id=agent_id,
+                            description=description,
+                            target=target,
+                            justification=justification,
+                            state=self._state,
+                            round_num=self._state.round,
+                        )
+
+                        if verdict.feasible:
+                            for op in verdict.state_changes:
+                                apply_state_op(
+                                    op,
+                                    self._state,
+                                    self._state.round,
+                                    agent_id,
+                                )
+                            self._state.event_log.log(
+                                round=self._state.round,
+                                event_type="arbiter_approved",
+                                agent_id=agent_id,
+                                payload={
+                                    "description": description,
+                                    "target": target,
+                                    "justification": justification,
+                                    "narrative": verdict.narrative,
+                                },
+                            )
+                        else:
+                            self._state.event_log.log(
+                                round=self._state.round,
+                                event_type="arbiter_rejected",
+                                agent_id=agent_id,
+                                payload={
+                                    "description": description,
+                                    "target": target,
+                                    "justification": justification,
+                                    "narrative": verdict.narrative,
+                                },
+                            )
+                    else:
+                        # Fallback на TOOL_DISPATCH (обратная совместимость)
+                        func = TOOL_DISPATCH.get(tool_name)
+                        if func:
+                            try:
+                                func(**args)
+                            except TypeError:
+                                pass
+            else:
+                for action in actions:
+                    tool_name = action.get("tool", "")
+                    args = action.get("args", {})
+                    func = TOOL_DISPATCH.get(tool_name)
+                    if func:
+                        try:
+                            func(**args)
+                        except TypeError:
+                            pass
         finally:
             current_state.reset(token_state)
             current_agent_id.reset(token_agent)
             current_runner.reset(token_runner)
+
+    def _run_world_generator(self, round_num: int) -> None:
+        """Запустить генератор мировых событий в конце раунда.
+
+        Собирает события раунда, вызывает генератор для создания
+        динамических событий, применяет операции к состоянию мира
+        и логирует нарратив.
+
+        Args:
+            round_num: Номер раунда.
+        """
+        if self._world_generator is None:
+            return
+
+        round_events = [
+            {
+                "agent_id": e.agent_id,
+                "event_type": e.event_type,
+                "payload": e.payload,
+            }
+            for e in self._state.event_log.all_events
+            if e.round == round_num
+        ]
+
+        result = self._world_generator.generate(
+            self._state, round_num, round_events
+        )
+
+        for op in result.ops:
+            apply_state_op(op, self._state, round_num)
+
+        if result.narrative:
+            self._state.event_log.log(
+                round=round_num,
+                event_type="world_event",
+                payload={"narrative": result.narrative},
+            )
 
     def _check_conditional_transitions(self) -> None:
         """Проверить и применить условные переходы конечных автоматов."""

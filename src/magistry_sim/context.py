@@ -190,9 +190,7 @@ def build_situation(agent_id: str, state: WorldState) -> str:
         parts.extend(_build_juror_section(agent_id, state))
 
     parts.append(
-        "\nВыполните необходимые действия, используя ТОЛЬКО "
-        "предоставленные инструменты. НЕ описывайте действия "
-        "текстом — вызывайте инструменты напрямую."
+        "\nВыполните необходимые действия."
     )
     return "\n".join(parts)
 
