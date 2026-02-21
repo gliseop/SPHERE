@@ -461,3 +461,122 @@ def neutralization_usage(result: SimulationResult) -> dict[str, int]:
             technique = match.group(1)
             usage[technique] = usage.get(technique, 0) + 1
     return usage
+
+
+# ---------------------------------------------------------------------------
+# Метрики v5: свободный мир
+# ---------------------------------------------------------------------------
+
+_CORRUPTION_EVENT_TYPES = {"funds_transferred", "evidence_removed"}
+
+
+def _is_corruption_event(event: dict[str, Any]) -> bool:
+    """Проверить, является ли событие коррупционным.
+
+    Коррупционными считаются события типа funds_transferred,
+    evidence_removed, а также evidence_added с типом улики,
+    содержащим «forge» или «подделк».
+
+    Args:
+        event: Словарь события.
+
+    Returns:
+        True, если событие коррупционное.
+    """
+    etype = event.get("event_type", "")
+    if etype in _CORRUPTION_EVENT_TYPES:
+        return True
+    if etype == "evidence_added":
+        evidence_type = event.get("payload", {}).get("evidence_type", "")
+        if "forge" in evidence_type.lower() or "подделк" in evidence_type.lower():
+            return True
+    return False
+
+
+def action_diversity(result: SimulationResult) -> int:
+    """Подсчитать количество уникальных типов событий.
+
+    Чем больше различных event_type встречается в журнале событий,
+    тем разнообразнее поведение агентов в симуляции.
+
+    Args:
+        result: Результат симуляции.
+
+    Returns:
+        Количество уникальных значений event_type.
+    """
+    unique_types: set[str] = set()
+    for event in result.events:
+        etype = event.get("event_type", "")
+        if etype:
+            unique_types.add(etype)
+    return len(unique_types)
+
+
+def scheme_depth(result: SimulationResult) -> int:
+    """Найти максимальную глубину коррупционной схемы.
+
+    Ищет самую длинную непрерывную цепочку коррупционных событий
+    одного агента, отсортированных по раунду. Цепочка прерывается,
+    если между коррупционными событиями агента встречается «честное»
+    событие того же агента.
+
+    Коррупционными считаются: funds_transferred, evidence_removed,
+    evidence_added (с evidence_type, содержащим «forge» или «подделк»).
+
+    Args:
+        result: Результат симуляции.
+
+    Returns:
+        Длина самой длинной цепочки. 0, если коррупционных событий нет.
+    """
+    # Группируем события по agent_id, сортируем по раунду.
+    agent_events: dict[str, list[dict[str, Any]]] = {}
+    for event in result.events:
+        agent_id = event.get("agent_id", "")
+        if not agent_id:
+            continue
+        agent_events.setdefault(agent_id, []).append(event)
+
+    max_depth = 0
+
+    for agent_id, events in agent_events.items():
+        sorted_events = sorted(events, key=lambda e: e.get("round", 0))
+        current_chain = 0
+        for event in sorted_events:
+            if _is_corruption_event(event):
+                current_chain += 1
+                if current_chain > max_depth:
+                    max_depth = current_chain
+            else:
+                current_chain = 0
+
+    return max_depth
+
+
+def arbiter_rejection_rate(result: SimulationResult) -> float:
+    """Вычислить долю отклонённых арбитром действий.
+
+    Подсчитывает отношение событий arbiter_rejected к общему числу
+    арбитражных событий (arbiter_rejected + arbiter_approved).
+
+    Args:
+        result: Результат симуляции.
+
+    Returns:
+        Доля от 0.0 до 1.0. Возвращает 0.0, если арбитражных
+        событий нет.
+    """
+    rejected = 0
+    approved = 0
+    for event in result.events:
+        etype = event.get("event_type", "")
+        if etype == "arbiter_rejected":
+            rejected += 1
+        elif etype == "arbiter_approved":
+            approved += 1
+
+    total = rejected + approved
+    if total == 0:
+        return 0.0
+    return rejected / total

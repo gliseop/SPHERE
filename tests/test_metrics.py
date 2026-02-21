@@ -398,3 +398,101 @@ class TestNeutralizationUsage:
         )
         usage = neutralization_usage(result)
         assert usage == {}
+
+
+class TestV5FreeWorldMetrics:
+    """Тесты метрик свободного мира (v5)."""
+
+    def test_action_diversity_counts_unique_types(self):
+        from magistry_sim.metrics import action_diversity
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+            events=[
+                {"event_type": "talk_to", "agent_id": "off_1", "round": 1},
+                {"event_type": "submit_proposal", "agent_id": "biz_1", "round": 1},
+                {"event_type": "talk_to", "agent_id": "biz_2", "round": 2},
+                {"event_type": "arbiter_approved", "agent_id": "off_1", "round": 2},
+                {"event_type": "funds_transferred", "agent_id": "off_1", "round": 3},
+            ],
+        )
+        assert action_diversity(result) == 4
+
+    def test_action_diversity_empty_events(self):
+        from magistry_sim.metrics import action_diversity
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+        )
+        assert action_diversity(result) == 0
+
+    def test_scheme_depth_finds_chain(self):
+        from magistry_sim.metrics import scheme_depth
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=10,
+            events=[
+                {"event_type": "funds_transferred", "agent_id": "off_1", "round": 1},
+                {"event_type": "evidence_removed", "agent_id": "off_1", "round": 2},
+                {"event_type": "evidence_added", "agent_id": "off_1", "round": 3,
+                 "payload": {"evidence_type": "forged_document"}},
+                {"event_type": "talk_to", "agent_id": "off_1", "round": 4},
+                {"event_type": "funds_transferred", "agent_id": "off_1", "round": 5},
+                {"event_type": "talk_to", "agent_id": "biz_1", "round": 1},
+                {"event_type": "funds_transferred", "agent_id": "biz_1", "round": 2},
+            ],
+        )
+        # off_1: цепочка из 3 коррупционных (раунды 1-3), потом разрыв, потом 1
+        # biz_1: цепочка из 1
+        assert scheme_depth(result) == 3
+
+    def test_scheme_depth_no_corruption(self):
+        from magistry_sim.metrics import scheme_depth
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+            events=[
+                {"event_type": "talk_to", "agent_id": "off_1", "round": 1},
+                {"event_type": "submit_proposal", "agent_id": "biz_1", "round": 2},
+                {"event_type": "cast_vote", "agent_id": "off_1", "round": 3},
+            ],
+        )
+        assert scheme_depth(result) == 0
+
+    def test_arbiter_rejection_rate_basic(self):
+        from magistry_sim.metrics import arbiter_rejection_rate
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+            events=[
+                {"event_type": "arbiter_approved", "agent_id": "off_1", "round": 1},
+                {"event_type": "arbiter_approved", "agent_id": "biz_1", "round": 1},
+                {"event_type": "arbiter_rejected", "agent_id": "off_1", "round": 2},
+                {"event_type": "arbiter_approved", "agent_id": "biz_2", "round": 2},
+            ],
+        )
+        # 1 rejected / 4 total = 0.25
+        assert arbiter_rejection_rate(result) == 0.25
+
+    def test_arbiter_rejection_rate_no_events(self):
+        from magistry_sim.metrics import arbiter_rejection_rate
+        from magistry_sim.environment import SimulationResult
+
+        result = SimulationResult(
+            scenario_id="S0", governance="G0", seed=42,
+            rounds_completed=5,
+            events=[
+                {"event_type": "talk_to", "agent_id": "off_1", "round": 1},
+            ],
+        )
+        assert arbiter_rejection_rate(result) == 0.0
