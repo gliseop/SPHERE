@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .cases import Case, CASE_REGISTRY
+from .cases import Case
 from .config import AgentProfile, Capability, Need
 from .events import EventLog
 from .graph import SocialGraph
@@ -136,15 +136,16 @@ class WorldState:
     def get_open_cases(self) -> list[Case]:
         """Получить все открытые дела.
 
+        Дело считается открытым, если его стадия не равна 'closed'
+        и оно не было закрыто (closed_at is None).
+
         Returns:
-            Список дел, не находящихся в терминальной стадии.
+            Список открытых дел.
         """
-        result = []
-        for case in self.cases.values():
-            schema = CASE_REGISTRY.get(case.case_type)
-            if schema and case.stage not in schema.terminal_stages:
-                result.append(case)
-        return result
+        return [
+            case for case in self.cases.values()
+            if case.stage != "closed" and case.closed_at is None
+        ]
 
     def get_cases_involving(self, agent_id: str) -> list[Case]:
         """Получить все дела, в которых участвует агент.

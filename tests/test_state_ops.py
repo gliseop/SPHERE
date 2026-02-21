@@ -97,15 +97,17 @@ class TestParseStateOps:
         ops = parse_state_ops(raw)
         assert len(ops) == 16
 
-    def test_extra_fields_rejected(self):
-        """Дополнительные поля отклоняются из-за extra=forbid."""
+    def test_extra_fields_ignored(self):
+        """Дополнительные поля игнорируются (extra='ignore')."""
         raw = [
             {"op": "send_message", "from_id": "off_1", "to_id": "biz_1",
              "content": "Привет", "private": True,
-             "unknown_field": "should_fail"},
+             "unknown_field": "should_be_ignored"},
         ]
         ops = parse_state_ops(raw)
-        assert len(ops) == 0
+        assert len(ops) == 1
+        assert isinstance(ops[0], SendMessageOp)
+        assert not hasattr(ops[0], "unknown_field")
 
     def test_parse_empty_list(self):
         """Пустой список возвращает пустой результат."""
@@ -152,17 +154,21 @@ class TestApplyStateOp:
         assert result.success
         assert len(state.cases) == 1
 
-    def test_apply_create_case_unknown_type(self):
-        """Создание дела с неизвестным типом завершается ошибкой."""
+    def test_apply_create_case_arbitrary_type(self):
+        """Создание дела с произвольным типом проходит успешно."""
         state = self._make_state()
         op = CreateCaseOp(params={
-            "case_type": "unknown_type",
-            "title": "Тест",
-            "description": "Описание",
+            "case_type": "training",
+            "title": "Курс повышения квалификации",
+            "description": "Обучение сотрудников",
             "owner_id": "off_1",
         })
         result = apply_state_op(op, state, round_num=0)
-        assert not result.success
+        assert result.success
+        assert len(state.cases) == 1
+        case = list(state.cases.values())[0]
+        assert case.case_type == "training"
+        assert case.stage == "open"
 
     def test_apply_close_case(self):
         state = self._make_state()
@@ -181,6 +187,25 @@ class TestApplyStateOp:
         assert result.success
         assert state.cases[case_id].decision == "отменён"
         assert state.cases[case_id].closed_at == 1
+
+    def test_close_case_any_type(self):
+        """Закрытие дела произвольного типа устанавливает stage='closed'."""
+        state = self._make_state()
+        create_op = CreateCaseOp(params={
+            "case_type": "training",
+            "title": "Курс",
+            "description": "Обучение",
+            "owner_id": "off_1",
+        })
+        apply_state_op(create_op, state, round_num=0)
+        case_id = list(state.cases.keys())[0]
+
+        close_op = CloseCaseOp(case_id=case_id, decision="завершён")
+        result = apply_state_op(close_op, state, round_num=2)
+        assert result.success
+        assert state.cases[case_id].stage == "closed"
+        assert state.cases[case_id].decision == "завершён"
+        assert state.cases[case_id].closed_at == 2
 
     def test_apply_close_case_not_found(self):
         state = self._make_state()

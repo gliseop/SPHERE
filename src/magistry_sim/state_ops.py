@@ -28,7 +28,7 @@ class StateOp(BaseModel):
     и задают значение ``op`` по умолчанию.
     """
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
     op: str
 
 
@@ -398,15 +398,12 @@ def apply_state_op(
     Returns:
         Результат применения.
     """
-    from .cases import Case, CASE_REGISTRY, Proposal, Vote, apply_transition
+    from .cases import Case, Proposal, Vote
     from .config import Need
     from .state import Complaint, Message, ReputationRecord
 
     if isinstance(op, CreateCaseOp):
         case_type = op.params.get("case_type", "")
-        schema = CASE_REGISTRY.get(case_type)
-        if schema is None:
-            return OpResult(False, f"Неизвестный тип дела: {case_type}")
         case_id = state.new_case_id()
         case = Case(
             id=case_id,
@@ -414,13 +411,10 @@ def apply_state_op(
             title=op.params.get("title", ""),
             description=op.params.get("description", ""),
             owner_id=op.params.get("owner_id", agent_id),
-            stage=schema.initial_stage,
+            stage=op.params.get("stage", "open"),
             params=op.params.get("params", ""),
             created_at=round_num,
         )
-        auto_target = schema.auto_transitions.get(case.stage)
-        if auto_target:
-            apply_transition(case, auto_target)
         state.cases[case_id] = case
         state.event_log.log(
             round=round_num,
@@ -434,9 +428,7 @@ def apply_state_op(
         case = state.cases.get(op.case_id)
         if case is None:
             return OpResult(False, f"Дело {op.case_id} не найдено")
-        schema = CASE_REGISTRY.get(case.case_type)
-        if schema and schema.terminal_stages:
-            apply_transition(case, schema.terminal_stages[0])
+        case.stage = "closed"
         case.decision = op.decision
         case.closed_at = round_num
         state.event_log.log(
@@ -586,7 +578,7 @@ def apply_state_op(
             case_type="investigation",
             title=f"Трибунал по делу {op.case_id}",
             description=f"Обвиняемый: {op.accused_id}",
-            owner_id="auditor",
+            owner_id=agent_id or "auditor",
             stage="tribunal",
             params=f"source_case={op.case_id},accused={op.accused_id}",
             created_at=round_num,
