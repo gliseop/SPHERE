@@ -13,7 +13,7 @@ from .llm import LLMProvider, LLMResponse, StructuredLLMResponse
 class LLMTracer:
     """Сборщик трассировочных span-ов.
 
-    Каждый LLM-вызов (агент, арбитр, генератор среды, классификатор)
+    Каждый LLM-вызов (агент, арбитр, генератор среды, оракул)
     записывается как отдельный span со всеми промптами, ответом,
     моделью и статистикой токенов. Накопленные span-ы сохраняются
     в JSONL для последующего анализа.
@@ -40,7 +40,7 @@ class LLMTracer:
         """Записать span.
 
         Args:
-            role: Роль вызова (agent, arbiter, world_gen, classifier).
+            role: Роль вызова (agent, arbiter, world_gen, oracle).
             agent_id: Идентификатор агента.
             round_num: Номер раунда.
             system: Системный промпт.
