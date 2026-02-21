@@ -600,19 +600,40 @@ def create_provider(
 
 def create_embedding_provider(
     mock: bool = True,
+    provider: str = "local",
     model_name: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
 ) -> EmbeddingProvider:
     """Фабрика провайдеров эмбеддингов.
 
     Args:
         mock: Использовать mock-провайдер.
-        model_name: Имя модели sentence-transformers.
+        provider: Тип провайдера: "local" (sentence-transformers)
+            или "openai" (OpenAI-совместимый API, включая OpenRouter).
+        model_name: Имя модели (зависит от провайдера).
+        api_key: API-ключ (для openai-провайдера).
+        base_url: Базовый URL API (для OpenRouter и аналогов).
 
     Returns:
         Экземпляр провайдера эмбеддингов.
     """
     if mock:
         return MockEmbeddingProvider(dimensions=384)
+
+    if provider == "openai":
+        import os
+
+        resolved_key = api_key or os.getenv("OPENAI_API_KEY")
+        resolved_url = base_url or os.getenv("OPENAI_BASE_URL")
+        resolved_model = model_name or os.getenv(
+            "EMBEDDING_MODEL", "text-embedding-3-small"
+        )
+        return OpenAIEmbeddingProvider(
+            model=resolved_model,
+            api_key=resolved_key,
+            base_url=resolved_url,
+        )
 
     return LocalEmbeddingProvider(
         model_name=model_name
