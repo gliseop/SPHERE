@@ -1,4 +1,4 @@
-"""Тесты моделей данных, конфигурации и конечного автомата."""
+"""Тесты моделей данных и конфигурации."""
 
 import pytest
 from pydantic import ValidationError
@@ -14,15 +14,10 @@ from magistry_sim.config import (
 )
 from magistry_sim.enums import GovernanceMode, ScenarioId
 from magistry_sim.cases import (
-    CASE_REGISTRY,
     Case,
-    CaseSchema,
     Note,
     Proposal,
     Vote,
-    apply_transition,
-    check_condition,
-    validate_transition,
 )
 from magistry_sim.resources import ResourceManager
 
@@ -83,6 +78,7 @@ class TestConfig:
 
 class TestCases:
     def test_case_creation(self):
+        """Стандартное создание дела с типом procurement."""
         case = Case(
             id="D-001",
             case_type="procurement",
@@ -94,7 +90,54 @@ class TestCases:
         assert case.id == "D-001"
         assert case.proposals == []
 
+    def test_case_arbitrary_type(self):
+        """Дело может иметь произвольный тип, не ограниченный реестром."""
+        case = Case(
+            id="D-100",
+            case_type="training",
+            title="Обучение персонала",
+            description="Курс повышения квалификации",
+            owner_id="hr_1",
+            stage="planned",
+        )
+        assert case.case_type == "training"
+        assert case.stage == "planned"
+
+    def test_case_extra_fields_ignored(self):
+        """Лишние поля при создании дела игнорируются, а не вызывают ошибку."""
+        case = Case(
+            id="D-200",
+            case_type="audit",
+            title="Проверка",
+            description="Внеплановая проверка",
+            owner_id="aud_1",
+            stage="initiated",
+            unknown_field="значение",
+            priority=5,
+        )
+        assert case.id == "D-200"
+        assert case.case_type == "audit"
+        assert not hasattr(case, "unknown_field")
+        assert not hasattr(case, "priority")
+
+    def test_case_stage_changed_freely(self):
+        """Стадия дела может быть изменена на произвольное значение."""
+        case = Case(
+            id="D-300",
+            case_type="procurement",
+            title="Закупка",
+            description="Описание",
+            owner_id="off_1",
+            stage="open",
+        )
+        case.stage = "custom_review"
+        assert case.stage == "custom_review"
+
+        case.stage = "approved"
+        assert case.stage == "approved"
+
     def test_proposal_creation(self):
+        """Корректное создание предложения."""
         p = Proposal(
             id="P-001",
             case_id="D-001",
@@ -103,122 +146,70 @@ class TestCases:
             submitted_at=1,
         )
         assert p.author_id == "biz_1"
+        assert p.submitted_at == 1
 
-    def test_case_registry_procurement(self):
-        schema = CASE_REGISTRY["procurement"]
-        assert "open" in schema.stages
-        assert schema.initial_stage == "open"
-        assert schema.auto_transitions["open"] == "collecting"
+    def test_proposal_extra_fields_ignored(self):
+        """Лишние поля при создании предложения игнорируются."""
+        p = Proposal(
+            id="P-002",
+            case_id="D-001",
+            author_id="biz_2",
+            content="Текст",
+            submitted_at=2,
+            extra="лишнее",
+        )
+        assert p.id == "P-002"
+        assert not hasattr(p, "extra")
 
-    def test_case_registry_hiring(self):
-        schema = CASE_REGISTRY["hiring"]
-        assert "screening" in schema.stages
-        assert schema.initial_stage == "open"
+    def test_note_creation(self):
+        """Корректное создание записи в деле."""
+        n = Note(
+            id="N-001",
+            case_id="D-001",
+            author_id="off_1",
+            content="Комментарий",
+            created_at=3,
+        )
+        assert n.author_id == "off_1"
+        assert n.created_at == 3
 
+    def test_note_extra_fields_ignored(self):
+        """Лишние поля при создании записи игнорируются."""
+        n = Note(
+            id="N-002",
+            case_id="D-001",
+            author_id="off_2",
+            content="Текст",
+            created_at=4,
+            visibility="private",
+        )
+        assert n.id == "N-002"
+        assert not hasattr(n, "visibility")
 
-class TestFSM:
-    def test_validate_auto_transition(self):
-        assert validate_transition(
-            "procurement", "open", "collecting", "auto"
+    def test_vote_creation(self):
+        """Корректное создание голоса."""
+        v = Vote(
+            voter_id="juror_1",
+            case_id="T-001",
+            verdict="виновен",
+            reasoning="Обоснование",
+            round=0,
         )
+        assert v.verdict == "виновен"
+        assert v.round == 0
 
-    def test_validate_action_transition(self):
-        assert validate_transition(
-            "procurement", "evaluation", "closed", "resolve_case"
+    def test_vote_extra_fields_ignored(self):
+        """Лишние поля при создании голоса игнорируются."""
+        v = Vote(
+            voter_id="juror_2",
+            case_id="T-001",
+            verdict="невиновен",
+            reasoning="Причина",
+            round=1,
+            confidence=0.95,
         )
-
-    def test_invalid_transition(self):
-        assert not validate_transition(
-            "procurement", "open", "closed", "resolve_case"
-        )
-
-    def test_unknown_case_type(self):
-        assert not validate_transition(
-            "unknown", "open", "closed", "resolve_case"
-        )
-
-    def test_check_condition_deadline_expired(self):
-        case = Case(
-            id="D-001",
-            case_type="procurement",
-            title="Test",
-            description="Test",
-            owner_id="off_1",
-            stage="collecting",
-            deadline_round=5,
-        )
-        assert not check_condition("deadline_expired", case, 4)
-        assert check_condition("deadline_expired", case, 5)
-        assert check_condition("deadline_expired", case, 6)
-
-    def test_check_condition_has_proposals(self):
-        case = Case(
-            id="D-001",
-            case_type="hiring",
-            title="Test",
-            description="Test",
-            owner_id="off_1",
-            stage="open",
-        )
-        assert not check_condition("has_proposals", case, 0)
-
-        case.proposals.append(
-            Proposal(
-                id="P-001",
-                case_id="D-001",
-                author_id="cand_1",
-                content="Отклик",
-                submitted_at=0,
-            )
-        )
-        assert check_condition("has_proposals", case, 0)
-
-    def test_check_condition_quorum_reached_respects_size(self):
-        case = Case(
-            id="T-001",
-            case_type="investigation",
-            title="Трибунал",
-            description="Test",
-            owner_id="auditor",
-            stage="tribunal",
-        )
-        case.votes.append(
-            Vote(
-                voter_id="juror_0",
-                case_id="T-001",
-                verdict="виновен",
-                reasoning="Причина 1",
-                round=0,
-            )
-        )
-        case.votes.append(
-            Vote(
-                voter_id="juror_1",
-                case_id="T-001",
-                verdict="невиновен",
-                reasoning="Причина 2",
-                round=0,
-            )
-        )
-
-        assert not check_condition(
-            "quorum_reached", case, 0, quorum_size=3
-        )
-        assert check_condition(
-            "quorum_reached", case, 0, quorum_size=2
-        )
-
-    def test_apply_transition(self):
-        case = Case(
-            id="D-001",
-            case_type="procurement",
-            title="Test",
-            description="Test",
-            owner_id="off_1",
-            stage="open",
-        )
-        apply_transition(case, "collecting")
-        assert case.stage == "collecting"
+        assert v.voter_id == "juror_2"
+        assert not hasattr(v, "confidence")
 
 
 class TestResources:
