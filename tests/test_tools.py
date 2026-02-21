@@ -98,7 +98,7 @@ class TestOpenCase:
             )
             assert "D-001" in result
             assert "D-001" in state.cases
-            assert state.cases["D-001"].stage == "collecting"
+            assert state.cases["D-001"].stage == "open"
         finally:
             _reset_context(tokens)
 
@@ -259,7 +259,7 @@ class TestResolveCase:
         finally:
             _reset_context(tokens)
 
-    def test_resolve_wrong_stage(self):
+    def test_resolve_already_closed(self):
         state = _make_state()
         case = Case(
             id="D-001",
@@ -267,7 +267,8 @@ class TestResolveCase:
             title="Test",
             description="Test",
             owner_id="off_1",
-            stage="collecting",
+            stage="closed",
+            closed_at=0,
         )
         state.cases["D-001"] = case
 
@@ -301,7 +302,8 @@ class TestResolveCase:
         finally:
             _reset_context(tokens)
 
-    def test_resolve_intermediate_stage_not_closed(self):
+    def test_resolve_sets_closed_at(self):
+        """Решение по делу устанавливает closed_at и stage='closed'."""
         state = _make_state()
         state.agents["off_1"].capabilities.append(
             Capability(action="resolve_case", case_types=["hiring"])
@@ -319,11 +321,11 @@ class TestResolveCase:
         tokens = _setup_context(state, "off_1")
         try:
             result = resolve_case(
-                "H-001", "Переход к интервью", "Кандидаты отобраны"
+                "H-001", "Выбран кандидат", "Лучший результат"
             )
-            assert "переведено в стадию decision" in result
-            assert case.stage == "decision"
-            assert case.closed_at is None
+            assert "закрыто" in result
+            assert case.stage == "closed"
+            assert case.closed_at is not None
         finally:
             _reset_context(tokens)
 

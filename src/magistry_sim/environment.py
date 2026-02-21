@@ -9,7 +9,7 @@ from typing import Any
 from .agents import AgentRunner, MockAgentRunner
 from .arbiter import Arbiter
 from .cognitive_runner import CognitiveAgentRunner
-from .cases import CASE_REGISTRY, apply_transition, check_condition
+from .cases import Case
 from .config import ScenarioConfig
 from .context import build_situation
 from .enums import GovernanceMode
@@ -159,7 +159,6 @@ class Environment:
         for round_num in range(self._max_rounds):
             self._state.round = round_num
             self._generate_needs(round_num)
-            self._check_conditional_transitions()
 
             agent_ids = list(self._state.agents.keys())
             self._rng.shuffle(agent_ids)
@@ -290,6 +289,9 @@ class Environment:
                             justification=justification,
                             state=self._state,
                             round_num=self._state.round,
+                            org_description=getattr(
+                                self._scenario, "narrative_context", ""
+                            ),
                         )
 
                         if verdict.feasible:
@@ -370,7 +372,12 @@ class Environment:
         ]
 
         result = self._world_generator.generate(
-            self._state, round_num, round_events
+            self._state,
+            round_num,
+            round_events,
+            org_context=getattr(
+                self._scenario, "narrative_context", ""
+            ),
         )
 
         for op in result.ops:
@@ -382,35 +389,6 @@ class Environment:
                 event_type="world_event",
                 payload={"narrative": result.narrative},
             )
-
-    def _check_conditional_transitions(self) -> None:
-        """Проверить и применить условные переходы конечных автоматов."""
-        for case in list(self._state.cases.values()):
-            schema = CASE_REGISTRY.get(case.case_type)
-            if schema is None:
-                continue
-
-            cond = schema.conditional_transitions.get(case.stage)
-            if cond:
-                target_stage, condition = cond
-                if check_condition(
-                    condition,
-                    case,
-                    self._state.round,
-                    quorum_size=self._scenario.governance.jury_size,
-                ):
-                    old_stage = case.stage
-                    apply_transition(case, target_stage)
-                    self._state.event_log.log(
-                        round=self._state.round,
-                        event_type="auto_transition",
-                        payload={
-                            "case_id": case.id,
-                            "from": old_stage,
-                            "to": target_stage,
-                            "condition": condition,
-                        },
-                    )
 
     def _apply_round_end_effects(self) -> None:
         """Применить эффекты конца раунда."""
@@ -472,18 +450,14 @@ class Environment:
                     self._form_tribunal(case_id, case.owner_id)
 
         # Проверка кворума трибуналов
+        required_votes = self._scenario.governance.jury_size
         for case in self._state.cases.values():
             if (
-                case.case_type == "investigation"
-                and case.stage == "tribunal"
+                case.stage == "tribunal"
+                and case.closed_at is None
             ):
-                if check_condition(
-                    "quorum_reached",
-                    case,
-                    self._state.round,
-                    quorum_size=self._scenario.governance.jury_size,
-                ):
-                    apply_transition(case, "verdict")
+                if len(case.votes) >= required_votes:
+                    case.stage = "verdict"
                     guilty = sum(
                         1
                         for v in case.votes
@@ -552,8 +526,6 @@ class Environment:
             case_id: Идентификатор исходного дела.
             accused_id: Обвиняемый.
         """
-        from .cases import Case
-
         tribunal_id = self._state.new_case_id()
         tribunal = Case(
             id=tribunal_id,

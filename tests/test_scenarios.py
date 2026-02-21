@@ -29,6 +29,24 @@ class TestScenarios:
             assert len(cfg.agents) > 0
             assert len(cfg.needs) > 0
 
+    def test_s0_corruption_level(self):
+        cfg = get_scenario(ScenarioId.S0)
+        assert cfg.corruption_level == 0.0
+
+    def test_s1_corruption_level(self):
+        cfg = get_scenario(ScenarioId.S1)
+        assert cfg.corruption_level == 0.5
+
+    def test_s2_corruption_level(self):
+        cfg = get_scenario(ScenarioId.S2)
+        assert cfg.corruption_level == 0.7
+
+    def test_all_scenarios_have_narrative_context(self):
+        for sid in [ScenarioId.S0, ScenarioId.S1, ScenarioId.S2]:
+            cfg = get_scenario(sid)
+            assert cfg.narrative_context != ""
+            assert isinstance(cfg.narrative_context, str)
+
 
 class TestGovernanceAgents:
     def test_g0_no_extra_agents(self):

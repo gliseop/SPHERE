@@ -4,12 +4,10 @@ resolve_case, file_report, cast_vote."""
 from __future__ import annotations
 
 from ..cases import (
-    CASE_REGISTRY,
     Case,
     Note,
     Proposal,
     Vote,
-    apply_transition,
 )
 from ..state import Complaint
 from . import get_caller_id, get_state
@@ -24,7 +22,7 @@ def open_case(
     """Открыть новое дело.
 
     Args:
-        case_type: Тип дела (procurement, hiring, budget).
+        case_type: Тип дела (произвольная строка).
         title: Краткое название.
         description: Описание и требования.
         params: Дополнительные параметры.
@@ -35,10 +33,6 @@ def open_case(
     state = get_state()
     caller_id = get_caller_id()
 
-    schema = CASE_REGISTRY.get(case_type)
-    if schema is None:
-        return f"Ошибка: неизвестный тип дела «{case_type}»."
-
     if not state.has_capability(caller_id, "open_case", case_type):
         return (
             f"Ошибка: у вас нет полномочий открывать дела "
@@ -46,7 +40,6 @@ def open_case(
         )
 
     case_id = state.new_case_id()
-    deadline = state.round + 3 if case_type == "procurement" else None
 
     case = Case(
         id=case_id,
@@ -54,16 +47,10 @@ def open_case(
         title=title,
         description=description,
         owner_id=caller_id,
-        stage=schema.initial_stage,
+        stage="open",
         params=params,
         created_at=state.round,
-        deadline_round=deadline,
     )
-
-    # Авто-переходы
-    auto_target = schema.auto_transitions.get(case.stage)
-    if auto_target:
-        apply_transition(case, auto_target)
 
     state.cases[case_id] = case
 
@@ -108,11 +95,7 @@ def submit_proposal(case_id: str, content: str) -> str:
     if case is None:
         return f"Ошибка: дело {case_id} не найдено."
 
-    schema = CASE_REGISTRY.get(case.case_type)
-    if schema is None:
-        return "Ошибка: неизвестный тип дела."
-
-    if case.stage in schema.terminal_stages:
+    if case.closed_at is not None:
         return f"Ошибка: дело {case_id} уже закрыто."
 
     if not state.has_capability(
@@ -223,28 +206,18 @@ def resolve_case(
     if case.owner_id != caller_id:
         return "Ошибка: только владелец дела может принять решение."
 
-    schema = CASE_REGISTRY.get(case.case_type)
-    if schema is None:
-        return "Ошибка: неизвестный тип дела."
-
     if not state.has_capability(
         caller_id, "resolve_case", case.case_type
     ):
         return "Ошибка: у вас нет полномочий принимать решения."
 
-    act = schema.action_transitions.get(case.stage)
-    if not act or act[1] != "resolve_case":
-        return (
-            f"Ошибка: дело {case_id} не в стадии, "
-            f"допускающей решение (текущая: {case.stage})."
-        )
+    if case.closed_at is not None:
+        return f"Ошибка: дело {case_id} уже закрыто."
 
-    target_stage = act[0]
-    apply_transition(case, target_stage)
+    case.stage = "closed"
     case.decision = decision
     case.justification = justification
-    is_terminal = target_stage in schema.terminal_stages
-    case.closed_at = state.round if is_terminal else None
+    case.closed_at = state.round
 
     state.event_log.log(
         round=state.round,
@@ -256,12 +229,7 @@ def resolve_case(
         },
     )
 
-    if is_terminal:
-        return f"Дело {case_id} закрыто. Решение: {decision}"
-    return (
-        f"Дело {case_id} переведено в стадию {target_stage}. "
-        f"Решение: {decision}"
-    )
+    return f"Дело {case_id} закрыто. Решение: {decision}"
 
 
 def file_report(
@@ -382,13 +350,10 @@ def cast_vote(case_id: str, verdict: str, reasoning: str) -> str:
     if not state.has_capability(caller_id, "vote", ""):
         return "Ошибка: у вас нет полномочий голосовать."
 
-    if (
-        case.case_type != "investigation"
-        or case.stage != "tribunal"
-    ):
+    if case.stage != "tribunal":
         return (
             "Ошибка: голосование доступно только для дела "
-            "типа investigation в стадии tribunal."
+            "в стадии tribunal."
         )
 
     already = any(v.voter_id == caller_id for v in case.votes)

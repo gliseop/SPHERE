@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from .cases import CASE_REGISTRY
 from .reputation import POSITION_THRESHOLDS, check_promotion
 from .state import WorldState
 
@@ -97,20 +96,17 @@ def build_situation(agent_id: str, state: WorldState) -> str:
     if cases:
         parts.append("Текущие дела:")
         for case in cases:
-            schema = CASE_REGISTRY.get(case.case_type)
-            terminal = (
-                schema and case.stage in schema.terminal_stages
-            )
+            closed = case.closed_at is not None
             status_str = (
-                "закрыто" if terminal else f"стадия «{case.stage}»"
+                "закрыто" if closed else f"стадия «{case.stage}»"
             )
             line = (
                 f"  #{case.id} ({case.case_type}, "
                 f"{case.title}): {status_str}"
             )
-            if case.proposals and not terminal:
+            if case.proposals and not closed:
                 line += f", предложений: {len(case.proposals)}"
-            if case.deadline_round and not terminal:
+            if case.deadline_round and not closed:
                 line += f", дедлайн: раунд {case.deadline_round}"
             parts.append(line)
 
@@ -277,7 +273,7 @@ def _build_juror_section(
 
     # Дела трибунала, где нужно голосовать
     for case in state.cases.values():
-        if case.case_type == "investigation" and case.stage == "tribunal":
+        if case.stage == "tribunal" and case.closed_at is None:
             already = any(
                 v.voter_id == agent_id for v in case.votes
             )

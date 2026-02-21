@@ -38,9 +38,10 @@ class TestConfig:
         assert cap.action == "open_case"
         assert "procurement" in cap.case_types
 
-    def test_capability_extra_forbid(self):
-        with pytest.raises(ValidationError):
-            Capability(action="open_case", unknown_field="x")
+    def test_capability_extra_ignored(self):
+        cap = Capability(action="open_case", unknown_field="x")
+        assert cap.action == "open_case"
+        assert not hasattr(cap, "unknown_field")
 
     def test_connection(self):
         conn = Connection(
@@ -60,11 +61,12 @@ class TestConfig:
         assert profile.id == "off_1"
         assert profile.immune is False
 
-    def test_agent_profile_extra_forbid(self):
-        with pytest.raises(ValidationError):
-            AgentProfile(
-                id="x", name="x", position="x", extra_field="y"
-            )
+    def test_agent_profile_extra_ignored(self):
+        profile = AgentProfile(
+            id="x", name="x", position="x", extra_field="y"
+        )
+        assert profile.id == "x"
+        assert not hasattr(profile, "extra_field")
 
     def test_scenario_config(self):
         cfg = ScenarioConfig(

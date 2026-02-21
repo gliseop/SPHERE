@@ -11,7 +11,7 @@ from .personality import AgentPersonality
 class Capability(BaseModel):
     """Полномочие агента: действие и типы дел, к которым оно применимо."""
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
 
     action: str
     case_types: list[str] = Field(default_factory=list)
@@ -20,7 +20,7 @@ class Capability(BaseModel):
 class Connection(BaseModel):
     """Связь агента с другим участником."""
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
 
     target_id: str
     name: str
@@ -31,7 +31,7 @@ class Connection(BaseModel):
 class ResourcePool(BaseModel):
     """Начальные ресурсы агента."""
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
 
     budget_limit: float = 0.0
     staffing_slots: int = 0
@@ -41,7 +41,7 @@ class ResourcePool(BaseModel):
 class AgentProfile(BaseModel):
     """Профиль агента для конфигурации сценария."""
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
 
     id: str
     name: str
@@ -60,9 +60,9 @@ class AgentProfile(BaseModel):
 class Need(BaseModel):
     """Потребность организации, возникающая в определённый раунд."""
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
 
-    case_type: str
+    case_type: str = ""
     description: str
     target_agent_id: str
     appear_round: int
@@ -72,7 +72,7 @@ class Need(BaseModel):
 class GovernanceConfig(BaseModel):
     """Параметры режима управления."""
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
 
     mode: GovernanceMode = GovernanceMode.G0
     jury_size: int = 3
@@ -87,7 +87,7 @@ class GovernanceConfig(BaseModel):
 class ScenarioConfig(BaseModel):
     """Полная конфигурация сценария симуляции."""
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}
 
     id: ScenarioId
     title: str
@@ -97,3 +97,5 @@ class ScenarioConfig(BaseModel):
     agents: list[AgentProfile] = Field(default_factory=list)
     needs: list[Need] = Field(default_factory=list)
     governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
+    corruption_level: float = Field(default=0.0, ge=0.0, le=1.0)
+    narrative_context: str = ""

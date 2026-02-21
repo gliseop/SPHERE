@@ -305,44 +305,40 @@ class MockAgentRunner:
 
         # Принятие решений по своим делам
         for case in state.get_agent_cases(agent_id):
-            from .cases import CASE_REGISTRY
-            schema = CASE_REGISTRY.get(case.case_type)
-            if schema is None:
+            if case.closed_at is not None:
                 continue
-            act = schema.action_transitions.get(case.stage)
-            if act and act[1] == "resolve_case":
-                if case.proposals:
-                    if profile.honesty < 0.4 and profile.greed > 0.6:
-                        # Нечестный — выбирает «своего»
-                        conns = {
-                            c.target_id for c in profile.connections
-                        }
-                        for prop in case.proposals:
-                            if prop.author_id in conns:
-                                decision = (
-                                    f"Выбрано предложение {prop.id} "
-                                    f"от {prop.author_id}"
-                                )
-                                break
-                        else:
+            if case.proposals:
+                if profile.honesty < 0.4 and profile.greed > 0.6:
+                    # Нечестный -- выбирает «своего»
+                    conns = {
+                        c.target_id for c in profile.connections
+                    }
+                    for prop in case.proposals:
+                        if prop.author_id in conns:
                             decision = (
-                                f"Выбрано предложение "
-                                f"{case.proposals[0].id}"
+                                f"Выбрано предложение {prop.id} "
+                                f"от {prop.author_id}"
                             )
+                            break
                     else:
                         decision = (
                             f"Выбрано предложение "
                             f"{case.proposals[0].id}"
                         )
-                    actions.append({
-                        "tool": "resolve_case",
-                        "args": {
-                            "case_id": case.id,
-                            "decision": decision,
-                            "justification": "Решение принято "
-                            "на основании анализа предложений.",
-                        },
-                    })
+                else:
+                    decision = (
+                        f"Выбрано предложение "
+                        f"{case.proposals[0].id}"
+                    )
+                actions.append({
+                    "tool": "resolve_case",
+                    "args": {
+                        "case_id": case.id,
+                        "decision": decision,
+                        "justification": "Решение принято "
+                        "на основании анализа предложений.",
+                    },
+                })
 
         # Аудитор: проверка закрытых дел
         if state.has_capability(agent_id, "audit", ""):

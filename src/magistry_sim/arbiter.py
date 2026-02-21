@@ -121,6 +121,7 @@ class Arbiter:
         justification: str,
         state: WorldState,
         round_num: int,
+        org_description: str = "",
     ) -> ArbiterVerdict:
         """Оценить действие агента.
 
@@ -136,6 +137,7 @@ class Arbiter:
             justification: Обоснование.
             state: Состояние мира.
             round_num: Номер раунда.
+            org_description: Описание организации для контекста.
 
         Returns:
             Вердикт арбитра.
@@ -159,9 +161,16 @@ class Arbiter:
             f"Ключевое слово для поиска: perform_action"
         )
 
+        org_block = (
+            f"\nОписание организации: {org_description}\n"
+            if org_description
+            else ""
+        )
+        system = WORLD_RULES + org_block
+
         try:
             resp = self._llm.generate_structured(
-                system=WORLD_RULES,
+                system=system,
                 user=user_prompt,
                 schema=ARBITER_RESPONSE_SCHEMA,
             )

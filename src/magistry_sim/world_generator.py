@@ -88,6 +88,7 @@ class WorldGenerator:
         state: "WorldState",
         round_num: int,
         round_events: list[dict[str, Any]],
+        org_context: str = "",
     ) -> WorldGenResult:
         """Сгенерировать события среды по итогам раунда.
 
@@ -99,6 +100,7 @@ class WorldGenerator:
             state: Состояние мира.
             round_num: Номер раунда.
             round_events: События, произошедшие в этом раунде.
+            org_context: Описание организации для контекста генерации.
 
         Returns:
             Результат генерации с операциями и нарративом.
@@ -132,9 +134,16 @@ class WorldGenerator:
             f"Какие мировые события произойдут? Ключевое слово: generate_events"
         )
 
+        ctx_block = (
+            f"\nКонтекст организации: {org_context}\n"
+            if org_context
+            else ""
+        )
+        system_prompt = WORLD_GEN_SYSTEM + ctx_block
+
         try:
             resp = self._llm.generate_structured(
-                system=WORLD_GEN_SYSTEM,
+                system=system_prompt,
                 user=user_prompt,
                 schema=WORLD_GEN_SCHEMA,
             )

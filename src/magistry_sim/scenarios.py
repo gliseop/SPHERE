@@ -23,6 +23,11 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
         ),
         max_rounds=15,
         seed=42,
+        corruption_level=0.0,
+        narrative_context=(
+            "Государственное учреждение с прозрачными закупочными "
+            "процедурами и строгим внутренним контролем."
+        ),
         agents=[
             AgentProfile(
                 id="off_1",
@@ -31,11 +36,11 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
                 capabilities=[
                     Capability(
                         action="open_case",
-                        case_types=["procurement"],
+                        case_types=[],
                     ),
                     Capability(
                         action="resolve_case",
-                        case_types=["procurement"],
+                        case_types=[],
                     ),
                 ],
                 greed=0.2,
@@ -53,7 +58,7 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
                 capabilities=[
                     Capability(
                         action="submit_proposal",
-                        case_types=["procurement"],
+                        case_types=[],
                     ),
                 ],
                 greed=0.3,
@@ -71,7 +76,7 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
                 capabilities=[
                     Capability(
                         action="submit_proposal",
-                        case_types=["procurement"],
+                        case_types=[],
                     ),
                 ],
                 greed=0.3,
@@ -103,6 +108,11 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
         ),
         max_rounds=25,
         seed=42,
+        corruption_level=0.5,
+        narrative_context=(
+            "Муниципальное предприятие с ослабленным контролем "
+            "и неформальными связями между участниками закупок."
+        ),
         agents=[
             AgentProfile(
                 id="off_1",
@@ -111,11 +121,11 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
                 capabilities=[
                     Capability(
                         action="open_case",
-                        case_types=["procurement"],
+                        case_types=[],
                     ),
                     Capability(
                         action="resolve_case",
-                        case_types=["procurement"],
+                        case_types=[],
                     ),
                 ],
                 greed=0.8,
@@ -141,7 +151,7 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
                 capabilities=[
                     Capability(
                         action="submit_proposal",
-                        case_types=["procurement"],
+                        case_types=[],
                     ),
                 ],
                 greed=0.8,
@@ -167,7 +177,7 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
                 capabilities=[
                     Capability(
                         action="submit_proposal",
-                        case_types=["procurement"],
+                        case_types=[],
                     ),
                 ],
                 greed=0.3,
@@ -199,6 +209,11 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
         ),
         max_rounds=25,
         seed=42,
+        corruption_level=0.7,
+        narrative_context=(
+            "Государственное ведомство с устоявшимися клановыми "
+            "связями и практикой устройства родственников на должности."
+        ),
         agents=[
             AgentProfile(
                 id="off_1",
@@ -207,11 +222,11 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
                 capabilities=[
                     Capability(
                         action="open_case",
-                        case_types=["hiring"],
+                        case_types=[],
                     ),
                     Capability(
                         action="resolve_case",
-                        case_types=["hiring"],
+                        case_types=[],
                     ),
                 ],
                 greed=0.6,
@@ -260,7 +275,7 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
                 capabilities=[
                     Capability(
                         action="submit_proposal",
-                        case_types=["hiring"],
+                        case_types=[],
                     ),
                 ],
                 greed=0.3,
@@ -283,7 +298,7 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
                 capabilities=[
                     Capability(
                         action="submit_proposal",
-                        case_types=["hiring"],
+                        case_types=[],
                     ),
                 ],
                 greed=0.2,
