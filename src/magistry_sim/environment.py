@@ -235,7 +235,7 @@ class Environment:
         Args:
             round_num: Номер раунда.
         """
-        if self._world_generator is not None:
+        if self._world_generator is not None and round_num > 0:
             return
 
         for need in self._scenario.needs:
@@ -274,7 +274,7 @@ class Environment:
             )
 
             if self._arbiter is not None:
-                for action in actions:
+                for action in actions[:5]:
                     tool_name = action.get("tool", "")
                     args = action.get("args", {})
 

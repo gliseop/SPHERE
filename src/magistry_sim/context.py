@@ -296,7 +296,7 @@ def _build_juror_section(
                             f"{event.payload.get('assessment', '')}"
                         )
                 parts.append(
-                    "  Используйте cast_vote для голосования."
+                    "  Проголосуйте по этому делу."
                 )
 
     return parts

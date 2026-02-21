@@ -89,11 +89,13 @@ class Arbiter:
                         f"  Предложение: {p.author_id}: {p.content[:80]}"
                     )
 
+        seen: set[tuple[str, str]] = set()
         conns: list[tuple[str, str]] = []
         for aid in state.agents:
             for conn in state.graph.get_connections(aid):
                 pair = tuple(sorted([aid, conn["agent_id"]]))
-                if pair not in conns:
+                if pair not in seen:
+                    seen.add(pair)
                     conns.append(pair)
         if conns:
             parts.append("\n## Социальный граф")

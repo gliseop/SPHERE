@@ -403,8 +403,11 @@ def apply_state_op(
         case = state.cases.get(op.case_id)
         if case is None:
             return OpResult(False, f"Дело {op.case_id} не найдено")
+        _MODIFIABLE_CASE_FIELDS = {
+            "title", "description", "params", "deadline_round", "owner_id",
+        }
         for key, value in op.changes.items():
-            if hasattr(case, key) and key not in ("id", "case_type"):
+            if key in _MODIFIABLE_CASE_FIELDS:
                 setattr(case, key, value)
         state.event_log.log(
             round=round_num,
