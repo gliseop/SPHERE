@@ -296,11 +296,56 @@ _OP_REGISTRY: dict[str, type[StateOp]] = {
 }
 
 
+def _normalize_raw_op(item: dict[str, Any]) -> dict[str, Any]:
+    """Нормализовать сырую операцию перед валидацией.
+
+    LLM-модели часто возвращают поля в нестандартном формате:
+    - Пробелы в именах ключей
+    - create_case: параметры на верхнем уровне вместо вложенного params
+    - add_evidence: visible_to как строка вместо списка
+    - create_need: отсутствующий target_agent_id
+
+    Args:
+        item: Сырой словарь операции от арбитра.
+
+    Returns:
+        Нормализованный словарь.
+    """
+    # Убрать пробелы в ключах
+    item = {k.strip(): v for k, v in item.items()}
+    op_name = item.get("op", "")
+
+    # create_case: собрать top-level поля в params
+    if op_name == "create_case" and "params" not in item:
+        params_keys = {"case_type", "title", "description", "owner_id"}
+        params = {}
+        for k in list(item.keys()):
+            if k in params_keys:
+                params[k] = item.pop(k)
+        if params:
+            item["params"] = params
+
+    # add_evidence: visible_to строка → список
+    if op_name == "add_evidence" and isinstance(
+        item.get("visible_to"), str
+    ):
+        val = item["visible_to"]
+        item["visible_to"] = [val] if val else []
+
+    # create_need: default target_agent_id
+    if op_name == "create_need" and "target_agent_id" not in item:
+        item["target_agent_id"] = item.get("agent_id", "unknown")
+
+    return item
+
+
 def parse_state_ops(raw_ops: list[Any]) -> list[StateOp]:
     """Распарсить список сырых операций от арбитра.
 
     Некорректные и неизвестные операции пропускаются
-    с предупреждением в лог.
+    с предупреждением в лог. Перед валидацией каждая операция
+    проходит нормализацию для устранения типичных расхождений
+    в формате LLM-ответов.
 
     Args:
         raw_ops: Список словарей от LLM-арбитра.
@@ -314,12 +359,15 @@ def parse_state_ops(raw_ops: list[Any]) -> list[StateOp]:
             logger.warning("Пропуск не-словаря в state_changes: %s", item)
             continue
         op_name = item.get("op", "")
+        if not op_name:
+            continue
         op_cls = _OP_REGISTRY.get(op_name)
         if op_cls is None:
             logger.warning("Неизвестная операция: %s", op_name)
             continue
         try:
-            op = op_cls.model_validate(item)
+            normalized = _normalize_raw_op(item)
+            op = op_cls.model_validate(normalized)
             result.append(op)
         except Exception as exc:
             logger.warning(

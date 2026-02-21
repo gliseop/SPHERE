@@ -78,6 +78,29 @@ parser.add_argument(
     help="Модель арбитра (дешёвая)",
 )
 parser.add_argument(
+    "--max-rounds",
+    type=int,
+    default=None,
+    help="Ограничить количество раундов (для тестов)",
+)
+parser.add_argument(
+    "--agent-provider",
+    nargs="+",
+    default=None,
+    help="Провайдеры OpenRouter для агентов (например: DeepInfra Groq)",
+)
+parser.add_argument(
+    "--arbiter-provider",
+    nargs="+",
+    default=None,
+    help="Провайдеры OpenRouter для арбитра (например: Groq Cerebras)",
+)
+parser.add_argument(
+    "--tool-calls",
+    action="store_true",
+    help="Использовать function calling вместо json_schema (быстрее)",
+)
+parser.add_argument(
     "--verbose",
     action="store_true",
     help="Подробный вывод",
@@ -92,6 +115,7 @@ def run_single(
     embedder,
     seed: int = 42,
     verbose: bool = False,
+    max_rounds: int | None = None,
 ) -> dict:
     """Выполнить один прогон и вернуть результаты.
 
@@ -107,11 +131,16 @@ def run_single(
         embedder: Провайдер эмбеддингов.
         seed: Зерно генератора случайных чисел.
         verbose: Подробный вывод.
+        max_rounds: Ограничение числа раундов (None = из сценария).
 
     Returns:
         Словарь с результатами и метриками прогона.
     """
     scenario = get_scenario(scenario_id)
+    if max_rounds is not None:
+        scenario = scenario.model_copy(
+            update={"max_rounds": max_rounds}
+        )
 
     # Трассировка
     tracer = LLMTracer()
@@ -317,6 +346,7 @@ def main():
         api_key=os.getenv("OPENAI_API_KEY"),
         base_url=os.getenv("OPENAI_BASE_URL"),
         cache_path=".llm_cache.db",
+        provider_order=args.agent_provider,
     )
 
     arbiter_llm = create_provider(
@@ -326,6 +356,8 @@ def main():
         api_key=os.getenv("OPENAI_API_KEY"),
         base_url=os.getenv("OPENAI_BASE_URL"),
         cache_path=".llm_cache.db",
+        provider_order=args.arbiter_provider,
+        use_tool_calls=args.tool_calls,
     )
 
     embedder = create_embedding_provider(
@@ -354,6 +386,7 @@ def main():
                         sid, gov,
                         agent_llm, arbiter_llm, embedder,
                         seed, args.verbose,
+                        max_rounds=args.max_rounds,
                     )
                     all_results.append(result)
                     console.print(

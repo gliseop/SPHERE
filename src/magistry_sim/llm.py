@@ -29,6 +29,43 @@ def _strip_think_tags(text: str) -> str:
     return cleaned.strip()
 
 
+def _extract_json(text: str) -> str:
+    """Извлечь JSON из текста, который может содержать markdown-обёртку.
+
+    Модели иногда оборачивают JSON в блоки ```json ... ``` или
+    добавляют текст до/после. Функция пытается найти и извлечь
+    первый валидный JSON-объект из текста.
+
+    Args:
+        text: Текст, потенциально содержащий JSON.
+
+    Returns:
+        Извлечённый JSON-текст.
+    """
+    # Убрать markdown-блоки
+    md_match = re.search(
+        r"```(?:json)?\s*\n?(.*?)```", text, re.DOTALL
+    )
+    if md_match:
+        return md_match.group(1).strip()
+
+    # Найти первый { ... } блок
+    start = text.find("{")
+    if start == -1:
+        return text
+    depth = 0
+    end = start
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    return text[start:end]
+
+
 @dataclass
 class LLMResponse:
     """Ответ от LLM-провайдера."""
@@ -430,7 +467,14 @@ class MockLLMProvider:
 
 
 class OpenAICompatibleProvider:
-    """Провайдер, совместимый с OpenAI API."""
+    """Провайдер, совместимый с OpenAI API.
+
+    Attributes:
+        _client: Клиент OpenAI API.
+        _model: Имя модели.
+        _cache: Кеш ответов (опционально).
+        _extra_body: Дополнительные параметры запроса (например, provider).
+    """
 
     def __init__(
         self,
@@ -438,6 +482,8 @@ class OpenAICompatibleProvider:
         api_key: str | None = None,
         base_url: str | None = None,
         cache_path: str | None = None,
+        provider_order: list[str] | None = None,
+        use_tool_calls: bool = False,
     ) -> None:
         try:
             from openai import OpenAI
@@ -447,7 +493,7 @@ class OpenAICompatibleProvider:
                 "pip install magistry-sim[llm]"
             ) from exc
 
-        kwargs: dict = {}
+        kwargs: dict = {"timeout": 120.0}
         if api_key:
             kwargs["api_key"] = api_key
         if base_url:
@@ -455,6 +501,15 @@ class OpenAICompatibleProvider:
         self._client = OpenAI(**kwargs)
         self._model = model
         self._cache = LLMCache(cache_path) if cache_path else None
+        self._use_tool_calls = use_tool_calls
+        self._extra_body: dict | None = None
+        if provider_order:
+            self._extra_body = {
+                "provider": {
+                    "order": provider_order,
+                    "allow_fallbacks": True,
+                }
+            }
 
     def generate(
         self,
@@ -481,14 +536,18 @@ class OpenAICompatibleProvider:
         # Значение 0.0 заменяется на минимальное положительное.
         safe_temperature = max(temperature, 0.01)
 
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
+        create_kwargs: dict = {
+            "model": self._model,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=safe_temperature,
-        )
+            "temperature": safe_temperature,
+        }
+        if self._extra_body:
+            create_kwargs["extra_body"] = self._extra_body
+
+        response = self._client.chat.completions.create(**create_kwargs)
 
         raw_text = response.choices[0].message.content or ""
         text = _strip_think_tags(raw_text)
@@ -513,8 +572,9 @@ class OpenAICompatibleProvider:
     ) -> StructuredLLMResponse:
         """Сгенерировать structured-ответ через OpenAI API.
 
-        Использует response_format с json_schema для получения
-        гарантированного JSON-ответа по указанной схеме.
+        Поддерживает два режима: json_schema (response_format)
+        и tool_calls (function calling). Режим tool_calls часто
+        работает быстрее на провайдерах с высоким throughput.
 
         Args:
             system: Системный промпт.
@@ -525,16 +585,32 @@ class OpenAICompatibleProvider:
         Returns:
             Structured-ответ LLM.
         """
+        if self._use_tool_calls:
+            return self._structured_via_tool_call(
+                system, user, schema, temperature
+            )
+        return self._structured_via_json_schema(
+            system, user, schema, temperature
+        )
+
+    def _structured_via_json_schema(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float,
+    ) -> StructuredLLMResponse:
+        """Structured output через response_format json_schema."""
         safe_temperature = max(temperature, 0.01)
 
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
+        create_kwargs: dict = {
+            "model": self._model,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            temperature=safe_temperature,
-            response_format={
+            "temperature": safe_temperature,
+            "response_format": {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "structured_response",
@@ -542,11 +618,80 @@ class OpenAICompatibleProvider:
                     "schema": schema,
                 },
             },
-        )
+        }
+        if self._extra_body:
+            create_kwargs["extra_body"] = self._extra_body
+
+        response = self._client.chat.completions.create(**create_kwargs)
 
         raw_text = response.choices[0].message.content or "{}"
         text = _strip_think_tags(raw_text)
-        data = json.loads(text)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            extracted = _extract_json(text)
+            data = json.loads(extracted)
+        usage = {}
+        if response.usage:
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+            }
+
+        return StructuredLLMResponse(
+            data=data, model=self._model, usage=usage
+        )
+
+    def _structured_via_tool_call(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float,
+    ) -> StructuredLLMResponse:
+        """Structured output через function calling (tool use)."""
+        safe_temperature = max(temperature, 0.01)
+
+        create_kwargs: dict = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": safe_temperature,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "structured_response",
+                        "description": "Return structured response",
+                        "parameters": schema,
+                    },
+                }
+            ],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "structured_response"},
+            },
+        }
+        if self._extra_body:
+            create_kwargs["extra_body"] = self._extra_body
+
+        response = self._client.chat.completions.create(**create_kwargs)
+
+        msg = response.choices[0].message
+        raw_args = ""
+        if msg.tool_calls and msg.tool_calls[0].function.arguments:
+            raw_args = msg.tool_calls[0].function.arguments
+        elif msg.content:
+            raw_args = msg.content
+
+        text = _strip_think_tags(raw_args) if raw_args else "{}"
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            extracted = _extract_json(text)
+            data = json.loads(extracted)
         usage = {}
         if response.usage:
             usage = {
@@ -565,6 +710,8 @@ def create_provider(
     api_key: str | None = None,
     base_url: str | None = None,
     cache_path: str | None = None,
+    provider_order: list[str] | None = None,
+    use_tool_calls: bool = False,
 ) -> LLMProvider:
     """Фабрика LLM-провайдеров.
 
@@ -577,6 +724,10 @@ def create_provider(
         api_key: API-ключ (по умолчанию из OPENAI_API_KEY).
         base_url: Базовый URL (по умолчанию из OPENAI_BASE_URL).
         cache_path: Путь к кешу.
+        provider_order: Приоритет провайдеров OpenRouter
+            (например, ["DeepInfra", "Groq"]).
+        use_tool_calls: Использовать function calling вместо
+            json_schema для structured output.
 
     Returns:
         Экземпляр провайдера.
@@ -595,6 +746,8 @@ def create_provider(
         api_key=resolved_key,
         base_url=resolved_url,
         cache_path=cache_path,
+        provider_order=provider_order,
+        use_tool_calls=use_tool_calls,
     )
 
 
