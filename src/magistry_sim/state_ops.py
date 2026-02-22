@@ -422,6 +422,16 @@ def apply_state_op(
             agent_id=agent_id,
             payload={"case_id": case_id, "case_type": case_type},
         )
+        # Удалить удовлетворённую потребность (аналогично tools.actions.open_case)
+        owner_id = op.params.get("owner_id", agent_id)
+        state.active_needs = [
+            n
+            for n in state.active_needs
+            if not (
+                n.target_agent_id == owner_id
+                and n.case_type == case_type
+            )
+        ]
         return OpResult(True, f"Дело {case_id} создано")
 
     if isinstance(op, CloseCaseOp):
@@ -445,6 +455,7 @@ def apply_state_op(
             return OpResult(False, f"Дело {op.case_id} не найдено")
         _MODIFIABLE_CASE_FIELDS = {
             "title", "description", "params", "deadline_round", "owner_id",
+            "stage",
         }
         for key, value in op.changes.items():
             if key in _MODIFIABLE_CASE_FIELDS:

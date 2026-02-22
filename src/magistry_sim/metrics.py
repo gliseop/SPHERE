@@ -433,6 +433,8 @@ def corruption_rate(result: SimulationResult) -> float:
     for case_id, case in result.cases.items():
         if case.get("closed_at") is None:
             continue
+        if case.get("case_type") == "investigation":
+            continue
         closed.append(case)
 
     if not closed:
