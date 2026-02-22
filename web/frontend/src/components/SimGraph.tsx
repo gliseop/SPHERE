@@ -20,6 +20,8 @@ function nodeColor(id: string): string {
 }
 
 function edgeColor(strength: number, isPrivate: boolean): string {
+  // Подозрительные связи (strength >= 3.0) перекрывают приватность:
+  // исследователь должен сразу видеть риск, независимо от типа канала.
   if (strength >= SUSPICIOUS_THRESHOLD) return '#ef4444'
   if (isPrivate) return '#a78bfa'
   return '#94a3b8'
@@ -126,6 +128,7 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Pr
       }}
       linkColor={linkColor}
       linkWidth={linkWidth}
+      nodeCanvasObjectMode={() => 'replace'}
       linkDirectionalParticles={2}
       linkDirectionalParticleSpeed={0.004}
       onNodeClick={handleNodeClick}
