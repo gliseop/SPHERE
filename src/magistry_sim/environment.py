@@ -247,6 +247,29 @@ class Environment:
                 if not already:
                     self._state.active_needs.append(need)
 
+    def _update_tracing_context(self, agent_id: str) -> None:
+        """Обновить метаданные трассировки на обёртках LLM-провайдеров.
+
+        TracingLLMProvider хранит agent_id и round_num как публичные
+        атрибуты, предназначенные для обновления извне. Метод проверяет
+        наличие этих атрибутов через duck typing, чтобы не зависеть
+        от конкретного типа провайдера.
+
+        Args:
+            agent_id: Идентификатор текущего агента.
+        """
+        round_num = self._state.round
+        runner_llm = getattr(self._runner, "_llm", None)
+        if runner_llm is not None:
+            if hasattr(runner_llm, "agent_id"):
+                runner_llm.agent_id = agent_id
+            if hasattr(runner_llm, "round_num"):
+                runner_llm.round_num = round_num
+        if self._arbiter is not None:
+            arbiter_llm = getattr(self._arbiter, "_llm", None)
+            if arbiter_llm is not None and hasattr(arbiter_llm, "round_num"):
+                arbiter_llm.round_num = round_num
+
     def _run_agent_turn(self, agent_id: str) -> None:
         """Выполнить ход одного агента.
 
@@ -261,6 +284,8 @@ class Environment:
         token_agent = current_agent_id.set(agent_id)
         token_runner = current_runner.set(self._runner)
 
+        self._update_tracing_context(agent_id)
+
         try:
             situation = build_situation(agent_id, self._state)
 
@@ -273,7 +298,7 @@ class Environment:
             )
 
             if self._arbiter is not None:
-                for action in actions[:5]:
+                for action in actions:
                     tool_name = action.get("tool", "")
                     args = action.get("args", {})
 
@@ -295,24 +320,39 @@ class Environment:
                         )
 
                         if verdict.feasible:
+                            failed_ops: list[str] = []
                             for op in verdict.state_changes:
-                                apply_state_op(
+                                op_result = apply_state_op(
                                     op,
                                     self._state,
                                     self._state.round,
                                     agent_id,
                                 )
-                            self._state.event_log.log(
-                                round=self._state.round,
-                                event_type="arbiter_approved",
-                                agent_id=agent_id,
-                                payload={
-                                    "description": description,
-                                    "target": target,
-                                    "justification": justification,
-                                    "narrative": verdict.narrative,
-                                },
-                            )
+                                if not op_result.success:
+                                    failed_ops.append(op_result.message)
+                            if failed_ops:
+                                self._state.event_log.log(
+                                    round=self._state.round,
+                                    event_type="arbiter_op_failed",
+                                    agent_id=agent_id,
+                                    payload={
+                                        "description": description,
+                                        "target": target,
+                                        "errors": failed_ops,
+                                    },
+                                )
+                            else:
+                                self._state.event_log.log(
+                                    round=self._state.round,
+                                    event_type="arbiter_approved",
+                                    agent_id=agent_id,
+                                    payload={
+                                        "description": description,
+                                        "target": target,
+                                        "justification": justification,
+                                        "narrative": verdict.narrative,
+                                    },
+                                )
                         else:
                             self._state.event_log.log(
                                 round=self._state.round,
