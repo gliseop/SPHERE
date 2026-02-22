@@ -1,7 +1,8 @@
-import ForceGraph2D, { type NodeObject, type LinkObject } from 'react-force-graph-2d'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import * as d3 from 'd3'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
 import { SUSPICIOUS_THRESHOLD } from '../constants'
+import { NodeTooltip } from './NodeTooltip'
 
 interface Props {
   nodes: GraphNode[]
@@ -11,6 +12,18 @@ interface Props {
   selectedNode?: string | null
 }
 
+interface D3Node extends d3.SimulationNodeDatum {
+  id: string
+  reputation: number
+}
+
+interface D3Link extends d3.SimulationLinkDatum<D3Node> {
+  source: string | D3Node
+  target: string | D3Node
+  strength: number
+  isPrivate: boolean
+}
+
 function nodeColor(id: string): string {
   if (id.startsWith('off_')) return '#ef4444'
   if (id.startsWith('biz_')) return '#3b82f6'
@@ -18,155 +31,260 @@ function nodeColor(id: string): string {
   return '#6b7280'
 }
 
+function nodeRadius(reputation: number): number {
+  return Math.max(5, Math.min(14, reputation * 0.7))
+}
+
 function edgeColor(strength: number, isPrivate: boolean): string {
-  // Подозрительные связи (strength >= 3.0) перекрывают приватность:
-  // исследователь должен сразу видеть риск, независимо от типа канала.
   if (strength >= SUSPICIOUS_THRESHOLD) return '#ef4444'
   if (isPrivate) return '#a78bfa'
-  return '#94a3b8'
+  return '#d3d3d3'
+}
+
+function edgeWidth(strength: number): number {
+  return Math.min(5, 0.5 + strength * 0.4)
 }
 
 export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Props) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const graphRef = useRef<any>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
+  const svgRef = useRef<SVGSVGElement>(null)
+  const simRef = useRef<d3.Simulation<D3Node, D3Link> | null>(null)
+  const nodesRef = useRef<Map<string, D3Node>>(new Map())
+  const [tooltip, setTooltip] = useState<{ node: D3Node; x: number; y: number } | null>(null)
+  const selectedRef = useRef(selectedNode)
 
-  // Измеряем реальный размер контейнера через ResizeObserver,
-  // чтобы canvas не выходил за пределы блока при width/height=undefined
+  // Строим Set приватных рёбер из событий
+  const privateEdges = new Set<string>()
+  for (const e of events) {
+    if (e.event_type === 'message_sent' && e.payload.private) {
+      const from = e.agent_id
+      const to = e.payload.to_id as string
+      if (from && to) privateEdges.add([from, to].sort().join('|'))
+    }
+  }
+
+  // Синхронизируем ref selectedNode чтобы tick не захватывал устаревший closure
   useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const ro = new ResizeObserver((entries) => {
-      const { width, height } = entries[0].contentRect
-      setDimensions({ width, height })
+    selectedRef.current = selectedNode
+    if (!svgRef.current) return
+    const svg = d3.select(svgRef.current)
+    svg.selectAll<SVGCircleElement, D3Node>('circle.node')
+      .attr('stroke', (d) => d.id === selectedNode ? '#f97316' : 'none')
+      .attr('stroke-width', (d) => d.id === selectedNode ? 2.5 : 0)
+  }, [selectedNode])
+
+  // Инициализация D3 симуляции при монтировании
+  useEffect(() => {
+    const container = containerRef.current
+    const svgEl = svgRef.current
+    if (!container || !svgEl) return
+
+    const { width, height } = container.getBoundingClientRect()
+
+    const svg = d3.select(svgEl)
+      .attr('width', width)
+      .attr('height', height)
+
+    svg.append('g').attr('class', 'links-group')
+    svg.append('g').attr('class', 'nodes-group')
+    svg.append('g').attr('class', 'labels-group')
+
+    const zoom = d3.zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.2, 4])
+      .on('zoom', (event) => {
+        svg.select('g.links-group').attr('transform', event.transform)
+        svg.select('g.nodes-group').attr('transform', event.transform)
+        svg.select('g.labels-group').attr('transform', event.transform)
+      })
+    svg.call(zoom)
+
+    simRef.current = d3.forceSimulation<D3Node>()
+      .force('link', d3.forceLink<D3Node, D3Link>().id((d) => d.id).strength(0.08).distance(80))
+      .force('charge', d3.forceManyBody().strength(-180))
+      .force('center', d3.forceCenter(width / 2, height / 2))
+      .force('collision', d3.forceCollide().radius(20))
+      .alphaDecay(0.02)
+      .velocityDecay(0.3)
+
+    simRef.current.on('tick', () => {
+      const s = d3.select(svgRef.current)
+      s.selectAll<SVGLineElement, D3Link>('line.edge')
+        .attr('x1', (d) => (d.source as D3Node).x ?? 0)
+        .attr('y1', (d) => (d.source as D3Node).y ?? 0)
+        .attr('x2', (d) => (d.target as D3Node).x ?? 0)
+        .attr('y2', (d) => (d.target as D3Node).y ?? 0)
+
+      s.selectAll<SVGCircleElement, D3Node>('circle.node')
+        .attr('cx', (d) => d.x ?? 0)
+        .attr('cy', (d) => d.y ?? 0)
+
+      s.selectAll<SVGTextElement, D3Node>('text.node-label')
+        .attr('x', (d) => d.x ?? 0)
+        .attr('y', (d) => (d.y ?? 0) + nodeRadius(d.reputation) + 12)
     })
-    ro.observe(el)
-    return () => ro.disconnect()
+
+    const ro = new ResizeObserver(() => {
+      const { width: w, height: h } = container.getBoundingClientRect()
+      svg.attr('width', w).attr('height', h)
+      simRef.current?.force('center', d3.forceCenter(w / 2, h / 2))
+      simRef.current?.alpha(0.3).restart()
+    })
+    ro.observe(container)
+
+    return () => {
+      ro.disconnect()
+      simRef.current?.stop()
+      svg.selectAll('*').remove()
+    }
   }, [])
 
-  // Настраиваем d3-силы при монтировании: ограничиваем притяжение рёбер
-  // чтобы узлы с сильными связями не слипались в одну точку
+  // Обновление данных при изменении nodes/edges
   useEffect(() => {
-    if (!graphRef.current) return
-    graphRef.current.d3Force('link')?.strength(0.08)
-    graphRef.current.d3Force('charge')?.strength(-150)
-    graphRef.current.d3ReheatSimulation()
-  }, [])
-  const privateEdges = useMemo(() => {
-    const set = new Set<string>()
-    for (const e of events) {
-      if (e.event_type === 'message_sent' && e.payload.private) {
-        const from = e.agent_id
-        const to = e.payload.to_id as string
-        if (from && to) {
-          set.add([from, to].sort().join('|'))
-        }
+    const sim = simRef.current
+    const svgEl = svgRef.current
+    if (!sim || !svgEl) return
+
+    const svg = d3.select(svgEl)
+
+    const newNodesMap = new Map<string, D3Node>()
+    for (const n of nodes) {
+      const existing = nodesRef.current.get(n.id)
+      if (existing) {
+        existing.reputation = n.reputation
+        newNodesMap.set(n.id, existing)
+      } else {
+        newNodesMap.set(n.id, { id: n.id, reputation: n.reputation })
       }
     }
-    return set
-  }, [events])
+    nodesRef.current = newNodesMap
+    const d3Nodes = Array.from(newNodesMap.values())
 
-  const graphData = useMemo(() => ({
-    nodes: nodes.map((n) => ({
-      id: n.id,
-      reputation: n.reputation,
-    })),
-    links: edges.map((e) => {
-      const key = [e.source, e.target].sort().join('|')
-      return {
-        source: e.source,
-        target: e.target,
-        strength: e.strength,
-        isPrivate: privateEdges.has(key),
-      }
-    }),
-  }), [nodes, edges, privateEdges])
+    const d3Links: D3Link[] = edges.map((e) => ({
+      source: e.source,
+      target: e.target,
+      strength: e.strength,
+      isPrivate: privateEdges.has([e.source, e.target].sort().join('|')),
+    }))
 
-  const nodeCanvasObject = useCallback(
-    (node: NodeObject, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      const id = node.id as string
-      const reputation = (node as NodeObject & { reputation: number }).reputation ?? 10
-      const radius = Math.max(4, Math.min(12, reputation * 0.6))
-      const isSelected = id === selectedNode
+    // === РЁБРА ===
+    const linkGroup = svg.select('g.links-group')
+    const linkSel = linkGroup
+      .selectAll<SVGLineElement, D3Link>('line.edge')
+      .data(d3Links, (d) => `${String(d.source)}|${String(d.target)}`)
 
-      ctx.beginPath()
-      ctx.arc(node.x!, node.y!, radius, 0, 2 * Math.PI)
-      ctx.fillStyle = nodeColor(id)
-      ctx.fill()
+    linkSel.exit().remove()
 
-      if (isSelected) {
-        ctx.strokeStyle = '#fbbf24'
-        ctx.lineWidth = 2
-        ctx.stroke()
-      }
+    linkSel.enter()
+      .append('line')
+      .attr('class', 'edge')
+      .style('opacity', 0)
+      .transition().duration(400)
+      .style('opacity', 1)
 
-      const fontSize = Math.max(8, 10 / globalScale)
-      ctx.font = `${fontSize}px sans-serif`
-      ctx.fillStyle = '#e2e8f0'
-      ctx.textAlign = 'center'
-      ctx.fillText(id, node.x!, node.y! + radius + fontSize)
-    },
-    [selectedNode]
-  )
+    linkGroup
+      .selectAll<SVGLineElement, D3Link>('line.edge')
+      .attr('stroke', (d) => edgeColor(d.strength, d.isPrivate))
+      .attr('stroke-width', (d) => edgeWidth(d.strength))
+      .attr('stroke-opacity', 0.7)
 
-  const linkColor = useCallback(
-    (link: LinkObject) => {
-      const l = link as LinkObject & { strength: number; isPrivate: boolean }
-      return edgeColor(l.strength, l.isPrivate)
-    },
-    []
-  )
+    // === УЗЛЫ ===
+    const nodeGroup = svg.select('g.nodes-group')
+    const nodeSel = nodeGroup
+      .selectAll<SVGCircleElement, D3Node>('circle.node')
+      .data(d3Nodes, (d) => d.id)
 
-  const linkWidth = useCallback(
-    (link: LinkObject) => {
-      const l = link as LinkObject & { strength: number }
-      return Math.min(6, 0.5 + l.strength * 0.4)
-    },
-    []
-  )
+    nodeSel.exit().remove()
 
-  const handleNodeClick = useCallback(
-    (node: NodeObject) => {
-      onNodeClick?.(node.id as string)
-    },
-    [onNodeClick]
-  )
+    nodeSel.enter()
+      .append('circle')
+      .attr('class', 'node')
+      .attr('r', 0)
+      .attr('fill', (d) => nodeColor(d.id))
+      .attr('stroke', 'none')
+      .attr('stroke-width', 2.5)
+      .style('cursor', 'pointer')
+      .call(
+        d3.drag<SVGCircleElement, D3Node>()
+          .on('start', (event, d) => {
+            if (!event.active) sim.alphaTarget(0.3).restart()
+            d.fx = d.x; d.fy = d.y
+          })
+          .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y })
+          .on('end', (event, d) => {
+            if (!event.active) sim.alphaTarget(0)
+            d.fx = null; d.fy = null
+          })
+      )
+      .on('click', (_event, d) => { onNodeClick?.(d.id) })
+      .on('mouseenter', (event, d) => {
+        setTooltip({ node: d, x: event.clientX, y: event.clientY })
+      })
+      .on('mousemove', (event) => {
+        setTooltip((prev) => prev ? { ...prev, x: event.clientX, y: event.clientY } : null)
+      })
+      .on('mouseleave', () => setTooltip(null))
+      .transition().duration(350)
+      .attr('r', (d) => nodeRadius(d.reputation))
+
+    nodeGroup
+      .selectAll<SVGCircleElement, D3Node>('circle.node')
+      .attr('fill', (d) => nodeColor(d.id))
+      .attr('stroke', (d) => d.id === selectedRef.current ? '#f97316' : 'none')
+      .transition().duration(200)
+      .attr('r', (d) => nodeRadius(d.reputation))
+
+    // === ЛЕЙБЛЫ ===
+    const labelGroup = svg.select('g.labels-group')
+    const labelSel = labelGroup
+      .selectAll<SVGTextElement, D3Node>('text.node-label')
+      .data(d3Nodes, (d) => d.id)
+
+    labelSel.exit().remove()
+
+    labelSel.enter()
+      .append('text')
+      .attr('class', 'node-label')
+      .style('opacity', 0)
+      .transition().duration(400)
+      .style('opacity', 1)
+
+    labelGroup
+      .selectAll<SVGTextElement, D3Node>('text.node-label')
+      .text((d) => d.id)
+      .attr('text-anchor', 'middle')
+      .attr('font-family', "'JetBrains Mono', monospace")
+      .attr('font-size', '9px')
+      .attr('fill', '#666666')
+      .style('pointer-events', 'none')
+      .style('user-select', 'none')
+
+    sim.nodes(d3Nodes)
+    ;(sim.force('link') as d3.ForceLink<D3Node, D3Link>).links(d3Links)
+    sim.alpha(0.3).restart()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, edges, events])
 
   if (nodes.length === 0) {
     return (
-      <div ref={containerRef} className="flex-1 flex items-center justify-center text-slate-500 text-sm">
-        Данных нет. Выберите прогон или запустите live-мониторинг.
+      <div ref={containerRef} className="graph-container">
+        <div className="graph-empty">
+          <div className="graph-empty-icon">◈</div>
+          <div>Нет данных</div>
+          <div>Выберите прогон или запустите live-мониторинг</div>
+        </div>
       </div>
     )
   }
 
   return (
-    <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
-      {dimensions.width > 0 && (
-        <ForceGraph2D
-          graphData={graphData}
-          nodeCanvasObject={nodeCanvasObject}
-          nodePointerAreaPaint={(node, color, ctx) => {
-            ctx.beginPath()
-            ctx.arc(node.x!, node.y!, 12, 0, 2 * Math.PI)
-            ctx.fillStyle = color
-            ctx.fill()
-          }}
-          linkColor={linkColor}
-          linkWidth={linkWidth}
-          nodeCanvasObjectMode={() => 'replace'}
-          linkDirectionalParticles={2}
-          linkDirectionalParticleSpeed={0.004}
-          onNodeClick={handleNodeClick}
-          backgroundColor="#0f172a"
-          // Увеличиваем силу отталкивания чтобы узлы не слипались
-          // даже при очень сильных рёбрах (strength >> SUSPICIOUS_THRESHOLD)
-          ref={graphRef}
-          d3AlphaDecay={0.02}
-          d3VelocityDecay={0.3}
-          width={dimensions.width}
-          height={dimensions.height}
+    <div ref={containerRef} className="graph-container">
+      <svg ref={svgRef} style={{ width: '100%', height: '100%' }} />
+      {tooltip && (
+        <NodeTooltip
+          node={tooltip.node}
+          edges={edges}
+          x={tooltip.x}
+          y={tooltip.y}
         />
       )}
     </div>
