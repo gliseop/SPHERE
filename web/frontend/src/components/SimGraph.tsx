@@ -264,21 +264,18 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Pr
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, edges, events])
 
-  if (nodes.length === 0) {
-    return (
-      <div ref={containerRef} className="graph-container">
-        <div className="graph-empty">
+  // SVG рендерится всегда — иначе useEffect([], []) срабатывает когда svgRef=null
+  // и D3 никогда не инициализируется. Пустое состояние — оверлей поверх SVG.
+  return (
+    <div ref={containerRef} className="graph-container">
+      <svg ref={svgRef} style={{ width: '100%', height: '100%' }} />
+      {nodes.length === 0 && (
+        <div className="graph-empty" style={{ position: 'absolute', inset: 0 }}>
           <div className="graph-empty-icon">◈</div>
           <div>Нет данных</div>
           <div>Выберите прогон или запустите live-мониторинг</div>
         </div>
-      </div>
-    )
-  }
-
-  return (
-    <div ref={containerRef} className="graph-container">
-      <svg ref={svgRef} style={{ width: '100%', height: '100%' }} />
+      )}
       {tooltip && (
         <NodeTooltip
           node={tooltip.node}
