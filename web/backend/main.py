@@ -66,7 +66,7 @@ def _build_graph_state(events: list[dict]) -> dict:
             if aid not in agents:
                 agents[aid] = {"id": aid, "reputation": 10.0}
 
-        if e["event_type"] == "reputation_modified":
+        if e.get("event_type") == "reputation_modified":
             target = e["payload"].get("target", aid)
             delta = e["payload"].get("delta", 0.0)
             if target not in agents:
@@ -75,7 +75,7 @@ def _build_graph_state(events: list[dict]) -> dict:
                 agents[target]["reputation"] + delta, 2
             )
 
-        if e["event_type"] == "graph_updated":
+        if e.get("event_type") == "graph_updated":
             a = e["payload"].get("agent_a", "")
             b = e["payload"].get("agent_b", "")
             delta = e["payload"].get("delta", 0.1)
@@ -184,8 +184,8 @@ async def ws_playback(websocket: WebSocket, name: str, speed: float = 1.0) -> No
             events_so_far.append(event)
             await websocket.send_json({"type": "event", "data": event})
 
-            if event["round"] != current_round:
-                current_round = event["round"]
+            if event.get("round", current_round) != current_round:
+                current_round = event.get("round", current_round)
                 graph = _build_graph_state(events_so_far)
                 await websocket.send_json({"type": "graph_state", **graph})
 
@@ -227,10 +227,12 @@ async def ws_live(websocket: WebSocket) -> None:
                 meta = _parse_run_name(latest.name)
                 await websocket.send_json({"type": "meta", **meta})
 
-            async with aiofiles.open(watched_path, encoding="utf-8") as f:
+            # Открываем в бинарном режиме для точного отслеживания байтовой позиции
+            async with aiofiles.open(watched_path, "rb") as f:
                 await f.seek(file_pos)
-                new_lines = await f.read()
-                file_pos = await f.tell()
+                raw = await f.read()
+                file_pos += len(raw)
+            new_lines = raw.decode("utf-8", errors="replace")
 
             for line in new_lines.splitlines():
                 line = line.strip()
@@ -240,8 +242,8 @@ async def ws_live(websocket: WebSocket) -> None:
                 events_so_far.append(event)
                 await websocket.send_json({"type": "event", "data": event})
 
-                if event["round"] != current_round:
-                    current_round = event["round"]
+                if event.get("round", current_round) != current_round:
+                    current_round = event.get("round", current_round)
                     graph = _build_graph_state(events_so_far)
                     await websocket.send_json({"type": "graph_state", **graph})
 
