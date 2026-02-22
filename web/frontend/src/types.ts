@@ -24,7 +24,7 @@ export interface SimMeta {
 }
 
 export type WsMessage =
-  | { type: 'meta'; scenario: string; governance: string; seed: number | null }
+  | ({ type: 'meta' } & SimMeta)
   | { type: 'event'; data: SimEvent }
   | { type: 'graph_state'; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: 'done' }

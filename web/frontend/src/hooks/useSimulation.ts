@@ -44,7 +44,13 @@ export function useSimulation() {
     wsRef.current = ws
 
     ws.onmessage = (evt) => {
-      const msg: WsMessage = JSON.parse(evt.data)
+      let msg: WsMessage
+      try {
+        msg = JSON.parse(evt.data)
+      } catch {
+        setState((prev) => ({ ...prev, error: 'Invalid message from server' }))
+        return
+      }
       setState((prev) => {
         switch (msg.type) {
           case 'meta':
@@ -71,7 +77,9 @@ export function useSimulation() {
     }
 
     ws.onerror = () => setState((prev) => ({ ...prev, error: 'WebSocket error' }))
-    ws.onclose = () => setMode('idle')
+    ws.onclose = () => {
+      if (wsRef.current === ws) setMode('idle')
+    }
   }, [disconnect])
 
   const startPlayback = useCallback(
