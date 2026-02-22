@@ -101,6 +101,12 @@ def _build_graph_state(events: list[dict]) -> dict:
             b = e["payload"].get("agent_b", "")
             delta = e["payload"].get("delta", 0.1)
             if a and b:
+                # Гарантируем наличие обоих агентов в nodes,
+                # даже если они не эмитировали событий напрямую (например, arbiter)
+                if a not in agents:
+                    agents[a] = {"id": a, "reputation": 10.0}
+                if b not in agents:
+                    agents[b] = {"id": b, "reputation": 10.0}
                 key = tuple(sorted([a, b]))
                 edges[key] = round(edges.get(key, 0.0) + delta, 2)
 

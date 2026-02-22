@@ -1,5 +1,5 @@
 import ForceGraph2D, { type NodeObject, type LinkObject } from 'react-force-graph-2d'
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
 import { SUSPICIOUS_THRESHOLD } from '../constants'
 
@@ -27,6 +27,17 @@ function edgeColor(strength: number, isPrivate: boolean): string {
 }
 
 export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Props) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const graphRef = useRef<any>(null)
+
+  // Настраиваем d3-силы при монтировании: ограничиваем притяжение рёбер
+  // чтобы узлы с сильными связями не слипались в одну точку
+  useEffect(() => {
+    if (!graphRef.current) return
+    graphRef.current.d3Force('link')?.strength(0.08)
+    graphRef.current.d3Force('charge')?.strength(-150)
+    graphRef.current.d3ReheatSimulation()
+  }, [])
   const privateEdges = useMemo(() => {
     const set = new Set<string>()
     for (const e of events) {
@@ -132,6 +143,11 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Pr
       linkDirectionalParticleSpeed={0.004}
       onNodeClick={handleNodeClick}
       backgroundColor="#0f172a"
+      // Увеличиваем силу отталкивания чтобы узлы не слипались
+      // даже при очень сильных рёбрах (strength >> SUSPICIOUS_THRESHOLD)
+      ref={graphRef}
+      d3AlphaDecay={0.02}
+      d3VelocityDecay={0.3}
       width={undefined}
       height={undefined}
     />
