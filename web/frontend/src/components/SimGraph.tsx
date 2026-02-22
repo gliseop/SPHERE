@@ -1,5 +1,5 @@
 import ForceGraph2D, { type NodeObject, type LinkObject } from 'react-force-graph-2d'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
 import { SUSPICIOUS_THRESHOLD } from '../constants'
 
@@ -29,6 +29,21 @@ function edgeColor(strength: number, isPrivate: boolean): string {
 export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Props) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 })
+
+  // Измеряем реальный размер контейнера через ResizeObserver,
+  // чтобы canvas не выходил за пределы блока при width/height=undefined
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      const { width, height } = entries[0].contentRect
+      setDimensions({ width, height })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // Настраиваем d3-силы при монтировании: ограничиваем притяжение рёбер
   // чтобы узлы с сильными связями не слипались в одну точку
@@ -120,36 +135,40 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Pr
 
   if (nodes.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
+      <div ref={containerRef} className="flex-1 flex items-center justify-center text-slate-500 text-sm">
         Данных нет. Выберите прогон или запустите live-мониторинг.
       </div>
     )
   }
 
   return (
-    <ForceGraph2D
-      graphData={graphData}
-      nodeCanvasObject={nodeCanvasObject}
-      nodePointerAreaPaint={(node, color, ctx) => {
-        ctx.beginPath()
-        ctx.arc(node.x!, node.y!, 12, 0, 2 * Math.PI)
-        ctx.fillStyle = color
-        ctx.fill()
-      }}
-      linkColor={linkColor}
-      linkWidth={linkWidth}
-      nodeCanvasObjectMode={() => 'replace'}
-      linkDirectionalParticles={2}
-      linkDirectionalParticleSpeed={0.004}
-      onNodeClick={handleNodeClick}
-      backgroundColor="#0f172a"
-      // Увеличиваем силу отталкивания чтобы узлы не слипались
-      // даже при очень сильных рёбрах (strength >> SUSPICIOUS_THRESHOLD)
-      ref={graphRef}
-      d3AlphaDecay={0.02}
-      d3VelocityDecay={0.3}
-      width={undefined}
-      height={undefined}
-    />
+    <div ref={containerRef} style={{ width: '100%', height: '100%' }}>
+      {dimensions.width > 0 && (
+        <ForceGraph2D
+          graphData={graphData}
+          nodeCanvasObject={nodeCanvasObject}
+          nodePointerAreaPaint={(node, color, ctx) => {
+            ctx.beginPath()
+            ctx.arc(node.x!, node.y!, 12, 0, 2 * Math.PI)
+            ctx.fillStyle = color
+            ctx.fill()
+          }}
+          linkColor={linkColor}
+          linkWidth={linkWidth}
+          nodeCanvasObjectMode={() => 'replace'}
+          linkDirectionalParticles={2}
+          linkDirectionalParticleSpeed={0.004}
+          onNodeClick={handleNodeClick}
+          backgroundColor="#0f172a"
+          // Увеличиваем силу отталкивания чтобы узлы не слипались
+          // даже при очень сильных рёбрах (strength >> SUSPICIOUS_THRESHOLD)
+          ref={graphRef}
+          d3AlphaDecay={0.02}
+          d3VelocityDecay={0.3}
+          width={dimensions.width}
+          height={dimensions.height}
+        />
+      )}
+    </div>
   )
 }
