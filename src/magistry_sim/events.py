@@ -28,6 +28,15 @@ class EventLog:
 
     def __init__(self) -> None:
         self._events: list[Event] = []
+        self._stream_path: Path | None = None
+
+    def set_stream_path(self, path: Path) -> None:
+        """Установить путь для потоковой дозаписи событий.
+
+        Args:
+            path: Путь к файлу для дозаписи.
+        """
+        self._stream_path = path
 
     def log(
         self,
@@ -54,6 +63,9 @@ class EventLog:
             payload=payload or {},
         )
         self._events.append(event)
+        if self._stream_path is not None:
+            with open(self._stream_path, "a", encoding="utf-8") as f:
+                f.write(event.model_dump_json() + "\n")
         return event
 
     def get_events(

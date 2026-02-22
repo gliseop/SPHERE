@@ -175,6 +175,7 @@ def run_single(
         tracer=tracer,
     )
 
+    env.state.event_log.set_stream_path(events_path)
     start = time.time()
     result = env.run()
     elapsed = time.time() - start
