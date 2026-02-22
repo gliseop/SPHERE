@@ -20,32 +20,41 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode }: 
       .catch(console.error)
   }, [])
 
+  const isIdle = mode === 'idle'
+
   return (
-    <div className="p-2 space-y-3 text-sm">
-      <div>
-        <div className="text-slate-400 text-xs mb-1">Прогоны ({runs.length})</div>
-        <div className="space-y-0.5 max-h-64 overflow-y-auto">
-          {runs.map((r) => (
-            <button
-              key={r.name}
-              onClick={() => setSelected(r)}
-              className={`w-full text-left px-2 py-1 rounded text-xs font-mono truncate
-                ${selected?.name === r.name
-                  ? 'bg-blue-800 text-white'
-                  : 'text-slate-300 hover:bg-slate-800'
-                }`}
-            >
-              {r.scenario}/{r.governance}
-              {r.seed !== null ? `/seed${r.seed}` : ''}
-              <span className="text-slate-500 ml-1">({r.size_kb}KB)</span>
-            </button>
-          ))}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div style={{ padding: '0.5rem 0.875rem', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+        <div style={{ fontSize: '0.5625rem', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>
+          Прогоны ({runs.length})
         </div>
       </div>
 
-      <div>
-        <div className="text-slate-400 text-xs mb-1">
-          Скорость: {speed.toFixed(1)}x
+      <div className="run-list" style={{ flex: '0 0 auto' }}>
+        {runs.map((r) => (
+          <div
+            key={r.name}
+            className={`run-item ${selected?.name === r.name ? 'selected' : ''}`}
+            onClick={() => setSelected(r)}
+          >
+            <div className="run-item-name">
+              {r.scenario}/{r.governance}
+              {r.seed !== null ? `/s${r.seed}` : ''}
+            </div>
+            <div className="run-item-meta">{r.size_kb} KB</div>
+          </div>
+        ))}
+        {runs.length === 0 && (
+          <div style={{ padding: '0.75rem 0.875rem', fontSize: '0.5625rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+            Нет прогонов
+          </div>
+        )}
+      </div>
+
+      <div className="speed-slider-wrap">
+        <div className="speed-slider-label">
+          <span>Скорость</span>
+          <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{speed.toFixed(1)}x</span>
         </div>
         <input
           type="range"
@@ -54,31 +63,33 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode }: 
           step={0.5}
           value={speed}
           onChange={(e) => onSpeedChange(Number(e.target.value))}
-          className="w-full accent-blue-500"
         />
       </div>
 
-      <button
-        disabled={!selected || mode !== 'idle'}
-        onClick={() => selected && onPlayback(selected, speed)}
-        className="w-full py-1.5 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40
-                   text-white text-xs font-medium"
-      >
-        ▶ Воспроизвести
-      </button>
+      <div style={{ padding: '0.5rem 0.875rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', borderTop: '1px solid var(--border)' }}>
+        <button
+          className="btn-clipped primary full-width"
+          disabled={!selected || !isIdle}
+          onClick={() => selected && onPlayback(selected, speed)}
+        >
+          ▶ Воспроизвести
+        </button>
 
-      <button
-        disabled={mode !== 'idle'}
-        onClick={onLive}
-        className="w-full py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40
-                   text-white text-xs font-medium"
-      >
-        ● Live-мониторинг
-      </button>
+        <button
+          className="btn-clipped success full-width"
+          disabled={!isIdle}
+          onClick={onLive}
+        >
+          ● Live
+        </button>
+      </div>
 
-      {mode !== 'idle' && (
-        <div className="text-xs text-center text-emerald-400">
-          {mode === 'live' ? 'Live...' : 'Воспроизведение...'}
+      {!isIdle && (
+        <div style={{ padding: '0.375rem 0.875rem', borderTop: '1px solid var(--border)' }}>
+          <div className="mode-indicator">
+            <div className={`mode-dot ${mode}`} />
+            <span>{mode === 'live' ? 'Live-мониторинг' : 'Воспроизведение'}</span>
+          </div>
         </div>
       )}
     </div>

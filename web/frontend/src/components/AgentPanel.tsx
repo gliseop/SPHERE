@@ -8,76 +8,130 @@ interface Props {
   events: SimEvent[]
 }
 
+function roleLabel(id: string): string {
+  if (id.startsWith('off_')) return 'Чиновник'
+  if (id.startsWith('biz_')) return 'Подрядчик'
+  if (id.startsWith('aud_')) return 'Аудитор'
+  return 'Агент'
+}
+
+function roleBadgeClass(id: string): string {
+  if (id.startsWith('off_')) return 'badge danger'
+  if (id.startsWith('biz_')) return 'badge info'
+  if (id.startsWith('aud_')) return 'badge accent'
+  return 'badge'
+}
+
 export function AgentPanel({ nodeId, nodes, edges, events }: Props) {
   if (!nodeId) {
     return (
-      <div className="p-3 text-slate-500 text-sm">
-        Кликните на агента в графе
+      <div className="agent-panel-empty">
+        <div style={{ fontSize: '1.5rem', opacity: 0.3 }}>◈</div>
+        <div>Выберите агента</div>
+        <div style={{ opacity: 0.6 }}>Кликните на узел графа</div>
       </div>
     )
   }
 
   const node = nodes.find((n) => n.id === nodeId)
-  const connections = edges.filter(
-    (e) => e.source === nodeId || e.target === nodeId
-  )
-  const messages = events.filter(
-    (e) =>
-      e.event_type === 'message_sent' &&
-      (e.agent_id === nodeId || e.payload.to_id === nodeId)
-  )
+  const connections = edges
+    .filter((e) => e.source === nodeId || e.target === nodeId)
+    .sort((a, b) => b.strength - a.strength)
+  const messages = events
+    .filter(
+      (e) =>
+        e.event_type === 'message_sent' &&
+        (e.agent_id === nodeId || e.payload.to_id === nodeId)
+    )
+    .slice(-20)
+    .reverse()
 
-  function roleLabel(id: string): string {
-    if (id.startsWith('off_')) return 'Чиновник'
-    if (id.startsWith('biz_')) return 'Подрядчик'
-    if (id.startsWith('aud_')) return 'Аудитор'
-    return 'Агент'
-  }
+  const suspiciousCount = connections.filter((c) => c.strength >= SUSPICIOUS_THRESHOLD).length
+  const reputation = node?.reputation ?? 0
+  const reputationClass = reputation < 5 ? 'danger' : reputation < 8 ? '' : 'success'
 
   return (
-    <div className="p-2 space-y-3 text-sm overflow-y-auto h-full">
-      <div>
-        <div className="font-mono text-base text-white">{nodeId}</div>
-        <div className="text-slate-400">{roleLabel(nodeId)}</div>
-        <div className="text-slate-300 mt-1">
-          Репутация: <span className="font-bold">{node?.reputation.toFixed(1) ?? '—'}</span>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <div className="hud-panel compact" style={{ borderBottom: '1px solid var(--border)', borderLeft: 'none', borderRight: 'none', borderTop: 'none' }}>
+        <div className="corner tl accent" />
+        <div className="corner tr" />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+          <span style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.05em' }}>
+            {nodeId}
+          </span>
+          <span className={roleBadgeClass(nodeId)}>{roleLabel(nodeId)}</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+          <div className="stat-card" style={{ padding: '0.4rem 0.5rem' }}>
+            <div className="stat-label">Репутация</div>
+            <div className={`stat-value ${reputationClass}`} style={{ fontSize: '1.125rem' }}>
+              {reputation.toFixed(1)}
+            </div>
+          </div>
+          <div className="stat-card" style={{ padding: '0.4rem 0.5rem' }}>
+            <div className="stat-label">Связи</div>
+            <div className={`stat-value ${suspiciousCount > 0 ? 'danger' : ''}`} style={{ fontSize: '1.125rem' }}>
+              {connections.length}
+              {suspiciousCount > 0 && (
+                <span className="stat-unit" style={{ color: '#ef4444', fontSize: '0.5rem' }}>
+                  {' '}⚠{suspiciousCount}
+                </span>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div>
-        <div className="text-slate-400 text-xs mb-1">Связи ({connections.length})</div>
-        <div className="space-y-0.5">
+      <div style={{ flex: '0 0 auto', borderBottom: '1px solid var(--border)', padding: '0 0.875rem' }}>
+        <div className="section-label" style={{ padding: '0.5rem 0 0.375rem' }}>
+          Связи ({connections.length})
+        </div>
+        <div style={{ maxHeight: '100px', overflowY: 'auto' }}>
           {connections.map((c, i) => {
             const other = c.source === nodeId ? c.target : c.source
-            const suspicious = c.strength >= SUSPICIOUS_THRESHOLD
+            const sus = c.strength >= SUSPICIOUS_THRESHOLD
             return (
-              <div key={i} className="flex justify-between text-xs">
-                <span className="font-mono text-slate-300">{String(other)}</span>
-                <span className={suspicious ? 'text-red-400' : 'text-slate-500'}>
-                  {c.strength.toFixed(1)}
-                  {suspicious ? ' ⚠️' : ''}
-                </span>
+              <div key={i} className="conn-item">
+                <span className="conn-item-name">{String(other)}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
+                  <span className={`conn-item-strength ${sus ? 'suspicious' : ''}`}>
+                    {c.strength.toFixed(1)}
+                  </span>
+                  {sus && <span className="badge danger" style={{ fontSize: '0.45rem' }}>⚠</span>}
+                </div>
               </div>
             )
           })}
+          {connections.length === 0 && (
+            <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', padding: '0.25rem 0' }}>
+              Нет связей
+            </div>
+          )}
         </div>
       </div>
 
-      <div>
-        <div className="text-slate-400 text-xs mb-1">Сообщения ({messages.length})</div>
-        <div className="space-y-1 max-h-48 overflow-y-auto">
-          {messages.slice(-10).map((e, i) => {
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div className="section-label">Сообщения ({messages.length})</div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 0.875rem 0.5rem' }}>
+          {messages.map((e, i) => {
             const isFrom = e.agent_id === nodeId
             const other = isFrom ? e.payload.to_id : e.agent_id
             return (
-              <div key={i} className="text-xs text-slate-400">
-                <span className={e.payload.private ? 'text-violet-400' : 'text-slate-300'}>
-                  R{e.round} {isFrom ? '→' : '←'} {String(other)}
-                  {e.payload.private ? ' 🔒' : ''}
-                </span>
+              <div key={i} className={`msg-item ${e.payload.private ? 'msg-item-private' : ''}`}>
+                <span className="msg-item-round">R{e.round}</span>
+                <span className="msg-item-dir">{isFrom ? '→' : '←'}</span>
+                <span className="msg-item-agent">{String(other)}</span>
+                {Boolean(e.payload.private) && (
+                  <span className="badge violet" style={{ fontSize: '0.45rem', marginLeft: 'auto' }}>PRIV</span>
+                )}
               </div>
             )
           })}
+          {messages.length === 0 && (
+            <div style={{ fontSize: '0.6rem', color: 'var(--text-tertiary)', paddingTop: '0.25rem' }}>
+              Нет сообщений
+            </div>
+          )}
         </div>
       </div>
     </div>
