@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useSimulation } from './hooks/useSimulation'
 import { SimGraph } from './components/SimGraph'
 import { EventFeed } from './components/EventFeed'
@@ -11,14 +11,12 @@ export default function App() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [speed, setSpeed] = useState(3.0)
 
-  const privateRatio = state.events.length
-    ? (
-        state.events.filter(
-          (e) => e.event_type === 'message_sent' && e.payload.private
-        ).length /
-        Math.max(1, state.events.filter((e) => e.event_type === 'message_sent').length)
-      ) * 100
-    : 0
+  const privateRatio = useMemo(() => {
+    if (!state.events.length) return 0
+    const msgs = state.events.filter((e) => e.event_type === 'message_sent')
+    const priv = msgs.filter((e) => e.payload.private).length
+    return (priv / Math.max(1, msgs.length)) * 100
+  }, [state.events])
 
   return (
     <div className="h-screen bg-slate-900 text-white flex flex-col overflow-hidden">

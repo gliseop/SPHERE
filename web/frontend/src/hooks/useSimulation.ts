@@ -62,7 +62,7 @@ export function useSimulation() {
             return {
               ...prev,
               events: [...prev.events, msg.data],
-              currentRound: msg.data.round,
+              currentRound: msg.data.round ?? prev.currentRound,
             }
           case 'graph_state':
             return { ...prev, nodes: msg.nodes, edges: msg.edges }
@@ -84,14 +84,16 @@ export function useSimulation() {
 
   const startPlayback = useCallback(
     (run: RunInfo, speed: number = 2.0) => {
-      const url = `ws://${window.location.host}/ws/playback/${run.name}?speed=${speed}`
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const url = `${proto}//${window.location.host}/ws/playback/${run.name}?speed=${speed}`
       connect(url, 'playback')
     },
     [connect]
   )
 
   const startLive = useCallback(() => {
-    const url = `ws://${window.location.host}/ws/live`
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const url = `${proto}//${window.location.host}/ws/live`
     connect(url, 'live')
   }, [connect])
 

@@ -1,4 +1,5 @@
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
+import { SUSPICIOUS_THRESHOLD } from '../constants'
 
 interface Props {
   nodeId: string | null
@@ -48,7 +49,7 @@ export function AgentPanel({ nodeId, nodes, edges, events }: Props) {
         <div className="space-y-0.5">
           {connections.map((c, i) => {
             const other = c.source === nodeId ? c.target : c.source
-            const suspicious = c.strength >= 3.0
+            const suspicious = c.strength >= SUSPICIOUS_THRESHOLD
             return (
               <div key={i} className="flex justify-between text-xs">
                 <span className="font-mono text-slate-300">{String(other)}</span>

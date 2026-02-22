@@ -13,8 +13,29 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-RESULTS_DIR = Path(__file__).parent.parent.parent / "results"
+RESULTS_DIR = (Path(__file__).parent.parent.parent / "results").resolve()
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+
+_RUN_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def _validate_run_name(name: str) -> None:
+    """Проверить имя прогона на допустимые символы и path traversal.
+
+    Args:
+        name: Имя прогона из URL.
+
+    Raises:
+        HTTPException 400: Если имя содержит недопустимые символы.
+        HTTPException 400: Если итоговый путь выходит за пределы RESULTS_DIR.
+    """
+    from fastapi import HTTPException
+
+    if not _RUN_NAME_RE.fullmatch(name):
+        raise HTTPException(status_code=400, detail="Invalid run name")
+    resolved = (RESULTS_DIR / f"{name}_events.jsonl").resolve()
+    if not str(resolved).startswith(str(RESULTS_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid run name")
 
 app = FastAPI(title="MAGISTRY Graph UI")
 
@@ -141,6 +162,7 @@ async def get_run(name: str) -> dict:
     """
     from fastapi import HTTPException
 
+    _validate_run_name(name)
     path = RESULTS_DIR / f"{name}_events.jsonl"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Run not found")
@@ -168,6 +190,12 @@ async def ws_playback(websocket: WebSocket, name: str, speed: float = 1.0) -> No
         speed: Скорость воспроизведения.
     """
     await websocket.accept()
+    try:
+        _validate_run_name(name)
+    except Exception:
+        await websocket.send_json({"type": "error", "message": "Invalid run name"})
+        await websocket.close()
+        return
     path = RESULTS_DIR / f"{name}_events.jsonl"
     if not path.exists():
         await websocket.send_json({"type": "error", "message": "Run not found"})
@@ -238,7 +266,10 @@ async def ws_live(websocket: WebSocket) -> None:
                 line = line.strip()
                 if not line:
                     continue
-                event = json.loads(line)
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 events_so_far.append(event)
                 await websocket.send_json({"type": "event", "data": event})
 

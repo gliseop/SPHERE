@@ -1,6 +1,7 @@
 import ForceGraph2D, { type NodeObject, type LinkObject } from 'react-force-graph-2d'
 import { useCallback, useMemo } from 'react'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
+import { SUSPICIOUS_THRESHOLD } from '../constants'
 
 interface Props {
   nodes: GraphNode[]
@@ -9,8 +10,6 @@ interface Props {
   onNodeClick?: (nodeId: string) => void
   selectedNode?: string | null
 }
-
-const SUSPICIOUS_THRESHOLD = 3.0
 
 function nodeColor(id: string): string {
   if (id.startsWith('off_')) return '#ef4444'
