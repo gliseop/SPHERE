@@ -165,6 +165,12 @@ def run_single(
     )
     runner.use_free_actions = True
 
+    # Путь для журнала событий (определяем заранее для streaming)
+    events_path = (
+        RESULTS_DIR
+        / f"{scenario_id.value}_{governance.value}_seed{seed}_events.jsonl"
+    )
+
     env = Environment(
         scenario=scenario,
         governance=governance,
@@ -204,11 +210,7 @@ def run_single(
     )
     tracer.save_jsonl(trace_path)
 
-    # Сохранить журнал событий
-    events_path = (
-        RESULTS_DIR
-        / f"{scenario_id.value}_{governance.value}_seed{seed}_events.jsonl"
-    )
+    # Журнал событий уже записан через streaming; финальная перезапись для консистентности
     env.state.event_log.save_jsonl(events_path)
 
     return {
