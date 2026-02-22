@@ -110,7 +110,7 @@ class ViolationOracle:
         events_text = "\n".join(
             f"- [{e.get('round', '?')}] {e.get('agent_id', '?')}: "
             f"{e.get('event_type', '?')} {e.get('payload', {})}"
-            for e in events[:100]
+            for e in events
         ) or "Нет событий"
 
         msgs_text = "\n".join(
@@ -118,7 +118,7 @@ class ViolationOracle:
             f"{'[ПРИВАТНО]' if m.get('private') else '[публично]'} "
             f"{m.get('from_id', '?')} -> {m.get('to_id', '?')}: "
             f"{m.get('content', '')[:200]}"
-            for m in messages[:100]
+            for m in messages
         ) or "Нет сообщений"
 
         cases_text = "\n".join(

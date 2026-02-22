@@ -234,7 +234,7 @@ class Environment:
         Args:
             round_num: Номер раунда.
         """
-        if self._world_generator is not None and round_num > 0:
+        if self._world_generator is not None:
             return
 
         for need in self._scenario.needs:

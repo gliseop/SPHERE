@@ -478,7 +478,7 @@ def apply_state_op(
             event_type="evidence_added",
             agent_id=agent_id,
             payload={
-                "type": op.evidence_type,
+                "evidence_type": op.evidence_type,
                 "description": op.description,
                 "visible_to": op.visible_to,
             },
@@ -548,6 +548,8 @@ def apply_state_op(
         case = state.cases.get(op.case_id)
         if case is None:
             return OpResult(False, f"Дело {op.case_id} не найдено")
+        case.stage = "frozen"
+        case.closed_at = round_num
         state.event_log.log(
             round=round_num,
             event_type="case_frozen",
