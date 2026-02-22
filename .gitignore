@@ -8,3 +8,5 @@ results/*.jsonl
 results/*.json
 results/summary.json
 results/ANALYSIS.md
+results/*.html
+.playwright-mcp
