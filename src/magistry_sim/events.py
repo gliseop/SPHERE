@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import IO
 
 from pydantic import BaseModel, Field
 
@@ -28,15 +29,26 @@ class EventLog:
 
     def __init__(self) -> None:
         self._events: list[Event] = []
-        self._stream_path: Path | None = None
+        self._stream_file: IO[str] | None = None
 
     def set_stream_path(self, path: Path) -> None:
-        """Установить путь для потоковой дозаписи событий.
+        """Открыть файл для потоковой дозаписи событий.
+
+        Открывает файл в режиме append и держит дескриптор открытым
+        на протяжении всего прогона. Вызвать close_stream() по завершении.
 
         Args:
             path: Путь к файлу для дозаписи.
         """
-        self._stream_path = path
+        if self._stream_file is not None:
+            self._stream_file.close()
+        self._stream_file = open(path, "a", encoding="utf-8")  # noqa: WPS515
+
+    def close_stream(self) -> None:
+        """Закрыть открытый поток записи событий."""
+        if self._stream_file is not None:
+            self._stream_file.close()
+            self._stream_file = None
 
     def log(
         self,
@@ -63,9 +75,9 @@ class EventLog:
             payload=payload or {},
         )
         self._events.append(event)
-        if self._stream_path is not None:
-            with open(self._stream_path, "a", encoding="utf-8") as f:
-                f.write(event.model_dump_json() + "\n")
+        if self._stream_file is not None:
+            self._stream_file.write(event.model_dump_json() + "\n")
+            self._stream_file.flush()
         return event
 
     def get_events(

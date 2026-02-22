@@ -203,15 +203,15 @@ def run_single(
     case_div = case_diversity(result)
     oracle_metrics = compute_metrics_with_oracle(result, oracle_verdicts)
 
+    # Закрыть поток — все события уже записаны в events_path построчно
+    env.state.event_log.close_stream()
+
     # Сохранение трассы
     trace_path = (
         RESULTS_DIR
         / f"{scenario_id.value}_{governance.value}_seed{seed}_trace.jsonl"
     )
     tracer.save_jsonl(trace_path)
-
-    # Журнал событий уже записан через streaming; финальная перезапись для консистентности
-    env.state.event_log.save_jsonl(events_path)
 
     return {
         "scenario": scenario_id.value,
