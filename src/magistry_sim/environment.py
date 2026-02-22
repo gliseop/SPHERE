@@ -267,8 +267,11 @@ class Environment:
                 runner_llm.round_num = round_num
         if self._arbiter is not None:
             arbiter_llm = getattr(self._arbiter, "_llm", None)
-            if arbiter_llm is not None and hasattr(arbiter_llm, "round_num"):
-                arbiter_llm.round_num = round_num
+            if arbiter_llm is not None:
+                if hasattr(arbiter_llm, "agent_id"):
+                    arbiter_llm.agent_id = agent_id
+                if hasattr(arbiter_llm, "round_num"):
+                    arbiter_llm.round_num = round_num
 
     def _run_agent_turn(self, agent_id: str) -> None:
         """Выполнить ход одного агента.
@@ -490,7 +493,7 @@ class Environment:
                     self._form_tribunal(case_id, case.owner_id)
 
         # Проверка кворума трибуналов
-        required_votes = self._scenario.governance.jury_size
+        required_votes = max(1, self._scenario.governance.jury_size)
         for case in self._state.cases.values():
             if (
                 case.stage == "tribunal"

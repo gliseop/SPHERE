@@ -1,7 +1,7 @@
 .env
 *.db
-.venv
-
+.venv*
+.tmp
 __pycache__/
 *egg-info/
 results/*.jsonl

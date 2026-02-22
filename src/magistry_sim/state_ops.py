@@ -403,6 +403,11 @@ def apply_state_op(
     from .state import Complaint, Message, ReputationRecord
 
     if isinstance(op, CreateCaseOp):
+        owner_id = op.params.get("owner_id", agent_id)
+        if not owner_id:
+            return OpResult(
+                False, "create_case: отсутствует owner_id"
+            )
         case_type = op.params.get("case_type", "")
         case_id = state.new_case_id()
         case = Case(
@@ -410,7 +415,7 @@ def apply_state_op(
             case_type=case_type,
             title=op.params.get("title", ""),
             description=op.params.get("description", ""),
-            owner_id=op.params.get("owner_id", agent_id),
+            owner_id=owner_id,
             stage=op.params.get("stage", "open"),
             params=op.params.get("params", ""),
             created_at=round_num,
@@ -423,7 +428,6 @@ def apply_state_op(
             payload={"case_id": case_id, "case_type": case_type},
         )
         # Удалить удовлетворённую потребность (аналогично tools.actions.open_case)
-        owner_id = op.params.get("owner_id", agent_id)
         state.active_needs = [
             n
             for n in state.active_needs
