@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { useSimulation } from './hooks/useSimulation'
 import { SimGraph } from './components/SimGraph'
 import { EventTimeline } from './components/EventTimeline'
-import { AgentPanel } from './components/AgentPanel'
+import { ActivityFeed } from './components/ActivityFeed'
 import { RunSelector } from './components/RunSelector'
 import { AgentList } from './components/AgentList'
 import type { RunInfo } from './types'
@@ -134,11 +134,10 @@ export default function App() {
         </main>
 
         <aside className="panel-right">
-          <AgentPanel
-            nodeId={selectedNode}
-            nodes={state.nodes}
-            edges={state.edges}
+          <ActivityFeed
             events={state.events}
+            names={state.names}
+            selectedAgent={selectedNode}
           />
         </aside>
       </div>
