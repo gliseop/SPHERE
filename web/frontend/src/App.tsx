@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { useSimulation } from './hooks/useSimulation'
 import { SimGraph } from './components/SimGraph'
 import { EventTimeline } from './components/EventTimeline'
@@ -11,6 +11,15 @@ export default function App() {
   const { state, mode, startPlayback, startLive, disconnect } = useSimulation()
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [speed, setSpeed] = useState(3.0)
+
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    return (localStorage.getItem('magistry-theme') as 'light' | 'dark') ?? 'light'
+  })
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('magistry-theme', theme)
+  }, [theme])
 
   const privateRatio = useMemo(() => {
     if (!state.events.length) return 0
@@ -65,6 +74,14 @@ export default function App() {
               Стоп
             </button>
           )}
+          <button
+            className="btn-clipped small"
+            onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')}
+            title="Переключить тему"
+            style={{ marginLeft: '0.5rem' }}
+          >
+            {theme === 'light' ? '◐' : '◑'}
+          </button>
         </div>
       </header>
 
