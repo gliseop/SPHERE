@@ -82,7 +82,10 @@ def _load_names(run_name: str) -> dict[str, str]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): str(v) for k, v in data.items()}
     except (json.JSONDecodeError, OSError):
         return {}
 
