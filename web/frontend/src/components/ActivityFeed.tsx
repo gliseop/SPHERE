@@ -7,7 +7,8 @@ interface Props {
   selectedAgent: string | null
 }
 
-function displayName(id: string, names: Record<string, string>): string {
+function displayName(id: string | undefined, names: Record<string, string>): string {
+  if (!id) return ''
   return names[id] ?? id
 }
 
@@ -16,6 +17,8 @@ function eventBadgeClass(eventType: string): string {
     case 'message_sent': return 'info'
     case 'self_reflection': return 'accent'
     case 'world_event': return 'success'
+    case 'reputation_modified': return 'danger'
+    case 'graph_updated': return 'info'
     default: return ''
   }
 }
@@ -39,7 +42,7 @@ export function ActivityFeed({ events, names, selectedAgent }: Props) {
     if (!pausedRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [events.length])
+  }, [events.length, selectedAgent])
 
   const filtered = selectedAgent
     ? events.filter((e) => {
@@ -50,9 +53,10 @@ export function ActivityFeed({ events, names, selectedAgent }: Props) {
       })
     : events
 
-  // Group by round
+  // Group by round — sort first to handle out-of-order events
+  const sorted = [...filtered].sort((a, b) => a.round - b.round)
   const grouped: { round: number; items: SimEvent[] }[] = []
-  for (const e of filtered) {
+  for (const e of sorted) {
     const last = grouped[grouped.length - 1]
     if (!last || last.round !== e.round) {
       grouped.push({ round: e.round, items: [e] })
@@ -79,8 +83,12 @@ export function ActivityFeed({ events, names, selectedAgent }: Props) {
         {grouped.map(({ round, items }) => (
           <div key={round} className="activity-round-group">
             <div className="activity-round-label">Раунд {round}</div>
-            {items.map((e, i) => (
-              <ActivityItem key={i} event={e} names={names} />
+            {items.map((e) => (
+              <ActivityItem
+                key={`${e.round}-${e.event_type}-${e.agent_id}-${e.timestamp}`}
+                event={e}
+                names={names}
+              />
             ))}
           </div>
         ))}
@@ -103,6 +111,7 @@ function ActivityItem({ event, names }: { event: SimEvent; names: Record<string,
   }
 
   if (event_type === 'self_reflection') {
+    const content = typeof payload.content === 'string' ? payload.content : ''
     return (
       <div className="activity-item reflection">
         <div className="activity-item-header">
@@ -110,15 +119,15 @@ function ActivityItem({ event, names }: { event: SimEvent; names: Record<string,
           <span className="activity-agent">{displayName(agent_id, names)}</span>
           <span className="badge accent small">РЕФЛ</span>
         </div>
-        <div className="activity-content italic">{payload.content as string}</div>
+        {content && <div className="activity-content italic">{content}</div>}
       </div>
     )
   }
 
   if (event_type === 'message_sent') {
-    const toId = payload.to_id as string
+    const toId = typeof payload.to_id === 'string' ? payload.to_id : ''
     const isPrivate = Boolean(payload.private)
-    const content = payload.content as string
+    const content = typeof payload.content === 'string' ? payload.content : ''
     return (
       <div className="activity-item message">
         <div className="activity-item-header">
@@ -135,8 +144,8 @@ function ActivityItem({ event, names }: { event: SimEvent; names: Record<string,
   }
 
   if (event_type === 'reputation_modified') {
-    const target = payload.target as string
-    const delta = payload.delta as number
+    const target = typeof payload.target === 'string' ? payload.target : ''
+    const delta = typeof payload.delta === 'number' ? payload.delta : 0
     const sign = delta >= 0 ? '+' : ''
     return (
       <div className="activity-item reputation">
