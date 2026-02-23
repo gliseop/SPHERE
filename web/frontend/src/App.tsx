@@ -5,11 +5,13 @@ import { EventTimeline } from './components/EventTimeline'
 import { ActivityFeed } from './components/ActivityFeed'
 import { RunSelector } from './components/RunSelector'
 import { AgentList } from './components/AgentList'
+import { ScenariosView } from './components/ScenariosView'
 import type { RunInfo } from './types'
 import './styles/hud.css'
 
 export default function App() {
   const { state, mode, startPlayback, startLive, disconnect } = useSimulation()
+  const [view, setView] = useState<'monitor' | 'scenarios'>('monitor')
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [speed, setSpeed] = useState(3.0)
 
@@ -39,6 +41,20 @@ export default function App() {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <span className="hud-header-logo">MAGISTRY</span>
+          <nav className="hud-nav">
+            <button
+              className={`hud-nav-tab${view === 'monitor' ? ' active' : ''}`}
+              onClick={() => setView('monitor')}
+            >
+              Монитор
+            </button>
+            <button
+              className={`hud-nav-tab${view === 'scenarios' ? ' active' : ''}`}
+              onClick={() => setView('scenarios')}
+            >
+              Сценарии
+            </button>
+          </nav>
           {state.meta && (
             <span className="hud-header-meta">
               {state.meta.scenario} / {state.meta.governance}
@@ -87,66 +103,76 @@ export default function App() {
         </div>
       </header>
 
-      <div className="app-main">
-        <aside className="panel-left" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <div className="panel-left-controls">
-            <RunSelector
-              onPlayback={(run: RunInfo, spd: number) => {
-                setSelectedNode(null)
-                startPlayback(run, spd)
-              }}
-              onLive={() => {
-                setSelectedNode(null)
-                startLive()
-              }}
-              speed={speed}
-              onSpeedChange={setSpeed}
-              mode={mode}
-            />
-          </div>
-          <div className="panel-left-agents">
-            <AgentList
-              nodes={state.nodes}
-              edges={state.edges}
-              selectedNode={selectedNode}
-              names={state.names}
-              onSelect={(id) => setSelectedNode(id || null)}
-            />
-          </div>
-        </aside>
-
-        <main style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <SimGraph
-            nodes={state.nodes}
-            edges={state.edges}
-            events={state.events}
-            onNodeClick={setSelectedNode}
-            selectedNode={selectedNode}
-            names={state.names}
-          />
-          {state.error && (
-            <div className="graph-overlay">
-              <div className="graph-overlay-inner">
-                <div className="badge danger" style={{ marginBottom: '0.5rem' }}>Ошибка</div>
-                <div>{state.error}</div>
+      {view === 'monitor' && (
+        <>
+          <div className="app-main">
+            <aside className="panel-left" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <div className="panel-left-controls">
+                <RunSelector
+                  onPlayback={(run: RunInfo, spd: number) => {
+                    setSelectedNode(null)
+                    startPlayback(run, spd)
+                  }}
+                  onLive={() => {
+                    setSelectedNode(null)
+                    startLive()
+                  }}
+                  speed={speed}
+                  onSpeedChange={setSpeed}
+                  mode={mode}
+                />
               </div>
-            </div>
-          )}
-        </main>
+              <div className="panel-left-agents">
+                <AgentList
+                  nodes={state.nodes}
+                  edges={state.edges}
+                  selectedNode={selectedNode}
+                  names={state.names}
+                  onSelect={(id) => setSelectedNode(id || null)}
+                />
+              </div>
+            </aside>
 
-        <aside className="panel-right">
-          <ActivityFeed
+            <main style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <SimGraph
+                nodes={state.nodes}
+                edges={state.edges}
+                events={state.events}
+                onNodeClick={setSelectedNode}
+                selectedNode={selectedNode}
+                names={state.names}
+              />
+              {state.error && (
+                <div className="graph-overlay">
+                  <div className="graph-overlay-inner">
+                    <div className="badge danger" style={{ marginBottom: '0.5rem' }}>Ошибка</div>
+                    <div>{state.error}</div>
+                  </div>
+                </div>
+              )}
+            </main>
+
+            <aside className="panel-right">
+              <ActivityFeed
+                events={state.events}
+                names={state.names}
+                selectedAgent={selectedNode}
+              />
+            </aside>
+          </div>
+
+          <EventTimeline
             events={state.events}
-            names={state.names}
             selectedAgent={selectedNode}
           />
-        </aside>
-      </div>
+        </>
+      )}
 
-      <EventTimeline
-        events={state.events}
-        selectedAgent={selectedNode}
-      />
+      {view === 'scenarios' && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <ScenariosView onLaunch={() => setView('monitor')} />
+        </div>
+      )}
     </div>
   )
 }

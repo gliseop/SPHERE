@@ -900,3 +900,31 @@ input[type="range"]::-webkit-slider-thumb {
   letter-spacing: 0.15em;
   padding: 0.5rem 0.875rem 0.375rem;
 }
+
+/* ===== Навигация ===== */
+.hud-nav {
+  display: flex;
+  gap: 2px;
+  margin-left: 1rem;
+}
+
+.hud-nav-tab {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.25rem 0.75rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  clip-path: polygon(6px 0%, 100% 0%, calc(100% - 6px) 100%, 0% 100%);
+}
+
+.hud-nav-tab:hover { color: var(--text-primary); border-color: var(--accent); }
+.hud-nav-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
