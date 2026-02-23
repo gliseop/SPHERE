@@ -426,11 +426,102 @@ button:disabled { cursor: not-allowed !important; }
   width: 200px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 0;
 }
+
+.panel-left-agents {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  min-height: 0;
+}
+
+/* ===== AgentList ===== */
+.agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.agent-list-header {
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0.5rem 0.75rem 0.25rem;
+}
+
+.agent-list-empty {
+  padding: 1rem 0.75rem;
+  font-size: 0.7rem;
+}
+
+.agent-list-item {
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.agent-list-item:hover { background: var(--surface-2); }
+.agent-list-item.selected { border-left-color: var(--accent); background: var(--accent-muted); }
+.agent-list-item.suspicious { background: rgba(239, 68, 68, 0.06); }
+
+.agent-list-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.agent-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.agent-dot.danger { background: #ef4444; }
+.agent-dot.info   { background: #3b82f6; }
+.agent-dot.accent { background: #f97316; }
+
+.agent-list-name {
+  font-size: 0.72rem;
+  font-weight: 500;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-list-rep {
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  min-width: 2.2rem;
+  text-align: right;
+}
+
+.rep-bar {
+  flex: 1;
+  height: 3px;
+  background: var(--surface-3);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.rep-bar-fill {
+  height: 100%;
+  background: var(--success);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.rep-bar-fill.warn   { background: #f59e0b; }
+.rep-bar-fill.danger { background: var(--danger); }
 
 /* ===== RIGHT PANEL ===== */
 .panel-right {

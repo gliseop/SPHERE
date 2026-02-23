@@ -4,6 +4,7 @@ import { SimGraph } from './components/SimGraph'
 import { EventTimeline } from './components/EventTimeline'
 import { AgentPanel } from './components/AgentPanel'
 import { RunSelector } from './components/RunSelector'
+import { AgentList } from './components/AgentList'
 import type { RunInfo } from './types'
 import './styles/hud.css'
 
@@ -87,20 +88,31 @@ export default function App() {
       </header>
 
       <div className="app-main">
-        <aside className="panel-left">
-          <RunSelector
-            onPlayback={(run: RunInfo, spd: number) => {
-              setSelectedNode(null)
-              startPlayback(run, spd)
-            }}
-            onLive={() => {
-              setSelectedNode(null)
-              startLive()
-            }}
-            speed={speed}
-            onSpeedChange={setSpeed}
-            mode={mode}
-          />
+        <aside className="panel-left" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div className="panel-left-controls">
+            <RunSelector
+              onPlayback={(run: RunInfo, spd: number) => {
+                setSelectedNode(null)
+                startPlayback(run, spd)
+              }}
+              onLive={() => {
+                setSelectedNode(null)
+                startLive()
+              }}
+              speed={speed}
+              onSpeedChange={setSpeed}
+              mode={mode}
+            />
+          </div>
+          <div className="panel-left-agents">
+            <AgentList
+              nodes={state.nodes}
+              edges={state.edges}
+              selectedNode={selectedNode}
+              names={state.names}
+              onSelect={(id) => setSelectedNode(id || null)}
+            />
+          </div>
         </aside>
 
         <main style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
