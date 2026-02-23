@@ -122,6 +122,7 @@ export default function App() {
             events={state.events}
             onNodeClick={setSelectedNode}
             selectedNode={selectedNode}
+            names={state.names}
           />
           {state.error && (
             <div className="graph-overlay">

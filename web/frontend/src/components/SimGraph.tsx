@@ -10,6 +10,7 @@ interface Props {
   events: SimEvent[]
   onNodeClick?: (nodeId: string) => void
   selectedNode?: string | null
+  names?: Record<string, string>
 }
 
 interface D3Node extends d3.SimulationNodeDatum {
@@ -45,11 +46,12 @@ function edgeWidth(strength: number): number {
   return Math.min(5, 0.5 + strength * 0.4)
 }
 
-export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Props) {
+export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, names }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const simRef = useRef<d3.Simulation<D3Node, D3Link> | null>(null)
   const nodesRef = useRef<Map<string, D3Node>>(new Map())
+  const lastEventRef = useRef<SimEvent | null>(null)
   const [tooltip, setTooltip] = useState<{ node: D3Node; x: number; y: number } | null>(null)
   const selectedRef = useRef(selectedNode)
 
@@ -72,6 +74,35 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Pr
       .attr('stroke', (d) => d.id === selectedNode ? '#f97316' : 'none')
       .attr('stroke-width', (d) => d.id === selectedNode ? 2.5 : 0)
   }, [selectedNode])
+
+  // Flash-анимация активного ребра при message_sent
+  useEffect(() => {
+    const lastEvent = events[events.length - 1]
+    if (!lastEvent || lastEvent === lastEventRef.current) return
+    lastEventRef.current = lastEvent
+
+    if (lastEvent.event_type !== 'message_sent') return
+    const from = lastEvent.agent_id
+    const to = typeof lastEvent.payload.to_id === 'string' ? lastEvent.payload.to_id : ''
+    if (!from || !to) return
+
+    const svg = d3.select(svgRef.current)
+    const key1 = `${from}|${to}`
+    const key2 = `${to}|${from}`
+    svg.selectAll<SVGLineElement, D3Link>('line.edge')
+      .filter((d) => {
+        const s = typeof d.source === 'string' ? d.source : (d.source as D3Node).id
+        const t = typeof d.target === 'string' ? d.target : (d.target as D3Node).id
+        return `${s}|${t}` === key1 || `${s}|${t}` === key2
+      })
+      .raise()
+      .transition().duration(100)
+      .attr('stroke', '#f97316')
+      .attr('stroke-width', 4)
+      .transition().duration(600)
+      .attr('stroke', (d) => edgeColor(d.strength, d.isPrivate))
+      .attr('stroke-width', (d) => edgeWidth(d.strength))
+  }, [events])
 
   // Инициализация D3 симуляции при монтировании
   useEffect(() => {
@@ -250,7 +281,7 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Pr
 
     labelGroup
       .selectAll<SVGTextElement, D3Node>('text.node-label')
-      .text((d) => d.id)
+      .text((d) => (names ?? {})[d.id] ?? d.id)
       .attr('text-anchor', 'middle')
       .attr('font-family', "'JetBrains Mono', monospace")
       .attr('font-size', '9px')
@@ -262,7 +293,7 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode }: Pr
     ;(sim.force('link') as d3.ForceLink<D3Node, D3Link>).links(d3Links)
     sim.alpha(0.3).restart()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, events])
+  }, [nodes, edges, events, names])
 
   // SVG рендерится всегда — иначе useEffect([], []) срабатывает когда svgRef=null
   // и D3 никогда не инициализируется. Пустое состояние — оверлей поверх SVG.
