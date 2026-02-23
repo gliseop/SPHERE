@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import uuid
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -14,6 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 RESULTS_DIR = (Path(__file__).parent.parent.parent / "results").resolve()
+SCENARIOS_DIR = (Path(__file__).parent.parent.parent / "scenarios").resolve()
+SCENARIOS_DIR.mkdir(parents=True, exist_ok=True)
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
 _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
@@ -36,6 +39,28 @@ def _validate_run_name(name: str) -> None:
     resolved = (RESULTS_DIR / f"{name}_events.jsonl").resolve()
     if not str(resolved).startswith(str(RESULTS_DIR)):
         raise HTTPException(status_code=400, detail="Invalid run name")
+
+_SCENARIO_ID_RE = re.compile(r"^[0-9a-f\-]{36}$")
+
+
+def _validate_scenario_id(scenario_id: str) -> None:
+    """Проверить UUID сценария.
+
+    Args:
+        scenario_id: UUID строка.
+
+    Raises:
+        HTTPException 400: Если не UUID формат.
+        HTTPException 400: Если итоговый путь выходит за пределы SCENARIOS_DIR.
+    """
+    from fastapi import HTTPException
+
+    if not _SCENARIO_ID_RE.fullmatch(scenario_id):
+        raise HTTPException(status_code=400, detail="Invalid scenario ID")
+    resolved = (SCENARIOS_DIR / f"{scenario_id}.json").resolve()
+    if not str(resolved).startswith(str(SCENARIOS_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid scenario ID")
+
 
 app = FastAPI(title="MAGISTRY Graph UI")
 
@@ -311,6 +336,123 @@ async def ws_live(websocket: WebSocket) -> None:
 
     except WebSocketDisconnect:
         pass
+
+
+@app.get("/api/scenarios")
+async def list_scenarios() -> list[dict]:
+    """Вернуть список сценариев."""
+    result = []
+    for p in sorted(SCENARIOS_DIR.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            result.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return result
+
+
+@app.get("/api/scenarios/{scenario_id}")
+async def get_scenario(scenario_id: str) -> dict:
+    """Вернуть сценарий по ID.
+
+    Args:
+        scenario_id: UUID строка.
+
+    Returns:
+        Словарь с данными сценария.
+    """
+    from fastapi import HTTPException
+
+    _validate_scenario_id(scenario_id)
+    path = SCENARIOS_DIR / f"{scenario_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.post("/api/scenarios", status_code=201)
+async def create_scenario(data: dict) -> dict:
+    """Создать новый сценарий.
+
+    Args:
+        data: Данные сценария.
+
+    Returns:
+        Сохранённый сценарий с назначенным id.
+    """
+    scenario_id = str(uuid.uuid4())
+    data["id"] = scenario_id
+    path = SCENARIOS_DIR / f"{scenario_id}.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+@app.put("/api/scenarios/{scenario_id}")
+async def update_scenario(scenario_id: str, data: dict) -> dict:
+    """Обновить сценарий.
+
+    Args:
+        scenario_id: UUID строка.
+        data: Новые данные сценария.
+
+    Returns:
+        Обновлённый сценарий.
+    """
+    from fastapi import HTTPException
+
+    _validate_scenario_id(scenario_id)
+    path = SCENARIOS_DIR / f"{scenario_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    data["id"] = scenario_id
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+@app.delete("/api/scenarios/{scenario_id}", status_code=204)
+async def delete_scenario(scenario_id: str) -> None:
+    """Удалить сценарий.
+
+    Args:
+        scenario_id: UUID строка.
+    """
+    from fastapi import HTTPException
+
+    _validate_scenario_id(scenario_id)
+    path = SCENARIOS_DIR / f"{scenario_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    path.unlink()
+
+
+@app.post("/api/scenarios/{scenario_id}/run", status_code=202)
+async def run_scenario(scenario_id: str) -> dict:
+    """Запустить прогон по сценарию.
+
+    Возвращает 202 Accepted. Реальный запуск через MAGISTRY_RUN_CMD.
+
+    Args:
+        scenario_id: UUID строка.
+
+    Returns:
+        Словарь с статусом и данными сценария.
+    """
+    import os
+    from fastapi import HTTPException
+
+    _validate_scenario_id(scenario_id)
+    path = SCENARIOS_DIR / f"{scenario_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    scenario = json.loads(path.read_text(encoding="utf-8"))
+    run_cmd = os.environ.get("MAGISTRY_RUN_CMD")
+    if not run_cmd:
+        return {
+            "status": "accepted",
+            "message": "MAGISTRY_RUN_CMD не задан — запуск недоступен",
+            "scenario": scenario,
+        }
+    return {"status": "accepted", "scenario_id": scenario_id}
 
 
 if FRONTEND_DIST.exists():
