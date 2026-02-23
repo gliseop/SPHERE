@@ -78,6 +78,7 @@ export default function App() {
             className="btn-clipped small"
             onClick={() => setTheme(t => t === 'light' ? 'dark' : 'light')}
             title="Переключить тему"
+            aria-pressed={theme === 'dark'}
             style={{ marginLeft: '0.5rem' }}
           >
             {theme === 'light' ? '◐' : '◑'}
