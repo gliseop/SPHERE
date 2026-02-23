@@ -30,7 +30,7 @@ const ROLE_OPTIONS = [
   { value: 'auditor',  label: 'Аудитор' },
 ]
 
-export function ScenariosView({ onLaunch }: { onLaunch?: () => void }) {
+export function ScenariosView({ onLaunch, onStartLive }: { onLaunch?: () => void; onStartLive?: () => void }) {
   const [scenarios, setScenarios] = useState<Scenario[]>([])
   const [editing, setEditing] = useState<Scenario | null>(null)
   const [showJson, setShowJson] = useState(false)
@@ -72,8 +72,15 @@ export function ScenariosView({ onLaunch }: { onLaunch?: () => void }) {
   }
 
   async function handleRun(id: string) {
-    await fetch(`/api/scenarios/${id}/run`, { method: 'POST' })
-    onLaunch?.()
+    try {
+      const res = await fetch(`/api/scenarios/${id}/run`, { method: 'POST' })
+      if (res.ok) {
+        onLaunch?.()
+        onStartLive?.()
+      }
+    } catch {
+      // Ошибка сети — молча обрабатываем
+    }
   }
 
   function addAgent() {

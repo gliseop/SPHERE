@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useSimulation } from './hooks/useSimulation'
 import { SimGraph } from './components/SimGraph'
-import { EventTimeline } from './components/EventTimeline'
+import { RoundScrubber } from './components/RoundScrubber'
 import { ActivityFeed } from './components/ActivityFeed'
 import { RunSelector } from './components/RunSelector'
 import { AgentList } from './components/AgentList'
@@ -14,6 +14,7 @@ export default function App() {
   const [view, setView] = useState<'monitor' | 'scenarios'>('monitor')
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [speed, setSpeed] = useState(3.0)
+  const [focusRound, setFocusRound] = useState<number | null>(null)
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('magistry-theme') as 'light' | 'dark') ?? 'light'
@@ -126,6 +127,7 @@ export default function App() {
                 <AgentList
                   nodes={state.nodes}
                   edges={state.edges}
+                  events={state.events}
                   selectedNode={selectedNode}
                   names={state.names}
                   onSelect={(id) => setSelectedNode(id || null)}
@@ -157,20 +159,24 @@ export default function App() {
                 events={state.events}
                 names={state.names}
                 selectedAgent={selectedNode}
+                onClearFilter={() => setSelectedNode(null)}
+                focusRound={focusRound}
               />
             </aside>
           </div>
 
-          <EventTimeline
+          <RoundScrubber
             events={state.events}
-            selectedAgent={selectedNode}
+            currentRound={state.currentRound}
+            focusRound={focusRound}
+            onRoundClick={setFocusRound}
           />
         </>
       )}
 
       {view === 'scenarios' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <ScenariosView onLaunch={() => setView('monitor')} />
+          <ScenariosView onLaunch={() => setView('monitor')} onStartLive={startLive} />
         </div>
       )}
     </div>

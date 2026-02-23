@@ -5,6 +5,8 @@ interface Props {
   events: SimEvent[]
   names: Record<string, string>
   selectedAgent: string | null
+  onClearFilter?: () => void
+  focusRound?: number | null
 }
 
 function displayName(id: string | undefined, names: Record<string, string>): string {
@@ -12,30 +14,13 @@ function displayName(id: string | undefined, names: Record<string, string>): str
   return names[id] ?? id
 }
 
-function eventBadgeClass(eventType: string): string {
-  switch (eventType) {
-    case 'message_sent': return 'info'
-    case 'self_reflection': return 'accent'
-    case 'world_event': return 'success'
-    case 'reputation_modified': return 'danger'
-    case 'graph_updated': return 'info'
-    default: return ''
-  }
+function isAuditor(id: string): boolean {
+  return id.startsWith('aud_')
 }
 
-function eventBadgeLabel(eventType: string): string {
-  switch (eventType) {
-    case 'message_sent': return 'MSG'
-    case 'self_reflection': return 'РЕФЛ'
-    case 'world_event': return 'МИР'
-    case 'reputation_modified': return 'РЕП'
-    case 'graph_updated': return 'ГРАФ'
-    default: return eventType.slice(0, 4).toUpperCase()
-  }
-}
-
-export function ActivityFeed({ events, names, selectedAgent }: Props) {
+export function ActivityFeed({ events, names, selectedAgent, onClearFilter, focusRound }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const pausedRef = useRef(false)
 
   useEffect(() => {
@@ -44,16 +29,28 @@ export function ActivityFeed({ events, names, selectedAgent }: Props) {
     }
   }, [events.length, selectedAgent])
 
+  // Прокрутка к раунду при focusRound
+  useEffect(() => {
+    if (focusRound == null || !scrollRef.current) return
+    const el = scrollRef.current.querySelector(`[data-round="${focusRound}"]`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [focusRound])
+
   const filtered = selectedAgent
     ? events.filter((e) => {
         if (e.agent_id === selectedAgent) return true
         if (e.payload.to_id === selectedAgent) return true
         if (e.payload.target === selectedAgent) return true
+        if (e.event_type === 'graph_updated') {
+          if (e.payload.agent_a === selectedAgent || e.payload.agent_b === selectedAgent) return true
+        }
         return false
       })
     : events
 
-  // Group by round — sort first to handle out-of-order events
+  // Group by round
   const sorted = [...filtered].sort((a, b) => a.round - b.round)
   const grouped: { round: number; items: SimEvent[] }[] = []
   for (const e of sorted) {
@@ -68,9 +65,21 @@ export function ActivityFeed({ events, names, selectedAgent }: Props) {
   return (
     <div className="activity-feed">
       <div className="activity-feed-header">
-        Активность{selectedAgent ? ` — ${displayName(selectedAgent, names)}` : ''}
+        <span>
+          Активность{selectedAgent ? ` — ${displayName(selectedAgent, names)}` : ''}
+        </span>
+        {selectedAgent && onClearFilter && (
+          <button
+            className="btn-clipped small"
+            onClick={onClearFilter}
+            style={{ marginLeft: '0.5rem', padding: '0.15rem 0.5rem', fontSize: '0.6rem' }}
+          >
+            ✕ Сбросить
+          </button>
+        )}
       </div>
       <div
+        ref={scrollRef}
         className="activity-feed-scroll"
         onMouseEnter={() => { pausedRef.current = true }}
         onMouseLeave={() => { pausedRef.current = false }}
@@ -81,8 +90,10 @@ export function ActivityFeed({ events, names, selectedAgent }: Props) {
           </div>
         )}
         {grouped.map(({ round, items }) => (
-          <div key={round} className="activity-round-group">
-            <div className="activity-round-label">Раунд {round}</div>
+          <div key={round} className="activity-round-group" data-round={round}>
+            <div className={`activity-round-label${focusRound === round ? ' focused' : ''}`}>
+              Раунд {round}
+            </div>
             {items.map((e) => (
               <ActivityItem
                 key={`${e.round}-${e.event_type}-${e.agent_id}-${e.timestamp}`}
@@ -100,6 +111,7 @@ export function ActivityFeed({ events, names, selectedAgent }: Props) {
 
 function ActivityItem({ event, names }: { event: SimEvent; names: Record<string, string> }) {
   const { event_type, agent_id, payload } = event
+  const auditor = isAuditor(agent_id)
 
   if (event_type === 'world_event' && payload.narrative) {
     return (
@@ -113,10 +125,11 @@ function ActivityItem({ event, names }: { event: SimEvent; names: Record<string,
   if (event_type === 'self_reflection') {
     const content = typeof payload.content === 'string' ? payload.content : ''
     return (
-      <div className="activity-item reflection">
+      <div className={`activity-item reflection${auditor ? ' auditor' : ''}`}>
         <div className="activity-item-header">
-          <span className="activity-icon">💭</span>
+          <span className="activity-icon">{auditor ? '🔍' : '💭'}</span>
           <span className="activity-agent">{displayName(agent_id, names)}</span>
+          {auditor && <span className="badge accent small">ИИ-АУДИТОР</span>}
           <span className="badge accent small">РЕФЛ</span>
         </div>
         {content && <div className="activity-content italic">{content}</div>}
@@ -128,17 +141,36 @@ function ActivityItem({ event, names }: { event: SimEvent; names: Record<string,
     const toId = typeof payload.to_id === 'string' ? payload.to_id : ''
     const isPrivate = Boolean(payload.private)
     const content = typeof payload.content === 'string' ? payload.content : ''
+    const displayContent = content && content !== 'msg' ? content : '[сообщение]'
     return (
-      <div className="activity-item message">
+      <div className={`activity-item message${auditor ? ' auditor' : ''}`}>
         <div className="activity-item-header">
+          {auditor && <span className="activity-icon">🔍</span>}
           <span className="activity-agent">{displayName(agent_id, names)}</span>
           <span className="activity-arrow">{isPrivate ? '⇢' : '→'}</span>
           <span className="activity-agent">{displayName(toId, names)}</span>
           {isPrivate && <span className="badge accent small">ПРИВ</span>}
+          {auditor && <span className="badge accent small">ИИ-АУДИТОР</span>}
         </div>
-        {content && content !== 'msg' && (
-          <div className="activity-content">{content}</div>
-        )}
+        <div className="activity-content">{displayContent}</div>
+      </div>
+    )
+  }
+
+  if (event_type === 'graph_updated') {
+    const agentA = typeof payload.agent_a === 'string' ? payload.agent_a : ''
+    const agentB = typeof payload.agent_b === 'string' ? payload.agent_b : ''
+    const delta = typeof payload.delta === 'number' ? payload.delta : 0
+    const sign = delta >= 0 ? '+' : ''
+    return (
+      <div className="activity-item graph-link">
+        <span className="activity-icon">🔗</span>
+        <span className="activity-agent">{displayName(agentA, names)}</span>
+        <span className="activity-arrow">↔</span>
+        <span className="activity-agent">{displayName(agentB, names)}</span>
+        <span className={`activity-delta ${delta >= 0 ? 'success' : 'danger'}`}>
+          {sign}{delta.toFixed(2)}
+        </span>
       </div>
     )
   }
@@ -146,14 +178,21 @@ function ActivityItem({ event, names }: { event: SimEvent; names: Record<string,
   if (event_type === 'reputation_modified') {
     const target = typeof payload.target === 'string' ? payload.target : ''
     const delta = typeof payload.delta === 'number' ? payload.delta : 0
+    const reason = typeof payload.reason === 'string' ? payload.reason : ''
     const sign = delta >= 0 ? '+' : ''
     return (
       <div className="activity-item reputation">
-        <span className="activity-agent">{displayName(target, names)}</span>
-        <span className={`activity-delta ${delta >= 0 ? 'success' : 'danger'}`}>
-          {sign}{delta.toFixed(2)}
-        </span>
-        <span className="badge small">РЕП</span>
+        <div className="activity-item-header">
+          <span className={`activity-rep-arrow ${delta >= 0 ? 'success' : 'danger'}`}>
+            {delta >= 0 ? '▲' : '▼'}
+          </span>
+          <span className="activity-agent">{displayName(target, names)}</span>
+          <span className={`activity-delta ${delta >= 0 ? 'success' : 'danger'}`}>
+            {sign}{delta.toFixed(2)}
+          </span>
+          <span className="badge small">РЕП</span>
+        </div>
+        {reason && <div className="activity-content text-muted">{reason}</div>}
       </div>
     )
   }
@@ -161,8 +200,8 @@ function ActivityItem({ event, names }: { event: SimEvent; names: Record<string,
   // Other events — compact
   return (
     <div className="activity-item generic">
-      <span className={`badge ${eventBadgeClass(event_type)} small`}>
-        {eventBadgeLabel(event_type)}
+      <span className="badge small">
+        {event_type.replace(/_/g, ' ').toUpperCase().slice(0, 12)}
       </span>
       <span className="activity-agent text-muted">{displayName(agent_id, names)}</span>
     </div>

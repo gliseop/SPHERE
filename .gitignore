@@ -4,9 +4,5 @@
 .tmp
 __pycache__/
 *egg-info/
-results/*.jsonl
-results/*.json
-results/summary.json
-results/ANALYSIS.md
-results/*.html
 .playwright-mcp
+results/

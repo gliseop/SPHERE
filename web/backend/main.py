@@ -429,30 +429,73 @@ async def delete_scenario(scenario_id: str) -> None:
 async def run_scenario(scenario_id: str) -> dict:
     """Запустить прогон по сценарию.
 
-    Возвращает 202 Accepted. Реальный запуск через MAGISTRY_RUN_CMD.
-
     Args:
         scenario_id: UUID строка.
 
     Returns:
-        Словарь с статусом и данными сценария.
+        Словарь с run_name и статусом.
     """
-    import os
     from fastapi import HTTPException
+    from web.backend.runner import launch_simulation
 
     _validate_scenario_id(scenario_id)
     path = SCENARIOS_DIR / f"{scenario_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Scenario not found")
     scenario = json.loads(path.read_text(encoding="utf-8"))
-    run_cmd = os.environ.get("MAGISTRY_RUN_CMD")
-    if not run_cmd:
-        return {
-            "status": "accepted",
-            "message": "MAGISTRY_RUN_CMD не задан — запуск недоступен",
-            "scenario": scenario,
-        }
-    return {"status": "accepted", "scenario_id": scenario_id}
+    try:
+        result = launch_simulation(
+            scenario=scenario.get("scenario", "S1"),
+            governance=scenario.get("governance", "G1"),
+            seed=scenario.get("seed") or 42,
+            runner_type=scenario.get("runner", "mock"),
+            rounds=scenario.get("rounds", 10),
+        )
+        return {"status": "accepted", **result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/runs/launch", status_code=202)
+async def launch_run(data: dict) -> dict:
+    """Запустить встроенный прогон (S0-S2).
+
+    Args:
+        data: Словарь с ключами scenario, governance, seed, runner.
+
+    Returns:
+        Словарь с run_name и PID.
+    """
+    from fastapi import HTTPException
+    from web.backend.runner import launch_simulation
+
+    scenario = data.get("scenario", "S1")
+    governance = data.get("governance", "G1")
+    seed = data.get("seed", 42)
+    runner_type = data.get("runner", "mock")
+    rounds = data.get("rounds", 10)
+    try:
+        result = launch_simulation(
+            scenario=scenario,
+            governance=governance,
+            seed=int(seed),
+            runner_type=runner_type,
+            rounds=int(rounds),
+        )
+        return {"status": "accepted", **result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.get("/api/runs/active")
+async def active_runs() -> list[dict]:
+    """Вернуть список активных прогонов.
+
+    Returns:
+        Список словарей с run_name, pid и статусом.
+    """
+    from web.backend.runner import list_active
+    return list_active()
 
 
 if FRONTEND_DIST.exists():

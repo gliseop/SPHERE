@@ -12,6 +12,12 @@ interface Props {
 export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode }: Props) {
   const [runs, setRuns] = useState<RunInfo[]>([])
   const [selected, setSelected] = useState<RunInfo | null>(null)
+  const [showLauncher, setShowLauncher] = useState(false)
+  const [launchScenario, setLaunchScenario] = useState('S1')
+  const [launchGovernance, setLaunchGovernance] = useState('G1')
+  const [launchSeed, setLaunchSeed] = useState('42')
+  const [launchRunner, setLaunchRunner] = useState('mock')
+  const [launching, setLaunching] = useState(false)
 
   useEffect(() => {
     fetch('/api/runs')
@@ -21,6 +27,28 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode }: 
   }, [])
 
   const isIdle = mode === 'idle'
+
+  async function handleLaunch() {
+    setLaunching(true)
+    try {
+      const res = await fetch('/api/runs/launch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scenario: launchScenario,
+          governance: launchGovernance,
+          seed: launchSeed ? Number(launchSeed) : 42,
+          runner: launchRunner,
+        }),
+      })
+      if (res.ok) {
+        setShowLauncher(false)
+        onLive()
+      }
+    } finally {
+      setLaunching(false)
+    }
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -82,6 +110,58 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode }: 
         >
           ● Live
         </button>
+      </div>
+
+      {/* Launcher */}
+      <div style={{ padding: '0.5rem 0.875rem', borderTop: '1px solid var(--border)' }}>
+        <button
+          className="btn-clipped full-width small"
+          onClick={() => setShowLauncher(!showLauncher)}
+          disabled={!isIdle}
+        >
+          {showLauncher ? '▲ Скрыть' : '▼ Запустить новый'}
+        </button>
+
+        {showLauncher && (
+          <div className="launch-form">
+            <div className="launch-form-row">
+              <label>Сценарий</label>
+              <select className="hud-input" value={launchScenario} onChange={(e) => setLaunchScenario(e.target.value)}>
+                <option value="S0">S0</option>
+                <option value="S1">S1</option>
+                <option value="S2">S2</option>
+              </select>
+            </div>
+            <div className="launch-form-row">
+              <label>Управление</label>
+              <select className="hud-input" value={launchGovernance} onChange={(e) => setLaunchGovernance(e.target.value)}>
+                <option value="G0">G0</option>
+                <option value="G1">G1</option>
+                <option value="G2">G2</option>
+                <option value="G3">G3</option>
+              </select>
+            </div>
+            <div className="launch-form-row">
+              <label>Seed</label>
+              <input className="hud-input" type="number" value={launchSeed} onChange={(e) => setLaunchSeed(e.target.value)} placeholder="42" />
+            </div>
+            <div className="launch-form-row">
+              <label>Runner</label>
+              <select className="hud-input" value={launchRunner} onChange={(e) => setLaunchRunner(e.target.value)}>
+                <option value="mock">Mock</option>
+                <option value="cognitive">Cognitive</option>
+              </select>
+            </div>
+            <button
+              className="btn-clipped primary full-width small"
+              onClick={handleLaunch}
+              disabled={launching}
+              style={{ marginTop: '0.5rem' }}
+            >
+              {launching ? 'Запуск...' : '▶ Запустить'}
+            </button>
+          </div>
+        )}
       </div>
 
       {!isIdle && (

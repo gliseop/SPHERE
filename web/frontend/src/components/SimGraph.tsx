@@ -29,6 +29,8 @@ function nodeColor(id: string): string {
   if (id.startsWith('off_')) return '#ef4444'
   if (id.startsWith('biz_')) return '#3b82f6'
   if (id.startsWith('aud_')) return '#f97316'
+  if (id.startsWith('fam_')) return '#f59e0b'
+  if (id.startsWith('soc_')) return '#10b981'
   return '#6b7280'
 }
 
@@ -311,6 +313,8 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
         <NodeTooltip
           node={tooltip.node}
           edges={edges}
+          events={events}
+          names={names ?? {}}
           x={tooltip.x}
           y={tooltip.y}
         />
