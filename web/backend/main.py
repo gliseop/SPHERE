@@ -69,6 +69,24 @@ def _parse_run_name(filename: str) -> dict:
     }
 
 
+def _load_names(run_name: str) -> dict[str, str]:
+    """Загрузить имена агентов из сопроводительного файла.
+
+    Args:
+        run_name: Имя прогона без суффикса _events.jsonl.
+
+    Returns:
+        Словарь agent_id -> отображаемое имя. Пустой словарь если файл отсутствует.
+    """
+    path = RESULTS_DIR / f"{run_name}_names.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 def _build_graph_state(events: list[dict]) -> dict:
     """Реконструировать состояние графа из событий.
 
@@ -211,7 +229,8 @@ async def ws_playback(websocket: WebSocket, name: str, speed: float = 1.0) -> No
     events_so_far: list[dict] = []
     current_round = -1
     meta = _parse_run_name(f"{name}_events.jsonl")
-    await websocket.send_json({"type": "meta", **meta})
+    names = _load_names(name)
+    await websocket.send_json({"type": "meta", **meta, "names": names})
 
     try:
         async for event in _stream_events_from_file(path, speed=speed):
@@ -259,7 +278,8 @@ async def ws_live(websocket: WebSocket) -> None:
                 events_so_far = []
                 current_round = -1
                 meta = _parse_run_name(latest.name)
-                await websocket.send_json({"type": "meta", **meta})
+                names = _load_names(latest.stem.replace("_events", ""))
+                await websocket.send_json({"type": "meta", **meta, "names": names})
 
             # Открываем в бинарном режиме для точного отслеживания байтовой позиции
             async with aiofiles.open(watched_path, "rb") as f:

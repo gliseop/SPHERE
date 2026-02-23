@@ -21,6 +21,7 @@ export interface SimMeta {
   scenario: string
   governance: string
   seed: number | null
+  names: Record<string, string>   // agent_id -> display name
 }
 
 export type WsMessage =

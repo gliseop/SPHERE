@@ -5,6 +5,7 @@ export type SimMode = 'idle' | 'playback' | 'live'
 
 export interface SimState {
   meta: SimMeta | null
+  names: Record<string, string>   // agent_id -> display name
   events: SimEvent[]
   nodes: GraphNode[]
   edges: GraphEdge[]
@@ -15,6 +16,7 @@ export interface SimState {
 
 const INITIAL_STATE: SimState = {
   meta: null,
+  names: {},
   events: [],
   nodes: [],
   edges: [],
@@ -56,7 +58,8 @@ export function useSimulation() {
           case 'meta':
             return {
               ...prev,
-              meta: { scenario: msg.scenario, governance: msg.governance, seed: msg.seed },
+              meta: { scenario: msg.scenario, governance: msg.governance, seed: msg.seed, names: msg.names ?? {} },
+              names: msg.names ?? {},
             }
           case 'event':
             return {
