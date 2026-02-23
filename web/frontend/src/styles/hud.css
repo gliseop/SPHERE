@@ -928,3 +928,153 @@ input[type="range"]::-webkit-slider-thumb {
   border-color: var(--accent);
   background: var(--accent-muted);
 }
+
+/* ===== ScenariosView ===== */
+.scenarios-view,
+.scenarios-editor {
+  padding: 1.5rem;
+  max-width: 860px;
+  margin: 0 auto;
+  overflow-y: auto;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.scenarios-header,
+.scenarios-editor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.scenarios-empty {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--text-muted);
+}
+
+.scenarios-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.scenario-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem;
+  position: relative;
+}
+
+.scenario-card-body { flex: 1; }
+
+.scenario-card-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.scenario-card-desc {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.scenario-card-meta {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.scenario-card-actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+/* Форма редактора */
+.scenarios-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.form-field label {
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.form-field-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.hud-input {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.hud-input:focus { border-color: var(--accent); }
+
+.agents-table {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.agent-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.agent-row .hud-input { flex: 1; }
+.agent-row .hud-input[style] { flex: none; }
+
+.json-preview {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 0.75rem;
+  overflow-x: auto;
+  color: var(--text-secondary);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.scenarios-editor-footer {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
