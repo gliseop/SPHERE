@@ -19,7 +19,7 @@
 {"round": 2, "event_type": "reputation_modified", "agent_id": "system", "payload": {"target": "biz_beta", "delta": 0.66}, "timestamp": "2024-01-02T03:00:00"}
 {"round": 2, "event_type": "reputation_modified", "agent_id": "system", "payload": {"target": "off_clerk", "delta": -0.27}, "timestamp": "2024-01-02T03:00:00"}
 {"round": 2, "event_type": "reputation_modified", "agent_id": "system", "payload": {"target": "biz_gamma", "delta": -1.79}, "timestamp": "2024-01-02T03:00:00"}
-{"round": 3, "event_type": "world_event", "agent_id": "system", "payload": {"type": "round_start", "narrative": "Инспектор приступил к активным наблюдениям. Сеть связей расширяется: замечено сближение заместителя с аудиторскими структурами."}, "timestamp": "2024-01-03T00:00:00"}
+{"round": 3, "event_type": "world_event", "agent_id": "system", "payload": {"type": "round_start", "narrative": "Инспектор приступил к активным наблюдениям. Сеть связей расширяется: замеченное сближение депутата с аудиторскими структурами."}, "timestamp": "2024-01-03T00:00:00"}
 {"round": 3, "event_type": "message_sent", "agent_id": "aud_inspector", "payload": {"to_id": "off_clerk", "private": false, "content": "msg"}, "timestamp": "2024-01-03T01:00:00"}
 {"round": 3, "event_type": "message_sent", "agent_id": "aud_inspector", "payload": {"to_id": "off_deputy", "private": false, "content": "msg"}, "timestamp": "2024-01-03T01:00:00"}
 {"round": 3, "event_type": "message_sent", "agent_id": "biz_alpha", "payload": {"to_id": "off_clerk", "private": false, "content": "msg"}, "timestamp": "2024-01-03T01:00:00"}
@@ -30,7 +30,7 @@
 {"round": 3, "event_type": "graph_updated", "agent_id": "system", "payload": {"agent_a": "off_deputy", "agent_b": "aud_inspector", "delta": 0.75}, "timestamp": "2024-01-03T02:00:00"}
 {"round": 3, "event_type": "reputation_modified", "agent_id": "system", "payload": {"target": "biz_gamma", "delta": 0.06}, "timestamp": "2024-01-03T03:00:00"}
 {"round": 3, "event_type": "reputation_modified", "agent_id": "system", "payload": {"target": "off_deputy", "delta": 0.05}, "timestamp": "2024-01-03T03:00:00"}
-{"round": 3, "event_type": "self_reflection", "agent_id": "aud_inspector", "payload": {"content": "Наблюдаю учащение контактов мэра с подрядчиками в третьем раунде. Связь между клерком и ООО «Бета» требует проверки — возможна скрытая координация."}, "timestamp": "2024-01-03T03:30:00"}
+{"round": 3, "event_type": "self_reflection", "agent_id": "aud_inspector", "payload": {"content": "Наблюдаю учащение контактов мэра с подрядчиками в третьем раунде. Связь между Клерком и ООО «Бета» требует проверки — возможна скрытая координация."}, "timestamp": "2024-01-03T03:30:00"}
 {"round": 4, "event_type": "world_event", "agent_id": "system", "payload": {"type": "round_start", "narrative": "Напряжение растёт. ООО «Бета» резко усилилось в сети — зафиксировано подозрительное сближение с чиновниками."}, "timestamp": "2024-01-04T00:00:00"}
 {"round": 4, "event_type": "message_sent", "agent_id": "off_deputy", "payload": {"to_id": "off_mayor", "private": false, "content": "msg"}, "timestamp": "2024-01-04T01:00:00"}
 {"round": 4, "event_type": "message_sent", "agent_id": "biz_alpha", "payload": {"to_id": "off_clerk", "private": true, "content": "msg"}, "timestamp": "2024-01-04T01:00:00"}
@@ -51,7 +51,7 @@
 {"round": 5, "event_type": "graph_updated", "agent_id": "system", "payload": {"agent_a": "aud_inspector", "agent_b": "off_clerk", "delta": 1.18}, "timestamp": "2024-01-05T02:00:00"}
 {"round": 5, "event_type": "graph_updated", "agent_id": "system", "payload": {"agent_a": "off_clerk", "agent_b": "off_mayor", "delta": 0.51}, "timestamp": "2024-01-05T02:00:00"}
 {"round": 5, "event_type": "reputation_modified", "agent_id": "system", "payload": {"target": "biz_alpha", "delta": -1.99}, "timestamp": "2024-01-05T03:00:00"}
-{"round": 5, "event_type": "self_reflection", "agent_id": "aud_inspector", "payload": {"content": "Паттерн ясен: три из четырёх приватных сообщений исходят от мэра. Репутация ООО «Альфа» критически упала — возможно, жертва схемы."}, "timestamp": "2024-01-05T03:30:00"}
+{"round": 5, "event_type": "self_reflection", "agent_id": "aud_inspector", "payload": {"content": "Паттерн ясен: три из четырёх приватных сообщений исходят от Мэра. Репутация ООО «Альфа» критически упала — возможно, жертва схемы."}, "timestamp": "2024-01-05T03:30:00"}
 {"round": 6, "event_type": "world_event", "agent_id": "system", "payload": {"type": "round_start", "narrative": "Схема становится явной: плотная сеть мэр—подрядчики—клерк функционирует параллельно официальным каналам."}, "timestamp": "2024-01-06T00:00:00"}
 {"round": 6, "event_type": "message_sent", "agent_id": "biz_beta", "payload": {"to_id": "off_deputy", "private": false, "content": "msg"}, "timestamp": "2024-01-06T01:00:00"}
 {"round": 6, "event_type": "message_sent", "agent_id": "off_mayor", "payload": {"to_id": "aud_inspector", "private": true, "content": "msg"}, "timestamp": "2024-01-06T01:00:00"}
@@ -72,4 +72,4 @@
 {"round": 7, "event_type": "graph_updated", "agent_id": "system", "payload": {"agent_a": "biz_gamma", "agent_b": "aud_inspector", "delta": 0.62}, "timestamp": "2024-01-07T02:00:00"}
 {"round": 7, "event_type": "graph_updated", "agent_id": "system", "payload": {"agent_a": "biz_beta", "agent_b": "biz_alpha", "delta": 0.27}, "timestamp": "2024-01-07T02:00:00"}
 {"round": 7, "event_type": "reputation_modified", "agent_id": "system", "payload": {"target": "off_mayor", "delta": -0.99}, "timestamp": "2024-01-07T03:00:00"}
-{"round": 7, "event_type": "self_reflection", "agent_id": "aud_inspector", "payload": {"content": "Итоговый вывод: сеть с центром в мэре охватила 5 из 7 агентов. Рекомендую передать материалы в надзорный орган."}, "timestamp": "2024-01-07T03:30:00"}
+{"round": 7, "event_type": "self_reflection", "agent_id": "aud_inspector", "payload": {"content": "Итоговый вывод: сеть с центром в Мэре охватила 5 из 7 агентов. Рекомендую передать материалы в надзорный орган."}, "timestamp": "2024-01-07T03:30:00"}
