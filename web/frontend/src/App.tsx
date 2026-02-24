@@ -8,7 +8,9 @@ import { ActivityFeed } from './components/ActivityFeed'
 import { RunSelector } from './components/RunSelector'
 import { AgentList } from './components/AgentList'
 import { ScenariosView } from './components/ScenariosView'
+import { RunsView } from './components/RunsView'
 import { getBool } from './utils/payload'
+import { apiClient } from './utils/apiClient'
 import type { RunInfo } from './types'
 import './styles/hud.css'
 
@@ -53,10 +55,20 @@ function ResizeHandle({ onDrag }: { onDrag: (delta: number) => void }) {
 export default function App() {
   const { state, mode, startPlayback, startLive, disconnect } = useSimulation()
   const auth = useAuth()
-  const [view, setView] = useState<'monitor' | 'scenarios'>('monitor')
+  const [view, setView] = useState<'monitor' | 'scenarios' | 'runs'>('monitor')
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [speed, setSpeed] = useState(3.0)
   const [focusDay, setFocusDay] = useState<string | null>(null)
+  const [activeRuns, setActiveRuns] = useState<Array<{ run_name: string; pid: number; status: 'running' | 'finished'; returncode?: number }>>([])
+
+  useEffect(() => {
+    function poll() {
+      apiClient.get('/api/runs/active').then((r) => r.json()).then(setActiveRuns).catch(() => {})
+    }
+    poll()
+    const interval = setInterval(poll, 5_000)
+    return () => clearInterval(interval)
+  }, [])
 
   const [leftWidth, setLeftWidth] = useState<number>(() => {
     const stored = localStorage.getItem('magistry-left-w')
@@ -129,6 +141,17 @@ export default function App() {
               onClick={() => setView('scenarios')}
             >
               Сценарии
+            </button>
+            <button
+              className={`hud-nav-tab${view === 'runs' ? ' active' : ''}`}
+              onClick={() => setView('runs')}
+            >
+              Прогоны
+              {activeRuns.filter((a) => a.status === 'running').length > 0 && (
+                <span className="nav-active-badge">
+                  {activeRuns.filter((a) => a.status === 'running').length}
+                </span>
+              )}
             </button>
           </nav>
           {state.meta && (
@@ -229,6 +252,8 @@ export default function App() {
                   onSpeedChange={setSpeed}
                   mode={mode}
                   user={auth.user}
+                  activeRuns={activeRuns.filter((a) => a.status === 'running').map((a) => a.run_name)}
+                  onGoToRuns={() => setView('runs')}
                 />
               </div>
               <div className="panel-left-agents">
@@ -288,6 +313,27 @@ export default function App() {
       {view === 'scenarios' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <ScenariosView onLaunch={() => setView('monitor')} user={auth.user} />
+        </div>
+      )}
+
+      {view === 'runs' && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <RunsView
+            onPlayback={(run: RunInfo, spd: number) => {
+              setSelectedNode(null)
+              startPlayback(run, spd)
+              setView('monitor')
+            }}
+            onLive={() => {
+              setSelectedNode(null)
+              startLive()
+              setView('monitor')
+            }}
+            speed={speed}
+            mode={mode}
+            user={auth.user}
+            activeRuns={activeRuns}
+          />
         </div>
       )}
     </div>

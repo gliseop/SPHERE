@@ -15,21 +15,24 @@ _RESULTS_DIR = _PROJECT_ROOT / "results"
 _active: dict[str, subprocess.Popen] = {}
 
 
-def _write_names_json(run_name: str, scenario_id: str) -> None:
+def _write_names_json(run_name: str, scenario_id: str, governance: str) -> None:
     """Сгенерировать файл имён агентов из конфигурации сценария.
+
+    Включает governance-агентов (аудитор, присяжные) для соответствующих
+    режимов управления, чтобы они отображались на графе с именами.
 
     Args:
         run_name: Имя прогона (S1_G1_seed42).
         scenario_id: Идентификатор сценария (S0, S1, S2).
+        governance: Идентификатор режима управления (G0-G3).
     """
     try:
-        from magistry_sim.enums import ScenarioId
-        from magistry_sim.scenarios import get_scenario
+        from magistry_sim.enums import GovernanceMode, ScenarioId
+        from magistry_sim.scenarios import add_governance_agents, get_scenario
 
-        scenario = get_scenario(ScenarioId(scenario_id))
-        names: dict[str, str] = {}
-        for agent in scenario.agents:
-            names[agent.id] = agent.name
+        base = get_scenario(ScenarioId(scenario_id))
+        full = add_governance_agents(base, GovernanceMode(governance))
+        names = {agent.id: agent.name for agent in full.agents}
         path = _RESULTS_DIR / f"{run_name}_names.json"
         path.write_text(
             json.dumps(names, ensure_ascii=False, indent=2),
@@ -76,7 +79,7 @@ def launch_simulation(
     jsonl_path = _RESULTS_DIR / f"{run_name}_events.jsonl"
     summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
 
-    _write_names_json(run_name, scenario)
+    _write_names_json(run_name, scenario, governance)
 
     cmd = [
         sys.executable, "-m", "magistry_sim.cli",

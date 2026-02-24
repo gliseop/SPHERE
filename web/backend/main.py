@@ -579,5 +579,26 @@ async def active_runs(_user: User = Depends(require_viewer)) -> list[dict]:
     return list_active()
 
 
+@app.post("/api/runs/{run_name}/stop")
+async def stop_run(run_name: str, _user: User = Depends(require_admin)) -> dict:
+    """Остановить запущенный прогон.
+
+    Args:
+        run_name: Имя прогона.
+        _user: Аутентифицированный пользователь с ролью admin.
+
+    Returns:
+        Словарь со статусом остановки.
+    """
+    from fastapi import HTTPException
+    from web.backend.runner import stop_simulation
+
+    _validate_run_name(run_name)
+    result = stop_simulation(run_name)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Run not found or not running")
+    return result
+
+
 if FRONTEND_DIST.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="static")
