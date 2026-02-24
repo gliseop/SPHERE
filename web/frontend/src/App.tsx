@@ -1,5 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useSimulation } from './hooks/useSimulation'
+import { useAuth } from './hooks/useAuth'
+import { LoginPage } from './pages/LoginPage'
 import { SimGraph } from './components/SimGraph'
 import { Timeline } from './components/RoundScrubber'
 import { ActivityFeed } from './components/ActivityFeed'
@@ -12,6 +14,7 @@ import './styles/hud.css'
 
 export default function App() {
   const { state, mode, startPlayback, startLive, disconnect } = useSimulation()
+  const auth = useAuth()
   const [view, setView] = useState<'monitor' | 'scenarios'>('monitor')
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [speed, setSpeed] = useState(3.0)
@@ -34,6 +37,10 @@ export default function App() {
     const priv = msgs.filter((e) => getBool(e.payload, 'private')).length
     return (priv / Math.max(1, msgs.length)) * 100
   }, [state.events])
+
+  if (!auth.isAuthenticated) {
+    return <LoginPage onLogin={auth.login} />
+  }
 
   return (
     <div className="app-root">
@@ -115,6 +122,26 @@ export default function App() {
             style={{ marginLeft: '0.5rem' }}
           >
             {theme === 'light' ? '◐' : '◑'}
+          </button>
+          <span
+            className="hud-header-stat-label"
+            style={{ marginLeft: '0.75rem', fontSize: '0.6rem', opacity: 0.8 }}
+          >
+            {auth.user?.username}
+          </span>
+          <span
+            className={`badge small${auth.user?.role === 'admin' ? ' success' : ''}`}
+            style={{ marginLeft: '0.25rem' }}
+          >
+            {auth.user?.role}
+          </span>
+          <button
+            className="btn-clipped small danger"
+            onClick={auth.logout}
+            title="Выйти"
+            style={{ marginLeft: '0.5rem' }}
+          >
+            ✕
           </button>
         </div>
       </header>
