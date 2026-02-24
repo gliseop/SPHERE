@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { apiClient } from '../utils/apiClient'
+import type { AuthUser } from '../hooks/useAuth'
 
 interface Agent {
   id: string
@@ -30,30 +32,27 @@ const ROLE_OPTIONS = [
   { value: 'auditor',  label: 'Аудитор' },
 ]
 
-export function ScenariosView({ onLaunch, onStartLive }: { onLaunch?: () => void; onStartLive?: () => void }) {
+export function ScenariosView({ onLaunch, onStartLive, user }: {
+  onLaunch?: () => void
+  onStartLive?: () => void
+  user: AuthUser | null
+}) {
   const [scenarios, setScenarios] = useState<Scenario[]>([])
   const [editing, setEditing] = useState<Scenario | null>(null)
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    fetch('/api/scenarios')
-      .then((r) => r.json())
-      .then(setScenarios)
-      .catch(() => {})
+    apiClient.get('/api/scenarios').then((r) => r.json()).then(setScenarios).catch(() => {})
   }, [])
 
   async function handleSave() {
     if (!editing) return
     setSaving(true)
     try {
-      const method = editing.id ? 'PUT' : 'POST'
-      const url = editing.id ? `/api/scenarios/${editing.id}` : '/api/scenarios'
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(editing),
-      })
+      const res = editing.id
+        ? await apiClient.put(`/api/scenarios/${editing.id}`, editing)
+        : await apiClient.post('/api/scenarios', editing)
       const saved: Scenario = await res.json()
       setScenarios((prev) =>
         editing.id
@@ -67,13 +66,13 @@ export function ScenariosView({ onLaunch, onStartLive }: { onLaunch?: () => void
   }
 
   async function handleDelete(id: string) {
-    await fetch(`/api/scenarios/${id}`, { method: 'DELETE' })
+    await apiClient.delete(`/api/scenarios/${id}`)
     setScenarios((prev) => prev.filter((s) => s.id !== id))
   }
 
   async function handleRun(id: string) {
     try {
-      const res = await fetch(`/api/scenarios/${id}/run`, { method: 'POST' })
+      const res = await apiClient.post(`/api/scenarios/${id}/run`)
       if (res.ok) {
         onLaunch?.()
         onStartLive?.()
@@ -237,7 +236,7 @@ export function ScenariosView({ onLaunch, onStartLive }: { onLaunch?: () => void
           >
             {saving ? 'Сохранение...' : '✓ Сохранить'}
           </button>
-          {editing.id && (
+          {editing.id && user?.role === 'admin' && (
             <button
               className="btn-clipped success"
               onClick={async () => {
@@ -258,9 +257,11 @@ export function ScenariosView({ onLaunch, onStartLive }: { onLaunch?: () => void
     <div className="scenarios-view">
       <div className="scenarios-header">
         <span>Сценарии ({scenarios.length})</span>
-        <button className="btn-clipped primary" onClick={() => setEditing({ ...EMPTY_SCENARIO })}>
-          + Создать сценарий
-        </button>
+        {user?.role === 'admin' && (
+          <button className="btn-clipped primary" onClick={() => setEditing({ ...EMPTY_SCENARIO })}>
+            + Создать сценарий
+          </button>
+        )}
       </div>
 
       {scenarios.length === 0 && (
@@ -287,9 +288,13 @@ export function ScenariosView({ onLaunch, onStartLive }: { onLaunch?: () => void
               </div>
             </div>
             <div className="scenario-card-actions">
-              <button className="btn-clipped success small" onClick={() => s.id && handleRun(s.id)} title="Запустить">▶</button>
-              <button className="btn-clipped small" onClick={() => setEditing({ ...s })} title="Редактировать">✎</button>
-              <button className="btn-clipped danger small" onClick={() => s.id && handleDelete(s.id)} title="Удалить">✕</button>
+              {user?.role === 'admin' && (
+                <>
+                  <button className="btn-clipped success small" onClick={() => s.id && handleRun(s.id)} title="Запустить">▶</button>
+                  <button className="btn-clipped small" onClick={() => setEditing({ ...s })} title="Редактировать">✎</button>
+                  <button className="btn-clipped danger small" onClick={() => s.id && handleDelete(s.id)} title="Удалить">✕</button>
+                </>
+              )}
             </div>
           </div>
         ))}

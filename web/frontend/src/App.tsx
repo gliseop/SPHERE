@@ -163,6 +163,7 @@ export default function App() {
                   speed={speed}
                   onSpeedChange={setSpeed}
                   mode={mode}
+                  user={auth.user}
                 />
               </div>
               <div className="panel-left-agents">
@@ -217,7 +218,7 @@ export default function App() {
 
       {view === 'scenarios' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <ScenariosView onLaunch={() => setView('monitor')} onStartLive={startLive} />
+          <ScenariosView onLaunch={() => setView('monitor')} onStartLive={startLive} user={auth.user} />
         </div>
       )}
     </div>
