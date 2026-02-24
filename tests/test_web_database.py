@@ -1,5 +1,6 @@
 """Тесты SQLite-хранилища учётных записей."""
 import pytest
+import sqlite3
 import web.backend.database as db_module
 
 
@@ -24,7 +25,7 @@ def test_get_nonexistent_user():
 
 def test_duplicate_username_raises():
     db_module.create_user("alice", "hash1", "admin")
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError):
         db_module.create_user("alice", "hash2", "viewer")
 
 
