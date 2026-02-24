@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { getToken } from '../utils/apiClient'
 import type { GraphEdge, GraphNode, RunInfo, SimEvent, SimMeta, WsMessage } from '../types'
 
 export type SimMode = 'idle' | 'playback' | 'live'
@@ -90,7 +91,9 @@ export function useSimulation() {
   const startPlayback = useCallback(
     (run: RunInfo, speed: number = 2.0) => {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const url = `${proto}//${window.location.host}/ws/playback/${run.name}?speed=${speed}`
+      const token = getToken()
+      const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
+      const url = `${proto}//${window.location.host}/ws/playback/${run.name}?speed=${speed}${tokenParam}`
       connect(url, 'playback')
     },
     [connect]
@@ -98,7 +101,9 @@ export function useSimulation() {
 
   const startLive = useCallback(() => {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const url = `${proto}//${window.location.host}/ws/live`
+    const token = getToken()
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ''
+    const url = `${proto}//${window.location.host}/ws/live${tokenParam}`
     connect(url, 'live')
   }, [connect])
 
