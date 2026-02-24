@@ -1,0 +1,15 @@
+{
+  "id": "seed_s0_g0",
+  "name": "Чистая сделка без контроля",
+  "description": "Базовый сценарий S0 (легальная закупка) в среде без внешнего контроля (G0). Все агенты действуют добросовестно, коррупционные стимулы отсутствуют.",
+  "scenario": "S0",
+  "governance": "G0",
+  "rounds": 10,
+  "seed": 1,
+  "runner": "mock",
+  "agents": [
+    { "id": "off_ivanov", "name": "Иванов", "role": "official", "initial_reputation": 8.0 },
+    { "id": "biz_stroytech", "name": "СтройТех", "role": "business", "initial_reputation": 7.5 },
+    { "id": "biz_proekt_m", "name": "Проект-М", "role": "business", "initial_reputation": 7.0 }
+  ]
+}

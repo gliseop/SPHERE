@@ -1,0 +1,16 @@
+{
+  "id": "seed_s1_g1",
+  "name": "Прямой сговор + аудитор",
+  "description": "Сценарий S1 (прямой сговор чиновника и подрядчика) под наблюдением рекомендательного аудитора (G1). Аудитор фиксирует подозрения, но не имеет полномочий на блокировку.",
+  "scenario": "S1",
+  "governance": "G1",
+  "rounds": 10,
+  "seed": 42,
+  "runner": "mock",
+  "agents": [
+    { "id": "off_petrov", "name": "Петров", "role": "official", "initial_reputation": 7.0 },
+    { "id": "biz_favorit", "name": "Фаворит", "role": "business", "initial_reputation": 6.5 },
+    { "id": "biz_konkur", "name": "Конкурент", "role": "business", "initial_reputation": 7.5 },
+    { "id": "aud_inspector", "name": "Инспектор", "role": "auditor", "initial_reputation": 9.0 }
+  ]
+}

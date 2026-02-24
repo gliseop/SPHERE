@@ -1,0 +1,16 @@
+{
+  "id": "seed_s2_g2",
+  "name": "Кумовство + репутация",
+  "description": "Сценарий S2 (кумовство при найме — чиновник продвигает родственника) под управлением аудитора с репутационным механизмом (G2). Репутация агентов влияет на доверие и полномочия.",
+  "scenario": "S2",
+  "governance": "G2",
+  "rounds": 10,
+  "seed": 99,
+  "runner": "mock",
+  "agents": [
+    { "id": "off_sidorov", "name": "Сидоров", "role": "official", "initial_reputation": 7.0 },
+    { "id": "biz_rodstven", "name": "Родственник", "role": "business", "initial_reputation": 5.0 },
+    { "id": "biz_profi", "name": "Профессионал", "role": "business", "initial_reputation": 8.5 },
+    { "id": "aud_nadzor", "name": "Надзор", "role": "auditor", "initial_reputation": 9.0 }
+  ]
+}

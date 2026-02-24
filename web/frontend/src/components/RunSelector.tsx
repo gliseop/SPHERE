@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { RunInfo } from '../types'
 import { apiClient } from '../utils/apiClient'
 import type { AuthUser } from '../hooks/useAuth'
@@ -12,6 +12,8 @@ interface Props {
   user: AuthUser | null
 }
 
+const PAGE_SIZE = 20
+
 export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, user }: Props) {
   const [runs, setRuns] = useState<RunInfo[]>([])
   const [selected, setSelected] = useState<RunInfo | null>(null)
@@ -21,10 +23,21 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, us
   const [launchSeed, setLaunchSeed] = useState('42')
   const [launchRunner, setLaunchRunner] = useState('mock')
   const [launching, setLaunching] = useState(false)
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
 
-  useEffect(() => {
+  const refreshRuns = useCallback(() => {
     apiClient.get('/api/runs').then((r) => r.json()).then(setRuns).catch(console.error)
   }, [])
+
+  useEffect(() => {
+    refreshRuns()
+  }, [refreshRuns])
+
+  useEffect(() => {
+    if (mode === 'idle') return
+    const interval = setInterval(refreshRuns, 10_000)
+    return () => clearInterval(interval)
+  }, [mode, refreshRuns])
 
   const isIdle = mode === 'idle'
 
@@ -39,12 +52,15 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, us
       })
       if (res.ok) {
         setShowLauncher(false)
-        onLive()
+        refreshRuns()
       }
     } finally {
       setLaunching(false)
     }
   }
+
+  const visibleRuns = runs.slice(0, visibleCount)
+  const hasMore = runs.length > visibleCount
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -55,7 +71,7 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, us
       </div>
 
       <div className="run-list" style={{ flex: '0 0 auto' }}>
-        {runs.map((r) => (
+        {visibleRuns.map((r) => (
           <div
             key={r.name}
             className={`run-item ${selected?.name === r.name ? 'selected' : ''}`}
@@ -68,6 +84,15 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, us
             <div className="run-item-meta">{r.size_kb} KB</div>
           </div>
         ))}
+        {hasMore && (
+          <button
+            className="btn-clipped small full-width"
+            onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
+            style={{ margin: '0.25rem 0.5rem', width: 'calc(100% - 1rem)' }}
+          >
+            Показать ещё ({runs.length - visibleCount})
+          </button>
+        )}
         {runs.length === 0 && (
           <div style={{ padding: '0.75rem 0.875rem', fontSize: '0.5625rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
             Нет прогонов

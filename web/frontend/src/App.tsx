@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useCallback, useMemo, useState, useEffect, useRef } from 'react'
 import { useSimulation } from './hooks/useSimulation'
 import { useAuth } from './hooks/useAuth'
 import { LoginPage } from './pages/LoginPage'
@@ -12,6 +12,44 @@ import { getBool } from './utils/payload'
 import type { RunInfo } from './types'
 import './styles/hud.css'
 
+const MIN_PANEL = 150
+const MAX_PANEL = 400
+
+function ResizeHandle({ onDrag }: { onDrag: (delta: number) => void }) {
+  const dragging = useRef(false)
+  const lastX = useRef(0)
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragging.current = true
+    lastX.current = e.clientX
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!dragging.current) return
+      const delta = ev.clientX - lastX.current
+      lastX.current = ev.clientX
+      onDrag(delta)
+    }
+
+    const onMouseUp = () => {
+      dragging.current = false
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [onDrag])
+
+  return (
+    <div className="resize-handle" onMouseDown={onMouseDown} />
+  )
+}
+
 export default function App() {
   const { state, mode, startPlayback, startLive, disconnect } = useSimulation()
   const auth = useAuth()
@@ -19,6 +57,18 @@ export default function App() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [speed, setSpeed] = useState(3.0)
   const [focusDay, setFocusDay] = useState<string | null>(null)
+
+  const [leftWidth, setLeftWidth] = useState<number>(() => {
+    const stored = localStorage.getItem('magistry-left-w')
+    return stored ? Math.max(MIN_PANEL, Math.min(MAX_PANEL, Number(stored))) : 200
+  })
+  const [rightWidth, setRightWidth] = useState<number>(() => {
+    const stored = localStorage.getItem('magistry-right-w')
+    return stored ? Math.max(MIN_PANEL, Math.min(MAX_PANEL, Number(stored))) : 260
+  })
+
+  useEffect(() => { localStorage.setItem('magistry-left-w', String(leftWidth)) }, [leftWidth])
+  useEffect(() => { localStorage.setItem('magistry-right-w', String(rightWidth)) }, [rightWidth])
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const stored = localStorage.getItem('magistry-theme') as 'light' | 'dark' | null
@@ -31,14 +81,27 @@ export default function App() {
     localStorage.setItem('magistry-theme', theme)
   }, [theme])
 
+  const meaningfulEvents = useMemo(
+    () => state.events.filter((e) => e.event_type !== 'idle'),
+    [state.events],
+  )
+
   const privateRatio = useMemo(() => {
-    if (!state.events.length) return 0
-    const msgs = state.events.filter(
+    if (!meaningfulEvents.length) return 0
+    const msgs = meaningfulEvents.filter(
       (e) => e.event_type === 'message_sent' || e.event_type === 'message'
     )
     const priv = msgs.filter((e) => getBool(e.payload, 'private')).length
     return (priv / Math.max(1, msgs.length)) * 100
-  }, [state.events])
+  }, [meaningfulEvents])
+
+  const handleLeftDrag = useCallback((delta: number) => {
+    setLeftWidth((w) => Math.max(MIN_PANEL, Math.min(MAX_PANEL, w + delta)))
+  }, [])
+
+  const handleRightDrag = useCallback((delta: number) => {
+    setRightWidth((w) => Math.max(MIN_PANEL, Math.min(MAX_PANEL, w - delta)))
+  }, [])
 
   if (!auth.isAuthenticated) {
     return <LoginPage onLogin={auth.login} />
@@ -95,7 +158,7 @@ export default function App() {
           </div>
           <div className="hud-header-stat">
             <span className="hud-header-stat-label">Событий</span>
-            <span className="hud-header-stat-value">{state.events.length}</span>
+            <span className="hud-header-stat-value">{meaningfulEvents.length}</span>
           </div>
           <div className="hud-header-stat">
             <span className="hud-header-stat-label">Приватных</span>
@@ -151,7 +214,7 @@ export default function App() {
       {view === 'monitor' && (
         <>
           <div className="app-main">
-            <aside className="panel-left" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <aside className="panel-left" style={{ width: leftWidth, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <div className="panel-left-controls">
                 <RunSelector
                   onPlayback={(run: RunInfo, spd: number) => {
@@ -180,6 +243,8 @@ export default function App() {
               </div>
             </aside>
 
+            <ResizeHandle onDrag={handleLeftDrag} />
+
             <main style={{ flex: 1, position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               <SimGraph
                 nodes={state.nodes}
@@ -199,7 +264,9 @@ export default function App() {
               )}
             </main>
 
-            <aside className="panel-right">
+            <ResizeHandle onDrag={handleRightDrag} />
+
+            <aside className="panel-right" style={{ width: rightWidth }}>
               <ActivityFeed
                 events={state.events}
                 names={state.names}
@@ -220,7 +287,7 @@ export default function App() {
 
       {view === 'scenarios' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <ScenariosView onLaunch={() => setView('monitor')} onStartLive={startLive} user={auth.user} />
+          <ScenariosView onLaunch={() => setView('monitor')} user={auth.user} />
         </div>
       )}
     </div>

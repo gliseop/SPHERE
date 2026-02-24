@@ -59,17 +59,17 @@ def _validate_run_name(name: str) -> None:
     if not str(resolved).startswith(str(RESULTS_DIR)):
         raise HTTPException(status_code=400, detail="Invalid run name")
 
-_SCENARIO_ID_RE = re.compile(r"^[0-9a-f\-]{36}$")
+_SCENARIO_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
 
 def _validate_scenario_id(scenario_id: str) -> None:
-    """Проверить UUID сценария.
+    """Проверить идентификатор сценария (UUID или slug).
 
     Args:
-        scenario_id: UUID строка.
+        scenario_id: Строка-идентификатор.
 
     Raises:
-        HTTPException 400: Если не UUID формат.
+        HTTPException 400: Если содержит недопустимые символы.
         HTTPException 400: Если итоговый путь выходит за пределы SCENARIOS_DIR.
     """
     from fastapi import HTTPException
@@ -129,16 +129,20 @@ def _parse_run_name(filename: str) -> dict:
         Словарь с полями scenario, governance, seed (если есть).
     """
     m = re.match(
-        r"(?P<scenario>S\d+)_(?P<governance>G\d+)(?:_seed(?P<seed>\d+))?_events\.jsonl",
+        r"(?P<scenario>S\d+)_(?P<governance>G\d+)(?:_seed(?P<seed>\d+))?(?:_\w+)?_events\.jsonl",
         filename,
     )
-    if not m:
-        return {"scenario": "?", "governance": "?", "seed": None}
-    return {
-        "scenario": m.group("scenario"),
-        "governance": m.group("governance"),
-        "seed": int(m.group("seed")) if m.group("seed") else None,
-    }
+    if m:
+        return {
+            "scenario": m.group("scenario"),
+            "governance": m.group("governance"),
+            "seed": int(m.group("seed")) if m.group("seed") else None,
+        }
+    # Нестандартное имя — извлекаем всё до _events как название
+    m2 = re.match(r"(?P<name>.+?)_events\.jsonl$", filename)
+    if m2:
+        return {"scenario": m2.group("name"), "governance": "", "seed": None}
+    return {"scenario": "?", "governance": "?", "seed": None}
 
 
 def _load_names(run_name: str) -> dict[str, str]:

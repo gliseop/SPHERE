@@ -34,6 +34,11 @@ function connectionCount(id: string, edges: GraphEdge[]): number {
   return edges.filter((e) => e.source === id || e.target === id).length
 }
 
+function repTooltip(rep: number): string {
+  const zone = rep >= 7 ? 'высокая' : rep >= 5 ? 'средняя' : 'низкая'
+  return `Репутация: ${rep.toFixed(1)} / 10 (${zone})`
+}
+
 export function AgentList({ nodes, edges, events, selectedNode, names, onSelect }: Props) {
   const [expandedRep, setExpandedRep] = useState<string | null>(null)
 
@@ -59,10 +64,14 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect 
         )
         const isExpanded = expandedRep === node.id
 
-        // История репутации для данного агента
-        const repHistory = events
-          .filter((e) => e.event_type === 'reputation_modified' && getString(e.payload, 'target') === node.id)
-          .slice(-5)
+        const repHistory = events.filter(
+          (e) => e.event_type === 'reputation_modified' && getString(e.payload, 'target') === node.id
+        )
+
+        const totalDelta = repHistory.reduce(
+          (sum, ev) => sum + (getNumber(ev.payload, 'delta') ?? 0),
+          0,
+        )
 
         return (
           <div key={node.id}>
@@ -76,7 +85,7 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect 
                 <span className={`badge ${roleClass(node.id)} small`}>{roleLabel(node.id)}</span>
               </div>
               <div className="agent-list-row" style={{ gap: '0.5rem', marginTop: '3px' }}>
-                <div className="rep-bar">
+                <div className="rep-bar" title={repTooltip(node.reputation)}>
                   <div
                     className={`rep-bar-fill ${node.reputation < 5 ? 'danger' : node.reputation < 7 ? 'warn' : ''}`}
                     style={{ width: `${repPct}%` }}
@@ -103,29 +112,37 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect 
 
             {isExpanded && repHistory.length > 0 && (
               <div className="rep-history">
-                {repHistory.map((ev, i) => {
-                  const delta = getNumber(ev.payload, 'delta') ?? 0
-                  const reason = getString(ev.payload, 'reason')
-                  const sign = delta >= 0 ? '+' : ''
-                  return (
-                    <div key={i} className="rep-history-item">
-                      <span className="rep-history-round">
-                        {typeof ev.round === 'number'
-                          ? `R${ev.round}`
-                          : (() => {
-                              const ms = ev.timestamp ? Date.parse(ev.timestamp) : NaN
-                              if (!Number.isFinite(ms)) return '--:--'
-                              const d = new Date(ms)
-                              return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-                            })()}
-                      </span>
-                      <span className={`rep-history-delta ${delta >= 0 ? 'success' : 'danger'}`}>
-                        {sign}{delta.toFixed(2)}
-                      </span>
-                      {reason && <span className="rep-history-reason">{reason}</span>}
-                    </div>
-                  )
-                })}
+                <div className="rep-history-summary">
+                  {repHistory.length} изм., {'\u0394'} total:{' '}
+                  <span className={totalDelta >= 0 ? 'rep-history-delta success' : 'rep-history-delta danger'}>
+                    {totalDelta >= 0 ? '+' : ''}{totalDelta.toFixed(2)}
+                  </span>
+                </div>
+                <div className="rep-history-scroll">
+                  {repHistory.map((ev, i) => {
+                    const delta = getNumber(ev.payload, 'delta') ?? 0
+                    const reason = getString(ev.payload, 'reason')
+                    const sign = delta >= 0 ? '+' : ''
+                    return (
+                      <div key={i} className="rep-history-item">
+                        <span className="rep-history-round">
+                          {typeof ev.round === 'number'
+                            ? `R${ev.round}`
+                            : (() => {
+                                const ms = ev.timestamp ? Date.parse(ev.timestamp) : NaN
+                                if (!Number.isFinite(ms)) return '--:--'
+                                const d = new Date(ms)
+                                return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                              })()}
+                        </span>
+                        <span className={`rep-history-delta ${delta >= 0 ? 'success' : 'danger'}`}>
+                          {sign}{delta.toFixed(2)}
+                        </span>
+                        {reason && <span className="rep-history-reason">{reason}</span>}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
           </div>

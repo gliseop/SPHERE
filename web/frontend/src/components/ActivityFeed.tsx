@@ -293,7 +293,7 @@ function EventView({
           <span className="activity-agent">{dn(toId, names)}</span>
           {timestamp && <span className="activity-time">{fmtTime(timestamp)}</span>}
         </div>
-        {content && <div className="activity-content">{content}</div>}
+        {content && content !== 'msg' && <div className="activity-content">{content}</div>}
         {response && <div className="activity-response">{response}</div>}
       </div>
     )
@@ -321,8 +321,9 @@ export function ActivityFeed({
   const pausedRef = useRef(false)
 
   const filtered = useMemo(() => {
-    if (!selectedAgent) return events
-    return events.filter((event) => belongsToAgent(event, selectedAgent))
+    const noIdle = events.filter((e) => e.event_type !== 'idle')
+    if (!selectedAgent) return noIdle
+    return noIdle.filter((event) => belongsToAgent(event, selectedAgent))
   }, [events, selectedAgent])
 
   const sorted = useMemo(() => {

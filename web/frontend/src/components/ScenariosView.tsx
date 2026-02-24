@@ -13,6 +13,8 @@ interface Scenario {
   id?: string
   name: string
   description?: string
+  scenario: string
+  governance: string
   rounds: number
   seed: number | null
   agents: Agent[]
@@ -22,6 +24,8 @@ interface Scenario {
 const EMPTY_SCENARIO: Scenario = {
   name: '',
   description: '',
+  scenario: 'S1',
+  governance: 'G1',
   rounds: 10,
   seed: null,
   agents: [],
@@ -34,7 +38,20 @@ const ROLE_OPTIONS = [
   { value: 'auditor',  label: 'Аудитор' },
 ]
 
-export function ScenariosView({ onLaunch, onStartLive, user }: {
+const SCENARIO_OPTIONS = [
+  { value: 'S0', label: 'S0 — Чистая сделка' },
+  { value: 'S1', label: 'S1 — Прямой сговор' },
+  { value: 'S2', label: 'S2 — Кумовство при найме' },
+]
+
+const GOVERNANCE_OPTIONS = [
+  { value: 'G0', label: 'G0 — Без контроля' },
+  { value: 'G1', label: 'G1 — Аудитор (рекомендательный)' },
+  { value: 'G2', label: 'G2 — Аудитор с репутацией' },
+  { value: 'G3', label: 'G3 — Полный контроль (трибунал)' },
+]
+
+export function ScenariosView({ onLaunch, user }: {
   onLaunch?: () => void
   onStartLive?: () => void
   user: AuthUser | null
@@ -77,7 +94,6 @@ export function ScenariosView({ onLaunch, onStartLive, user }: {
       const res = await apiClient.post(`/api/scenarios/${id}/run`)
       if (res.ok) {
         onLaunch?.()
-        onStartLive?.()
       }
     } catch {
       // Ошибка сети — молча обрабатываем
@@ -148,6 +164,33 @@ export function ScenariosView({ onLaunch, onStartLive, user }: {
               onChange={(e) => setEditing({ ...editing, description: e.target.value })}
               placeholder="Краткое описание"
             />
+          </div>
+
+          <div className="form-row">
+            <div className="form-field">
+              <label>Шаблон сценария</label>
+              <select
+                className="hud-input"
+                value={editing.scenario}
+                onChange={(e) => setEditing({ ...editing, scenario: e.target.value })}
+              >
+                {SCENARIO_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-field">
+              <label>Режим управления</label>
+              <select
+                className="hud-input"
+                value={editing.governance}
+                onChange={(e) => setEditing({ ...editing, governance: e.target.value })}
+              >
+                {GOVERNANCE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="form-row">
@@ -296,6 +339,8 @@ export function ScenariosView({ onLaunch, onStartLive, user }: {
               <div className="scenario-card-title">{s.name}</div>
               {s.description && <div className="scenario-card-desc">{s.description}</div>}
               <div className="scenario-card-meta">
+                {s.scenario && <span className="badge small accent">{s.scenario}</span>}
+                {s.governance && <span className="badge small info">{s.governance}</span>}
                 <span className="badge small">{s.agents?.length ?? 0} аг.</span>
                 <span className="badge small">{s.rounds} раундов</span>
                 {s.seed !== null && <span className="badge small">seed {s.seed}</span>}
@@ -308,7 +353,7 @@ export function ScenariosView({ onLaunch, onStartLive, user }: {
               {user?.role === 'admin' && (
                 <>
                   <button className="btn-clipped success small" onClick={() => s.id && handleRun(s.id)} title="Запустить">▶</button>
-                  <button className="btn-clipped small" onClick={() => setEditing({ ...s })} title="Редактировать">✎</button>
+                  <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_SCENARIO, ...s })} title="Редактировать">✎</button>
                   <button className="btn-clipped danger small" onClick={() => s.id && handleDelete(s.id)} title="Удалить">✕</button>
                 </>
               )}
