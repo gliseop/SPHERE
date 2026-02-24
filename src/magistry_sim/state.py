@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from .cases import Case
@@ -21,8 +23,14 @@ class Message(BaseModel):
     to_id: str
     content: str
     response: str = ""
+    thread_id: str = ""
+    channel: str = "telegram"
+    timestamp: str = ""
     private: bool = True
-    round: int = 0
+    # Default 0 (not None) for backward compatibility: existing code passes
+    # Message(round=state.round, ...) where state.round is always int.
+    # Event.round defaults to None because new time-based events have no round.
+    round: int | None = 0
 
 
 class Complaint(BaseModel):
@@ -59,6 +67,7 @@ class WorldState:
         self.complaints: list[Complaint] = []
         self.active_needs: list[Need] = []
         self.round: int = 0
+        self.current_time: datetime | None = None
         self.reputation: dict[str, ReputationRecord] = {}
         self._case_counter: int = 0
         self._proposal_counter: int = 0

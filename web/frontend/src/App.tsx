@@ -1,11 +1,12 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useSimulation } from './hooks/useSimulation'
 import { SimGraph } from './components/SimGraph'
-import { RoundScrubber } from './components/RoundScrubber'
+import { Timeline } from './components/RoundScrubber'
 import { ActivityFeed } from './components/ActivityFeed'
 import { RunSelector } from './components/RunSelector'
 import { AgentList } from './components/AgentList'
 import { ScenariosView } from './components/ScenariosView'
+import { getBool } from './utils/payload'
 import type { RunInfo } from './types'
 import './styles/hud.css'
 
@@ -14,7 +15,7 @@ export default function App() {
   const [view, setView] = useState<'monitor' | 'scenarios'>('monitor')
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [speed, setSpeed] = useState(3.0)
-  const [focusRound, setFocusRound] = useState<number | null>(null)
+  const [focusDay, setFocusDay] = useState<string | null>(null)
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('magistry-theme') as 'light' | 'dark') ?? 'light'
@@ -27,8 +28,10 @@ export default function App() {
 
   const privateRatio = useMemo(() => {
     if (!state.events.length) return 0
-    const msgs = state.events.filter((e) => e.event_type === 'message_sent')
-    const priv = msgs.filter((e) => e.payload.private).length
+    const msgs = state.events.filter(
+      (e) => e.event_type === 'message_sent' || e.event_type === 'message'
+    )
+    const priv = msgs.filter((e) => getBool(e.payload, 'private')).length
     return (priv / Math.max(1, msgs.length)) * 100
   }, [state.events])
 
@@ -66,8 +69,20 @@ export default function App() {
 
         <div className="hud-header-stats">
           <div className="hud-header-stat">
-            <span className="hud-header-stat-label">Раунд</span>
-            <span className="hud-header-stat-value accent">{state.currentRound}</span>
+            <span className="hud-header-stat-label">
+              {typeof state.currentRound === 'number' ? 'Раунд' : 'День'}
+            </span>
+            <span className="hud-header-stat-value accent">
+              {typeof state.currentRound === 'number'
+                ? state.currentRound
+                : (() => {
+                    const last = state.events[state.events.length - 1]
+                    if (!last?.timestamp) return '---'
+                    const ms = Date.parse(last.timestamp)
+                    if (!Number.isFinite(ms)) return '---'
+                    return new Date(ms).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+                  })()}
+            </span>
           </div>
           <div className="hud-header-stat">
             <span className="hud-header-stat-label">Событий</span>
@@ -160,16 +175,15 @@ export default function App() {
                 names={state.names}
                 selectedAgent={selectedNode}
                 onClearFilter={() => setSelectedNode(null)}
-                focusRound={focusRound}
+                focusDay={focusDay}
               />
             </aside>
           </div>
 
-          <RoundScrubber
+          <Timeline
             events={state.events}
-            currentRound={state.currentRound}
-            focusRound={focusRound}
-            onRoundClick={setFocusRound}
+            focusDay={focusDay}
+            onDayClick={setFocusDay}
           />
         </>
       )}

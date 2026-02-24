@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from .enums import GovernanceMode, ScenarioId
@@ -93,6 +95,8 @@ class ScenarioConfig(BaseModel):
     title: str
     description: str
     max_rounds: int = 8
+    start_time: datetime | None = None
+    end_time: datetime | None = None
     seed: int = 42
     agents: list[AgentProfile] = Field(default_factory=list)
     needs: list[Need] = Field(default_factory=list)

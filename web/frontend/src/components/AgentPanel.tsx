@@ -1,5 +1,6 @@
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
 import { SUSPICIOUS_THRESHOLD } from '../constants'
+import { getString, getBool } from '../utils/payload'
 
 interface Props {
   nodeId: string | null
@@ -40,8 +41,8 @@ export function AgentPanel({ nodeId, nodes, edges, events }: Props) {
   const messages = events
     .filter(
       (e) =>
-        e.event_type === 'message_sent' &&
-        (e.agent_id === nodeId || e.payload.to_id === nodeId)
+        (e.event_type === 'message_sent' || e.event_type === 'message') &&
+        (e.agent_id === nodeId || getString(e.payload, 'to_id') === nodeId)
     )
     .slice(-20)
     .reverse()
@@ -115,13 +116,22 @@ export function AgentPanel({ nodeId, nodes, edges, events }: Props) {
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 0.875rem 0.5rem' }}>
           {messages.map((e, i) => {
             const isFrom = e.agent_id === nodeId
-            const other = isFrom ? e.payload.to_id : e.agent_id
+            const other = isFrom ? getString(e.payload, 'to_id') : e.agent_id
             return (
-              <div key={i} className={`msg-item ${e.payload.private ? 'msg-item-private' : ''}`}>
-                <span className="msg-item-round">R{e.round}</span>
+              <div key={i} className={`msg-item ${getBool(e.payload, 'private') ? 'msg-item-private' : ''}`}>
+                <span className="msg-item-round">
+                  {typeof e.round === 'number'
+                    ? `R${e.round}`
+                    : (() => {
+                        const ms = e.timestamp ? Date.parse(e.timestamp) : NaN
+                        if (!Number.isFinite(ms)) return '--:--'
+                        const d = new Date(ms)
+                        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                      })()}
+                </span>
                 <span className="msg-item-dir">{isFrom ? '→' : '←'}</span>
                 <span className="msg-item-agent">{String(other)}</span>
-                {Boolean(e.payload.private) && (
+                {getBool(e.payload, 'private') && (
                   <span className="badge violet" style={{ fontSize: '0.45rem', marginLeft: 'auto' }}>PRIV</span>
                 )}
               </div>

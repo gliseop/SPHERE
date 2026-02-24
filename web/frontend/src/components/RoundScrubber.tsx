@@ -1,42 +1,65 @@
 import type { SimEvent } from '../types'
+import { toDayKey, formatDayLabel } from '../utils/time'
+
+interface TimelinePoint {
+  key: string
+  label: string
+  count: number
+}
 
 interface Props {
   events: SimEvent[]
-  currentRound: number
-  focusRound: number | null
-  onRoundClick: (round: number) => void
+  focusDay: string | null
+  onDayClick: (dayKey: string) => void
 }
 
-export function RoundScrubber({ events, currentRound, focusRound, onRoundClick }: Props) {
-  const rounds = [...new Set(events.map((e) => e.round))].sort((a, b) => a - b)
+export function Timeline({ events, focusDay, onDayClick }: Props) {
+  const countByDay = new Map<string, number>()
+  for (const event of events) {
+    const key = toDayKey(event)
+    countByDay.set(key, (countByDay.get(key) ?? 0) + 1)
+  }
 
-  if (rounds.length === 0) {
+  const points: TimelinePoint[] = [...countByDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, count]) => ({
+      key,
+      label: formatDayLabel(key),
+      count,
+    }))
+
+  const maxCount = points.reduce((m, p) => Math.max(m, p.count), 1)
+
+  if (points.length === 0) {
     return (
-      <div className="round-scrubber">
-        <div className="round-scrubber-empty">
-          <span className="text-muted">Раунды появятся при запуске прогона</span>
+      <div className="timeline">
+        <div className="timeline-empty">
+          <span className="text-muted">Временная шкала появится при запуске прогона</span>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="round-scrubber">
-      <div className="round-scrubber-label">Раунды</div>
-      <div className="round-scrubber-track">
-        {rounds.map((r) => {
-          const count = events.filter((e) => e.round === r).length
-          const isActive = r === focusRound
-          const isCurrent = r === currentRound
+    <div className="timeline">
+      <div className="timeline-label">Время</div>
+      <div className="timeline-track">
+        {points.map((point) => {
+          const isActive = point.key === focusDay
+          const dotScale = 0.5 + (point.count / maxCount) * 0.7
           return (
             <button
-              key={r}
-              className={`round-scrubber-item${isActive ? ' active' : ''}${isCurrent ? ' current' : ''}`}
-              onClick={() => onRoundClick(r)}
-              title={`Раунд ${r} — ${count} событий`}
+              key={point.key}
+              className={`timeline-item${isActive ? ' active' : ''}`}
+              onClick={() => onDayClick(point.key)}
+              title={`${point.label} — ${point.count} событий`}
             >
-              <span className="round-scrubber-num">{r}</span>
-              <span className="round-scrubber-count">{count}</span>
+              <span className="timeline-num">{point.label}</span>
+              <span
+                className="timeline-dot"
+                style={{ transform: `scale(${dotScale.toFixed(2)})` }}
+              />
+              <span className="timeline-count">{point.count}</span>
             </button>
           )
         })}

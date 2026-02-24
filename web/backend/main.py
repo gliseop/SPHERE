@@ -14,12 +14,17 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .graph_state import GraphStateBuilder, build_graph_state
+
 RESULTS_DIR = (Path(__file__).parent.parent.parent / "results").resolve()
 SCENARIOS_DIR = (Path(__file__).parent.parent.parent / "scenarios").resolve()
 SCENARIOS_DIR.mkdir(parents=True, exist_ok=True)
+ARTIFACTS_DIR = (RESULTS_DIR / "artifacts").resolve()
+ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
 _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+_DOC_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 
 def _validate_run_name(name: str) -> None:
@@ -115,55 +120,6 @@ def _load_names(run_name: str) -> dict[str, str]:
         return {}
 
 
-def _build_graph_state(events: list[dict]) -> dict:
-    """Реконструировать состояние графа из событий.
-
-    Args:
-        events: Список событий до текущего момента.
-
-    Returns:
-        Словарь {"nodes": [...], "edges": [...]}.
-    """
-    agents: dict[str, dict] = {}
-    edges: dict[tuple, float] = {}
-
-    for e in events:
-        aid = e.get("agent_id", "")
-        if aid and aid != "system":
-            if aid not in agents:
-                agents[aid] = {"id": aid, "reputation": 10.0}
-
-        if e.get("event_type") == "reputation_modified":
-            target = e["payload"].get("target", aid)
-            delta = e["payload"].get("delta", 0.0)
-            if target not in agents:
-                agents[target] = {"id": target, "reputation": 10.0}
-            agents[target]["reputation"] = round(
-                agents[target]["reputation"] + delta, 2
-            )
-
-        if e.get("event_type") == "graph_updated":
-            a = e["payload"].get("agent_a", "")
-            b = e["payload"].get("agent_b", "")
-            delta = e["payload"].get("delta", 0.1)
-            if a and b:
-                # Гарантируем наличие обоих агентов в nodes,
-                # даже если они не эмитировали событий напрямую (например, arbiter)
-                if a not in agents:
-                    agents[a] = {"id": a, "reputation": 10.0}
-                if b not in agents:
-                    agents[b] = {"id": b, "reputation": 10.0}
-                key = tuple(sorted([a, b]))
-                edges[key] = round(edges.get(key, 0.0) + delta, 2)
-
-    nodes = list(agents.values())
-    edge_list = [
-        {"source": k[0], "target": k[1], "strength": v}
-        for k, v in edges.items()
-    ]
-    return {"nodes": nodes, "edges": edge_list}
-
-
 async def _stream_events_from_file(
     path: Path, speed: float = 1.0
 ) -> AsyncIterator[dict]:
@@ -227,9 +183,53 @@ async def get_run(name: str) -> dict:
     return {
         "name": name,
         "events": events,
-        "graph": _build_graph_state(events),
+        "graph": build_graph_state(events),
         "meta": _parse_run_name(f"{name}_events.jsonl"),
     }
+
+
+@app.get("/api/artifacts/{doc_id}")
+async def get_artifact(doc_id: str) -> dict:
+    """Получить документ-артефакт по ID."""
+    from fastapi import HTTPException
+
+    if not _DOC_ID_RE.fullmatch(doc_id):
+        raise HTTPException(status_code=400, detail="Invalid doc_id")
+
+    path = (ARTIFACTS_DIR / f"{doc_id}.md").resolve()
+    if str(path).startswith(str(ARTIFACTS_DIR)) and path.exists():
+        return {
+            "doc_id": doc_id,
+            "content": path.read_text(encoding="utf-8"),
+        }
+
+    for jsonl_path in sorted(
+        RESULTS_DIR.glob("*_events.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ):
+        try:
+            async with aiofiles.open(jsonl_path, encoding="utf-8") as handle:
+                async for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    event = json.loads(line)
+                    if event.get("event_type") != "document_created":
+                        continue
+                    payload = event.get("payload", {})
+                    if payload.get("doc_id") == doc_id:
+                        return {
+                            "doc_id": doc_id,
+                            "title": payload.get("title", ""),
+                            "doc_type": payload.get("doc_type", ""),
+                            "case_id": payload.get("case_id", ""),
+                            "content": payload.get("content", ""),
+                        }
+        except (OSError, json.JSONDecodeError):
+            continue
+
+    raise HTTPException(status_code=404, detail="Artifact not found")
 
 
 @app.websocket("/ws/playback/{name}")
@@ -254,21 +254,17 @@ async def ws_playback(websocket: WebSocket, name: str, speed: float = 1.0) -> No
         await websocket.close()
         return
 
-    events_so_far: list[dict] = []
-    current_round = -1
     meta = _parse_run_name(f"{name}_events.jsonl")
     names = _load_names(name)
     await websocket.send_json({"type": "meta", **meta, "names": names})
+    builder = GraphStateBuilder()
+    await websocket.send_json({"type": "graph_state", **builder.state()})
 
     try:
         async for event in _stream_events_from_file(path, speed=speed):
-            events_so_far.append(event)
             await websocket.send_json({"type": "event", "data": event})
-
-            if event.get("round", current_round) != current_round:
-                current_round = event.get("round", current_round)
-                graph = _build_graph_state(events_so_far)
-                await websocket.send_json({"type": "graph_state", **graph})
+            builder.ingest(event)
+            await websocket.send_json({"type": "graph_state", **builder.state()})
 
         await websocket.send_json({"type": "done"})
     except WebSocketDisconnect:
@@ -283,8 +279,7 @@ async def ws_live(websocket: WebSocket) -> None:
     """
     await websocket.accept()
 
-    events_so_far: list[dict] = []
-    current_round = -1
+    builder = GraphStateBuilder()
     watched_path: Path | None = None
     file_pos = 0
 
@@ -303,11 +298,13 @@ async def ws_live(websocket: WebSocket) -> None:
             if latest != watched_path:
                 watched_path = latest
                 file_pos = 0
-                events_so_far = []
-                current_round = -1
+                builder = GraphStateBuilder()
                 meta = _parse_run_name(latest.name)
                 names = _load_names(latest.stem.replace("_events", ""))
                 await websocket.send_json({"type": "meta", **meta, "names": names})
+                await websocket.send_json(
+                    {"type": "graph_state", **builder.state()}
+                )
 
             # Открываем в бинарном режиме для точного отслеживания байтовой позиции
             async with aiofiles.open(watched_path, "rb") as f:
@@ -324,13 +321,11 @@ async def ws_live(websocket: WebSocket) -> None:
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                events_so_far.append(event)
                 await websocket.send_json({"type": "event", "data": event})
-
-                if event.get("round", current_round) != current_round:
-                    current_round = event.get("round", current_round)
-                    graph = _build_graph_state(events_so_far)
-                    await websocket.send_json({"type": "graph_state", **graph})
+                builder.ingest(event)
+                await websocket.send_json(
+                    {"type": "graph_state", **builder.state()}
+                )
 
             await asyncio.sleep(0.5)
 

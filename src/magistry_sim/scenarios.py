@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from .config import (
     AgentProfile,
     Capability,
@@ -13,6 +15,8 @@ from .config import (
 )
 from .enums import GovernanceMode, ScenarioId
 
+MSK = timezone(timedelta(hours=3))
+
 SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
     ScenarioId.S0: ScenarioConfig(
         id=ScenarioId.S0,
@@ -22,6 +26,8 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
             "без предпосылок к коррупции. Контрольный прогон."
         ),
         max_rounds=15,
+        start_time=datetime(2026, 2, 16, 9, 0, tzinfo=MSK),
+        end_time=datetime(2026, 2, 27, 18, 0, tzinfo=MSK),
         seed=42,
         corruption_level=0.0,
         narrative_context=(
@@ -107,6 +113,8 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
             "предпринимателей — бывшие коллеги, жадность повышена."
         ),
         max_rounds=25,
+        start_time=datetime(2026, 2, 16, 9, 0, tzinfo=MSK),
+        end_time=datetime(2026, 2, 27, 18, 0, tzinfo=MSK),
         seed=42,
         corruption_level=0.5,
         narrative_context=(
@@ -208,6 +216,8 @@ SCENARIOS: dict[ScenarioId, ScenarioConfig] = {
             "кандидатов — родственник коллеги чиновника."
         ),
         max_rounds=25,
+        start_time=datetime(2026, 2, 16, 9, 0, tzinfo=MSK),
+        end_time=datetime(2026, 2, 27, 18, 0, tzinfo=MSK),
         seed=42,
         corruption_level=0.7,
         narrative_context=(

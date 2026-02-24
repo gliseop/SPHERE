@@ -3,6 +3,7 @@ import * as d3 from 'd3'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
 import { SUSPICIOUS_THRESHOLD } from '../constants'
 import { NodeTooltip } from './NodeTooltip'
+import { getString, getBool } from '../utils/payload'
 
 interface Props {
   nodes: GraphNode[]
@@ -60,9 +61,9 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
   // Строим Set приватных рёбер из событий
   const privateEdges = new Set<string>()
   for (const e of events) {
-    if (e.event_type === 'message_sent' && e.payload.private) {
+    if ((e.event_type === 'message_sent' || e.event_type === 'message') && getBool(e.payload, 'private')) {
       const from = e.agent_id
-      const to = e.payload.to_id as string
+      const to = getString(e.payload, 'to_id')
       if (from && to) privateEdges.add([from, to].sort().join('|'))
     }
   }
@@ -83,9 +84,9 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
     if (!lastEvent || lastEvent === lastEventRef.current) return
     lastEventRef.current = lastEvent
 
-    if (lastEvent.event_type !== 'message_sent') return
+    if (lastEvent.event_type !== 'message_sent' && lastEvent.event_type !== 'message') return
     const from = lastEvent.agent_id
-    const to = typeof lastEvent.payload.to_id === 'string' ? lastEvent.payload.to_id : ''
+    const to = getString(lastEvent.payload, 'to_id')
     if (!from || !to) return
 
     const svg = d3.select(svgRef.current)

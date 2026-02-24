@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
 import { SUSPICIOUS_THRESHOLD } from '../constants'
+import { getString, getNumber } from '../utils/payload'
 
 interface Props {
   nodes: GraphNode[]
@@ -60,7 +61,7 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect 
 
         // История репутации для данного агента
         const repHistory = events
-          .filter((e) => e.event_type === 'reputation_modified' && e.payload.target === node.id)
+          .filter((e) => e.event_type === 'reputation_modified' && getString(e.payload, 'target') === node.id)
           .slice(-5)
 
         return (
@@ -103,12 +104,21 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect 
             {isExpanded && repHistory.length > 0 && (
               <div className="rep-history">
                 {repHistory.map((ev, i) => {
-                  const delta = typeof ev.payload.delta === 'number' ? ev.payload.delta : 0
-                  const reason = typeof ev.payload.reason === 'string' ? ev.payload.reason : ''
+                  const delta = getNumber(ev.payload, 'delta') ?? 0
+                  const reason = getString(ev.payload, 'reason')
                   const sign = delta >= 0 ? '+' : ''
                   return (
                     <div key={i} className="rep-history-item">
-                      <span className="rep-history-round">R{ev.round}</span>
+                      <span className="rep-history-round">
+                        {typeof ev.round === 'number'
+                          ? `R${ev.round}`
+                          : (() => {
+                              const ms = ev.timestamp ? Date.parse(ev.timestamp) : NaN
+                              if (!Number.isFinite(ms)) return '--:--'
+                              const d = new Date(ms)
+                              return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                            })()}
+                      </span>
                       <span className={`rep-history-delta ${delta >= 0 ? 'success' : 'danger'}`}>
                         {sign}{delta.toFixed(2)}
                       </span>

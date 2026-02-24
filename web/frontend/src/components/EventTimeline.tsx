@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SimEvent } from '../types'
+import { getString, getBool } from '../utils/payload'
 
 const EVENT_LABELS: Record<string, string> = {
   message_sent: 'MSG',
+  message: 'MSG',
   graph_updated: 'GRAPH',
   reputation_modified: 'REP',
   case_opened: 'CASE+',
@@ -15,16 +17,19 @@ const EVENT_LABELS: Record<string, string> = {
   arbiter_rejected: 'ARB-',
   auto_transition: 'AUTO',
   world_event: 'WORLD',
+  document_created: 'DOC',
 }
 
 const EVENT_BADGE_CLASS: Record<string, string> = {
   message_sent: 'badge',
+  message: 'badge',
   reputation_modified: 'badge warning',
   case_opened: 'badge accent',
   case_resolved: 'badge success',
   arbiter_approved: 'badge success',
   arbiter_rejected: 'badge danger',
   world_event: 'badge info',
+  document_created: 'badge info',
 }
 
 interface Props {
@@ -41,8 +46,8 @@ export function EventTimeline({ events, selectedAgent }: Props) {
     ? events.filter(
         (e) =>
           e.agent_id === selectedAgent ||
-          e.payload.to_id === selectedAgent ||
-          e.payload.target === selectedAgent
+          getString(e.payload, 'to_id') === selectedAgent ||
+          getString(e.payload, 'target') === selectedAgent
       )
     : events
 
@@ -85,14 +90,23 @@ export function EventTimeline({ events, selectedAgent }: Props) {
           >
             <div className="corner tl" />
             <div className="corner br" />
-            <div className="event-card-round">R{e.round}</div>
+            <div className="event-card-round">
+              {typeof e.round === 'number'
+                ? `R${e.round}`
+                : (() => {
+                    const ms = e.timestamp ? Date.parse(e.timestamp) : NaN
+                    if (!Number.isFinite(ms)) return '--:--'
+                    const d = new Date(ms)
+                    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                  })()}
+            </div>
             <div>
               <span className={EVENT_BADGE_CLASS[e.event_type] ?? 'badge'}>
                 {EVENT_LABELS[e.event_type] ?? e.event_type.slice(0, 6)}
               </span>
             </div>
             <div className="event-card-agent">{e.agent_id || '—'}</div>
-            {Boolean(e.payload.private) && (
+            {getBool(e.payload, 'private') && (
               <span className="badge violet" style={{ fontSize: '0.45rem' }}>PRIV</span>
             )}
           </div>

@@ -9,7 +9,7 @@ export interface SimState {
   events: SimEvent[]
   nodes: GraphNode[]
   edges: GraphEdge[]
-  currentRound: number
+  currentRound: number | null
   done: boolean
   error: string | null
 }
@@ -20,7 +20,7 @@ const INITIAL_STATE: SimState = {
   events: [],
   nodes: [],
   edges: [],
-  currentRound: 0,
+  currentRound: null,
   done: false,
   error: null,
 }
@@ -65,7 +65,9 @@ export function useSimulation() {
             return {
               ...prev,
               events: [...prev.events, msg.data],
-              currentRound: msg.data.round ?? prev.currentRound,
+              currentRound: typeof msg.data.round === 'number'
+                ? msg.data.round
+                : prev.currentRound,
             }
           case 'graph_state':
             return { ...prev, nodes: msg.nodes, edges: msg.edges }

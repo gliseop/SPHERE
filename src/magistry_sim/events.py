@@ -15,7 +15,7 @@ class Event(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    round: int
+    round: int | None = None
     event_type: str
     agent_id: str = ""
     payload: dict = Field(default_factory=dict)
@@ -52,18 +52,21 @@ class EventLog:
 
     def log(
         self,
-        round: int,
+        *,
+        round: int | None = None,
         event_type: str,
         agent_id: str = "",
         payload: dict | None = None,
+        timestamp: str | None = None,
     ) -> Event:
         """Записать событие.
 
         Args:
-            round: Номер раунда.
+            round: Номер раунда (для обратной совместимости).
             event_type: Тип события.
             agent_id: Идентификатор агента.
             payload: Дополнительные данные.
+            timestamp: Временная метка ISO 8601 (опционально).
 
         Returns:
             Записанное событие.
@@ -73,10 +76,13 @@ class EventLog:
             event_type=event_type,
             agent_id=agent_id,
             payload=payload or {},
+            **({"timestamp": timestamp} if timestamp else {}),
         )
         self._events.append(event)
         if self._stream_file is not None:
-            self._stream_file.write(event.model_dump_json() + "\n")
+            self._stream_file.write(
+                event.model_dump_json(exclude_none=True) + "\n"
+            )
             self._stream_file.flush()
         return event
 
@@ -118,7 +124,9 @@ class EventLog:
         """
         with open(path, "w", encoding="utf-8") as f:
             for event in self._events:
-                f.write(event.model_dump_json() + "\n")
+                f.write(
+                    event.model_dump_json(exclude_none=True) + "\n"
+                )
 
     def load_jsonl(self, path: Path) -> None:
         """Загрузить журнал из JSONL.

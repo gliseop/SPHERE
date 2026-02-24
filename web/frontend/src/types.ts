@@ -1,9 +1,17 @@
 export interface SimEvent {
-  round: number
+  round?: number | null
   event_type: string
   agent_id: string
   payload: Record<string, unknown>
   timestamp: string
+}
+
+export interface ThreadGroup {
+  thread_id: string
+  channel: string
+  participants: string[]
+  messages: SimEvent[]
+  private: boolean
 }
 
 export interface GraphNode {

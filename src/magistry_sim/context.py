@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from .reputation import POSITION_THRESHOLDS, check_promotion
 from .state import WorldState
 
@@ -25,11 +27,18 @@ def build_situation(agent_id: str, state: WorldState) -> str:
 
     parts: list[str] = []
 
-    # Раунд и профиль
-    parts.append(
-        f"Сейчас раунд {state.round}. "
-        f"Вы — {profile.name} ({agent_id}), {profile.position}."
-    )
+    # Текущее время или раунд (обратная совместимость)
+    current_time = getattr(state, "current_time", None)
+    if isinstance(current_time, datetime):
+        parts.append(
+            f"Сейчас {current_time.isoformat()}. "
+            f"Вы — {profile.name} ({agent_id}), {profile.position}."
+        )
+    else:
+        parts.append(
+            f"Сейчас раунд {state.round}. "
+            f"Вы — {profile.name} ({agent_id}), {profile.position}."
+        )
 
     # Текущая локация
     if state.locations is not None:
@@ -80,8 +89,9 @@ def build_situation(agent_id: str, state: WorldState) -> str:
                 f"{res.contract_capacity}"
             )
         if res.maintenance_cost > 0:
+            period_label = "в период" if isinstance(current_time, datetime) else "за раунд"
             res_parts.append(
-                f"Расходы на обслуживание: {res.maintenance_cost:,.0f} за раунд"
+                f"Расходы на обслуживание: {res.maintenance_cost:,.0f} {period_label}"
             )
         if res_parts:
             parts.append("Ресурсы: " + "; ".join(res_parts) + ".")
@@ -107,7 +117,10 @@ def build_situation(agent_id: str, state: WorldState) -> str:
             if case.proposals and not closed:
                 line += f", предложений: {len(case.proposals)}"
             if case.deadline_round and not closed:
-                line += f", дедлайн: раунд {case.deadline_round}"
+                if isinstance(current_time, datetime):
+                    line += f", дедлайн: период {case.deadline_round}"
+                else:
+                    line += f", дедлайн: раунд {case.deadline_round}"
             parts.append(line)
 
             for prop in case.proposals:
@@ -136,11 +149,29 @@ def build_situation(agent_id: str, state: WorldState) -> str:
             )
 
     # Входящие сообщения
-    incoming = [
-        m
-        for m in state.messages
-        if m.to_id == agent_id and m.round == state.round - 1
-    ]
+    incoming = []
+    if isinstance(current_time, datetime):
+        window_start = current_time - timedelta(hours=2)
+        for msg in state.messages:
+            if msg.to_id != agent_id:
+                continue
+            ts = _parse_iso(msg.timestamp)
+            if ts is not None and ts >= window_start:
+                incoming.append(msg)
+                continue
+        if not incoming:
+            # Fallback для старых данных без timestamp
+            incoming = [
+                m
+                for m in state.messages
+                if m.to_id == agent_id and m.round == state.round - 1
+            ]
+    else:
+        incoming = [
+            m
+            for m in state.messages
+            if m.to_id == agent_id and m.round == state.round - 1
+        ]
     if incoming:
         parts.append("Входящие сообщения:")
         for msg in incoming:
@@ -189,6 +220,16 @@ def build_situation(agent_id: str, state: WorldState) -> str:
         "\nВыполните необходимые действия."
     )
     return "\n".join(parts)
+
+
+def _parse_iso(value: str) -> datetime | None:
+    """Безопасно разобрать ISO-время."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _build_auditor_section(
