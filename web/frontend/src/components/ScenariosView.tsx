@@ -282,7 +282,7 @@ export function ScenariosView({ onLaunch, onStartLive, user }: {
               <div className="scenario-card-title">{s.name}</div>
               {s.description && <div className="scenario-card-desc">{s.description}</div>}
               <div className="scenario-card-meta">
-                <span className="badge small">{s.agents.length} аг.</span>
+                <span className="badge small">{s.agents?.length ?? 0} аг.</span>
                 <span className="badge small">{s.rounds} раундов</span>
                 {s.seed !== null && <span className="badge small">seed {s.seed}</span>}
               </div>
