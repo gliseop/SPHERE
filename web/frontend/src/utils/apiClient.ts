@@ -29,7 +29,7 @@ async function request(url: string, init: RequestInit): Promise<Response> {
   const res = await fetch(url, init)
   if (res.status === 401) {
     clearToken()
-    window.location.href = '/?login=1'
+    window.dispatchEvent(new Event('auth:logout'))
   }
   return res
 }

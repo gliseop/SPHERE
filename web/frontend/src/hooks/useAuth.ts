@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { getToken, setToken, clearToken } from '../utils/apiClient'
 
 export interface AuthUser {
@@ -79,6 +79,12 @@ export function useAuth(): AuthState {
   const logout = useCallback(() => {
     clearToken()
     setUser(null)
+  }, [])
+
+  useEffect(() => {
+    const onForceLogout = () => setUser(null)
+    window.addEventListener('auth:logout', onForceLogout)
+    return () => window.removeEventListener('auth:logout', onForceLogout)
   }, [])
 
   return { user, isAuthenticated: user !== null, login, logout }
