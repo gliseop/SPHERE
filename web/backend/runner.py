@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,30 @@ _RESULTS_DIR = _PROJECT_ROOT / "results"
 
 # Хранилище активных процессов: run_name -> subprocess.Popen
 _active: dict[str, subprocess.Popen] = {}
+
+
+def _write_names_json(run_name: str, scenario_id: str) -> None:
+    """Сгенерировать файл имён агентов из конфигурации сценария.
+
+    Args:
+        run_name: Имя прогона (S1_G1_seed42).
+        scenario_id: Идентификатор сценария (S0, S1, S2).
+    """
+    try:
+        from magistry_sim.enums import ScenarioId
+        from magistry_sim.scenarios import get_scenario
+
+        scenario = get_scenario(ScenarioId(scenario_id))
+        names: dict[str, str] = {}
+        for agent in scenario.agents:
+            names[agent.id] = agent.name
+        path = _RESULTS_DIR / f"{run_name}_names.json"
+        path.write_text(
+            json.dumps(names, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 def launch_simulation(
@@ -46,15 +71,22 @@ def launch_simulation(
         else:
             del _active[run_name]
 
+    _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    jsonl_path = _RESULTS_DIR / f"{run_name}_events.jsonl"
+    summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
+
+    _write_names_json(run_name, scenario)
+
     cmd = [
         sys.executable, "-m", "magistry_sim.cli",
-        "run",
         "--scenario", scenario,
         "--governance", governance,
         "--seed", str(seed),
         "--runner", runner_type,
         "--rounds", str(rounds),
-        "--output-dir", str(_RESULTS_DIR),
+        "--jsonl", str(jsonl_path),
+        "--summary-json", str(summary_path),
     ]
 
     proc = subprocess.Popen(
