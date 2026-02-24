@@ -124,18 +124,18 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, us
               <div className="launch-form-row">
                 <label>Сценарий</label>
                 <select className="hud-input" value={launchScenario} onChange={(e) => setLaunchScenario(e.target.value)}>
-                  <option value="S0">S0</option>
-                  <option value="S1">S1</option>
-                  <option value="S2">S2</option>
+                  <option value="S0">S0 — Чистая сделка</option>
+                  <option value="S1">S1 — Прямой сговор</option>
+                  <option value="S2">S2 — Кумовство при найме</option>
                 </select>
               </div>
               <div className="launch-form-row">
                 <label>Управление</label>
                 <select className="hud-input" value={launchGovernance} onChange={(e) => setLaunchGovernance(e.target.value)}>
-                  <option value="G0">G0</option>
-                  <option value="G1">G1</option>
-                  <option value="G2">G2</option>
-                  <option value="G3">G3</option>
+                  <option value="G0">G0 — Без контроля</option>
+                  <option value="G1">G1 — Аудитор (рекомендательный)</option>
+                  <option value="G2">G2 — Аудитор с репутацией</option>
+                  <option value="G3">G3 — Полный контроль (трибунал)</option>
                 </select>
               </div>
               <div className="launch-form-row">

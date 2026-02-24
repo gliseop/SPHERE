@@ -16,6 +16,7 @@ interface Scenario {
   rounds: number
   seed: number | null
   agents: Agent[]
+  runner: 'mock' | 'cognitive'
 }
 
 const EMPTY_SCENARIO: Scenario = {
@@ -24,6 +25,7 @@ const EMPTY_SCENARIO: Scenario = {
   rounds: 10,
   seed: null,
   agents: [],
+  runner: 'mock',
 }
 
 const ROLE_OPTIONS = [
@@ -172,6 +174,18 @@ export function ScenariosView({ onLaunch, onStartLive, user }: {
           </div>
 
           <div className="form-field">
+            <label>Runner</label>
+            <select
+              className="hud-input"
+              value={editing.runner}
+              onChange={(e) => setEditing({ ...editing, runner: e.target.value as 'mock' | 'cognitive' })}
+            >
+              <option value="mock">Mock — детерминированный (быстрый)</option>
+              <option value="cognitive">Cognitive — LLM-агенты (реальный)</option>
+            </select>
+          </div>
+
+          <div className="form-field">
             <div className="form-field-header">
               <label>Агенты ({editing.agents.length})</label>
               <button className="btn-clipped success small" onClick={addAgent}>+ Добавить</button>
@@ -285,6 +299,9 @@ export function ScenariosView({ onLaunch, onStartLive, user }: {
                 <span className="badge small">{s.agents?.length ?? 0} аг.</span>
                 <span className="badge small">{s.rounds} раундов</span>
                 {s.seed !== null && <span className="badge small">seed {s.seed}</span>}
+                <span className={`badge small ${(s.runner ?? 'mock') === 'cognitive' ? 'accent' : ''}`}>
+                  {s.runner ?? 'mock'}
+                </span>
               </div>
             </div>
             <div className="scenario-card-actions">

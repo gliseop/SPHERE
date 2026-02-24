@@ -21,7 +21,9 @@ export default function App() {
   const [focusDay, setFocusDay] = useState<string | null>(null)
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    return (localStorage.getItem('magistry-theme') as 'light' | 'dark') ?? 'light'
+    const stored = localStorage.getItem('magistry-theme') as 'light' | 'dark' | null
+    if (stored) return stored
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   })
 
   useEffect(() => {
