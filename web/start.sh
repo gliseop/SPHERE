@@ -12,6 +12,16 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Загрузить переменные окружения из .env (если файл существует)
+if [ -f "$ROOT_DIR/.env" ]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$ROOT_DIR/.env"
+    set +a
+    echo "Загружены переменные из .env"
+fi
+
 PORT="${2:-8765}"
 
 echo "=== MAGISTRY Graph UI ==="
