@@ -6,6 +6,7 @@ import asyncio
 import json
 import os as _os
 import re
+import secrets
 import uuid
 from pathlib import Path
 from typing import AsyncIterator
@@ -81,6 +82,56 @@ def _validate_scenario_id(scenario_id: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid scenario ID")
 
 
+def _resolve_seed(value: object | None) -> int:
+    """Преобразовать seed из запроса/сценария в int.
+
+    Если seed не задан (None) — генерируется случайный seed.
+
+    Args:
+        value: seed (int/str/None).
+
+    Returns:
+        seed как неотрицательный int.
+
+    Raises:
+        HTTPException 400: Если seed имеет неверный формат.
+    """
+    from fastapi import HTTPException
+
+    if value is None:
+        return secrets.randbelow(1_000_000_000)
+
+    if isinstance(value, bool):
+        raise HTTPException(status_code=400, detail="Invalid seed")
+
+    if isinstance(value, int):
+        if value < 0:
+            raise HTTPException(status_code=400, detail="Invalid seed")
+        return value
+
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise HTTPException(status_code=400, detail="Invalid seed")
+        seed = int(value)
+        if seed < 0:
+            raise HTTPException(status_code=400, detail="Invalid seed")
+        return seed
+
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return secrets.randbelow(1_000_000_000)
+        try:
+            seed = int(s)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid seed") from exc
+        if seed < 0:
+            raise HTTPException(status_code=400, detail="Invalid seed")
+        return seed
+
+    raise HTTPException(status_code=400, detail="Invalid seed")
+
+
 app = FastAPI(title="MAGISTRY Graph UI")
 
 _ALLOWED_ORIGIN = _os.environ.get("ALLOWED_ORIGIN", "http://localhost:5173")
@@ -126,10 +177,10 @@ def _parse_run_name(filename: str) -> dict:
         filename: Имя файла вида S1_G2_events.jsonl или S1_G2_seed42_events.jsonl.
 
     Returns:
-        Словарь с полями scenario, governance, seed (если есть).
+        Словарь с полями scenario, governance, seed (если есть), variant (если есть).
     """
     m = re.match(
-        r"(?P<scenario>S\d+)_(?P<governance>G\d+)(?:_seed(?P<seed>\d+))?(?:_\w+)?_events\.jsonl",
+        r"(?P<scenario>S\d+)_(?P<governance>G\d+)(?:_seed(?P<seed>\d+))?(?:_(?P<variant>[A-Za-z0-9_\-]+))?_events\.jsonl",
         filename,
     )
     if m:
@@ -137,12 +188,13 @@ def _parse_run_name(filename: str) -> dict:
             "scenario": m.group("scenario"),
             "governance": m.group("governance"),
             "seed": int(m.group("seed")) if m.group("seed") else None,
+            "variant": m.group("variant") or None,
         }
     # Нестандартное имя — извлекаем всё до _events как название
     m2 = re.match(r"(?P<name>.+?)_events\.jsonl$", filename)
     if m2:
-        return {"scenario": m2.group("name"), "governance": "", "seed": None}
-    return {"scenario": "?", "governance": "?", "seed": None}
+        return {"scenario": m2.group("name"), "governance": "", "seed": None, "variant": None}
+    return {"scenario": "?", "governance": "?", "seed": None, "variant": None}
 
 
 def _load_names(run_name: str) -> dict[str, str]:
@@ -198,7 +250,12 @@ async def list_runs(_user: User = Depends(require_viewer)) -> list[dict]:
         Список словарей с метаданными прогонов.
     """
     runs = []
-    for p in sorted(RESULTS_DIR.glob("*_events.jsonl")):
+    paths = sorted(
+        RESULTS_DIR.glob("*_events.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for p in paths:
         meta = _parse_run_name(p.name)
         meta["name"] = p.stem.replace("_events", "")
         meta["filename"] = p.name
@@ -332,6 +389,7 @@ async def ws_playback(
             await websocket.send_json({"type": "graph_state", **builder.state()})
 
         await websocket.send_json({"type": "done"})
+        await websocket.close(code=1000)
     except WebSocketDisconnect:
         pass
 
@@ -524,7 +582,7 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
         result = launch_simulation(
             scenario=scenario.get("scenario", "S1"),
             governance=scenario.get("governance", "G1"),
-            seed=scenario.get("seed") or 42,
+            seed=_resolve_seed(scenario.get("seed")),
             runner_type=scenario.get("runner", "mock"),
             rounds=scenario.get("rounds", 10),
         )
@@ -549,14 +607,14 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
 
     scenario = data.get("scenario", "S1")
     governance = data.get("governance", "G1")
-    seed = data.get("seed", 42)
+    seed = _resolve_seed(data.get("seed"))
     runner_type = data.get("runner", "mock")
     rounds = data.get("rounds", 10)
     try:
         result = launch_simulation(
             scenario=scenario,
             governance=governance,
-            seed=int(seed),
+            seed=seed,
             runner_type=runner_type,
             rounds=int(rounds),
         )
@@ -598,6 +656,37 @@ async def stop_run(run_name: str, _user: User = Depends(require_admin)) -> dict:
     if result is None:
         raise HTTPException(status_code=404, detail="Run not found or not running")
     return result
+
+
+@app.delete("/api/runs/{run_name}", status_code=204)
+async def delete_run(run_name: str, _user: User = Depends(require_admin)) -> None:
+    """Удалить сохранённый прогон и сопутствующие файлы.
+
+    Args:
+        run_name: Имя прогона (без суффикса _events.jsonl).
+        _user: Аутентифицированный пользователь с ролью admin.
+    """
+    from fastapi import HTTPException
+    from web.backend.runner import list_active
+
+    _validate_run_name(run_name)
+
+    active = list_active()
+    if any(r.get("run_name") == run_name and r.get("status") == "running" for r in active):
+        raise HTTPException(status_code=409, detail="Run is running")
+
+    for suffix in (
+        "_events.jsonl",
+        "_names.json",
+        "_summary.json",
+        "_stdout.log",
+        "_stderr.log",
+    ):
+        path = RESULTS_DIR / f"{run_name}{suffix}"
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 if FRONTEND_DIST.exists():

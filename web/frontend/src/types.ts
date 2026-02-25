@@ -29,6 +29,7 @@ export interface SimMeta {
   scenario: string
   governance: string
   seed: number | null
+  variant?: string | null
   names: Record<string, string>   // agent_id -> display name
 }
 
@@ -45,5 +46,6 @@ export interface RunInfo {
   scenario: string
   governance: string
   seed: number | null
+  variant?: string | null
   size_kb: number
 }

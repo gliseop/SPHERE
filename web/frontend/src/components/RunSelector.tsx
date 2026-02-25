@@ -17,14 +17,17 @@ interface Props {
 const PAGE_SIZE = 20
 
 export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, activeRuns, onGoToRuns }: Props) {
-  const [runs, setRuns] = useState<RunInfo[]>([])
+  const [runs, setRuns] = useState<RunInfo[] | null>(null)
   const [selected, setSelected] = useState<RunInfo | null>(null)
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
 
   const activeSet = new Set(activeRuns)
 
   const refreshRuns = useCallback(() => {
-    apiClient.get('/api/runs').then((r) => r.json()).then(setRuns).catch(console.error)
+    apiClient.get('/api/runs')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => setRuns(Array.isArray(data) ? data : []))
+      .catch(() => setRuns([]))
   }, [])
 
   useEffect(() => {
@@ -39,20 +42,23 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, ac
 
   const isIdle = mode === 'idle'
 
-  const visibleRuns = runs.slice(0, visibleCount)
-  const hasMore = runs.length > visibleCount
+  const allRuns = runs ?? []
+  const visibleRuns = allRuns.slice(0, visibleCount)
+  const hasMore = allRuns.length > visibleCount
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ padding: '0.5rem 0.875rem', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
         <div style={{ fontSize: '0.5625rem', fontWeight: 600, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.15em' }}>
-          Прогоны ({runs.length})
+          Прогоны ({runs === null ? '…' : allRuns.length})
         </div>
       </div>
 
       <div className="run-list" style={{ flex: '0 0 auto' }}>
         {visibleRuns.map((r) => {
           const isActive = activeSet.has(r.name)
+          const showScenario = Boolean(r.scenario)
+          const showGov = Boolean(r.governance)
           return (
             <div
               key={r.name}
@@ -61,8 +67,14 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, ac
             >
               <div className="run-item-name">
                 {isActive && <span className="active-dot-inline" />}
-                {r.scenario}/{r.governance}
+                {showScenario ? r.scenario : r.name}
+                {showGov ? `/${r.governance}` : ''}
                 {r.seed !== null ? `/s${r.seed}` : ''}
+                {r.variant && (
+                  <span className="badge small info" style={{ marginLeft: '0.35rem' }}>
+                    {r.variant}
+                  </span>
+                )}
               </div>
               <div className="run-item-meta">
                 {r.size_kb} KB
@@ -77,12 +89,12 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, ac
             onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}
             style={{ margin: '0.25rem 0.5rem', width: 'calc(100% - 1rem)' }}
           >
-            Показать ещё ({runs.length - visibleCount})
+            Показать ещё ({allRuns.length - visibleCount})
           </button>
         )}
-        {runs.length === 0 && (
+        {allRuns.length === 0 && (
           <div style={{ padding: '0.75rem 0.875rem', fontSize: '0.5625rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-            Нет прогонов
+            {runs === null ? 'Загрузка…' : 'Нет прогонов'}
           </div>
         )}
       </div>

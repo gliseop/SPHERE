@@ -22,7 +22,14 @@ if [ -f "$ROOT_DIR/.env" ]; then
     echo "Загружены переменные из .env"
 fi
 
-PORT="${2:-8765}"
+PORT=8765
+if [[ "${1:-}" == "--port" || "${1:-}" == "-p" ]]; then
+    PORT="${2:-8765}"
+elif [[ "${1:-}" =~ ^--port=([0-9]+)$ ]]; then
+    PORT="${BASH_REMATCH[1]}"
+elif [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+    PORT="$1"
+fi
 
 echo "=== MAGISTRY Graph UI ==="
 echo "Сборка фронтенда..."

@@ -35,20 +35,24 @@ const GOVERNANCE_OPTIONS = [
 type FilterKey = 'all' | 'S0' | 'S1' | 'S2'
 
 export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
-  const [runs, setRuns] = useState<RunInfo[]>([])
+  const [runs, setRuns] = useState<RunInfo[] | null>(null)
   const [filter, setFilter] = useState<FilterKey>('all')
 
   // Launch form state
   const [launchScenario, setLaunchScenario] = useState('S1')
   const [launchGovernance, setLaunchGovernance] = useState('G1')
-  const [launchSeed, setLaunchSeed] = useState('42')
+  const [launchSeed, setLaunchSeed] = useState('')
   const [launchRunner, setLaunchRunner] = useState('mock')
   const [launchRounds, setLaunchRounds] = useState('25')
   const [launching, setLaunching] = useState(false)
   const [stopping, setStopping] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   const refreshRuns = useCallback(() => {
-    apiClient.get('/api/runs').then((r) => r.json()).then(setRuns).catch(console.error)
+    apiClient.get('/api/runs')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => setRuns(Array.isArray(data) ? data : []))
+      .catch(() => setRuns([]))
   }, [])
 
   useEffect(() => {
@@ -58,10 +62,12 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
   }, [refreshRuns])
 
   const activeNames = new Set(activeRuns.filter((a) => a.status === 'running').map((a) => a.run_name))
+  const hasRunning = activeNames.size > 0
 
+  const runList = runs ?? []
   const filtered = filter === 'all'
-    ? runs
-    : runs.filter((r) => r.scenario === filter)
+    ? runList
+    : runList.filter((r) => r.scenario === filter)
 
   async function handleLaunch() {
     setLaunching(true)
@@ -69,7 +75,7 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
       const res = await apiClient.post('/api/runs/launch', {
         scenario: launchScenario,
         governance: launchGovernance,
-        seed: launchSeed ? Number(launchSeed) : 42,
+        seed: launchSeed ? Number(launchSeed) : null,
         runner: launchRunner,
         rounds: launchRounds ? Number(launchRounds) : 25,
       })
@@ -89,12 +95,28 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
     }
   }
 
+  async function handleDelete(runName: string) {
+    if (!window.confirm(`Удалить прогон ${runName}? Это действие необратимо.`)) return
+    setDeleting(runName)
+    try {
+      const res = await apiClient.delete(`/api/runs/${runName}`)
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        window.alert(text || 'Не удалось удалить прогон')
+        return
+      }
+      refreshRuns()
+    } finally {
+      setDeleting(null)
+    }
+  }
+
   const isIdle = mode === 'idle'
 
   return (
     <div className="runs-view">
       <div className="runs-header">
-        <span>Прогоны ({runs.length})</span>
+        <span>Прогоны ({runs === null ? '…' : runList.length})</span>
         <div className="runs-filter">
           {(['all', 'S0', 'S1', 'S2'] as FilterKey[]).map((key) => (
             <button
@@ -131,7 +153,7 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
               </select>
             </div>
             <div className="form-field">
-              <label>Seed</label>
+              <label>Seed (пусто = случайный)</label>
               <input className="hud-input" type="number" value={launchSeed} onChange={(e) => setLaunchSeed(e.target.value)} placeholder="42" />
             </div>
             <div className="form-field">
@@ -188,7 +210,7 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
         <table className="runs-table">
           <thead>
             <tr>
-              <th></th>
+              {hasRunning && <th></th>}
               <th>Имя</th>
               <th>Сценарий</th>
               <th>Управление</th>
@@ -202,9 +224,11 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
               const isActive = activeNames.has(r.name)
               return (
                 <tr key={r.name} className={`runs-row${isActive ? ' active' : ''}`}>
-                  <td className="runs-status-cell">
-                    {isActive && <div className="active-dot" />}
-                  </td>
+                  {hasRunning && (
+                    <td className="runs-status-cell">
+                      {isActive && <div className="active-dot" />}
+                    </td>
+                  )}
                   <td className="runs-name-cell">{r.name}</td>
                   <td><span className="badge small accent">{r.scenario || '—'}</span></td>
                   <td><span className="badge small info">{r.governance || '—'}</span></td>
@@ -229,6 +253,17 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
                         ■
                       </button>
                     )}
+                    {user?.role === 'admin' && (
+                      <button
+                        className="btn-clipped danger small"
+                        onClick={() => handleDelete(r.name)}
+                        disabled={Boolean(isActive) || deleting === r.name || !isIdle}
+                        title={isActive ? 'Нельзя удалить активный прогон' : 'Удалить'}
+                        style={{ marginLeft: '0.35rem' }}
+                      >
+                        🗑
+                      </button>
+                    )}
                   </td>
                 </tr>
               )
@@ -237,7 +272,9 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
         </table>
         {filtered.length === 0 && (
           <div className="runs-empty">
-            {filter === 'all' ? 'Нет прогонов' : `Нет прогонов для ${filter}`}
+            {runs === null
+              ? 'Загрузка…'
+              : (filter === 'all' ? 'Нет прогонов' : `Нет прогонов для ${filter}`)}
           </div>
         )}
       </div>

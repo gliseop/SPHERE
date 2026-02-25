@@ -59,7 +59,7 @@ export function useSimulation() {
           case 'meta':
             return {
               ...prev,
-              meta: { scenario: msg.scenario, governance: msg.governance, seed: msg.seed, names: msg.names ?? {} },
+              meta: { scenario: msg.scenario, governance: msg.governance, seed: msg.seed, variant: msg.variant ?? null, names: msg.names ?? {} },
               names: msg.names ?? {},
             }
           case 'event':

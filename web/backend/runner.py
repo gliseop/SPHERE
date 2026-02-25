@@ -64,7 +64,7 @@ def launch_simulation(
     Raises:
         RuntimeError: Если прогон с таким именем уже запущен.
     """
-    run_name = f"{scenario}_{governance}_seed{seed}"
+    run_name = f"{scenario}_{governance}_seed{seed}_{runner_type}"
 
     # Проверить, не запущен ли уже
     if run_name in _active:
@@ -78,6 +78,8 @@ def launch_simulation(
 
     jsonl_path = _RESULTS_DIR / f"{run_name}_events.jsonl"
     summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
+    stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
+    stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
 
     _write_names_json(run_name, scenario, governance)
 
@@ -92,15 +94,23 @@ def launch_simulation(
         "--summary-json", str(summary_path),
     ]
 
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(_PROJECT_ROOT),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    # Важно: не использовать PIPE без чтения stdout/stderr — иначе процесс может
+    # зависнуть при заполнении буфера (особенно для verbose-runner-ов).
+    with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(_PROJECT_ROOT),
+            stdout=stdout,
+            stderr=stderr,
+        )
     _active[run_name] = proc
 
-    return {"run_name": run_name, "pid": proc.pid}
+    return {
+        "run_name": run_name,
+        "pid": proc.pid,
+        "stdout_log": stdout_path.name,
+        "stderr_log": stderr_path.name,
+    }
 
 
 def list_active() -> list[dict]:
@@ -114,9 +124,26 @@ def list_active() -> list[dict]:
     for name, proc in _active.items():
         poll = proc.poll()
         if poll is None:
-            result.append({"run_name": name, "pid": proc.pid, "status": "running"})
+            result.append(
+                {
+                    "run_name": name,
+                    "pid": proc.pid,
+                    "status": "running",
+                    "stdout_log": f"{name}_stdout.log",
+                    "stderr_log": f"{name}_stderr.log",
+                }
+            )
         else:
-            result.append({"run_name": name, "pid": proc.pid, "status": "finished", "returncode": poll})
+            result.append(
+                {
+                    "run_name": name,
+                    "pid": proc.pid,
+                    "status": "finished",
+                    "returncode": poll,
+                    "stdout_log": f"{name}_stdout.log",
+                    "stderr_log": f"{name}_stderr.log",
+                }
+            )
             finished.append(name)
     # Очистить завершённые
     for name in finished:

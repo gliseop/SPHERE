@@ -102,14 +102,25 @@ export default function App() {
     [state.events],
   )
 
-  const privateRatio = useMemo(() => {
-    if (!meaningfulEvents.length) return 0
-    const msgs = meaningfulEvents.filter(
-      (e) => e.event_type === 'message_sent' || e.event_type === 'message'
-    )
-    const priv = msgs.filter((e) => getBool(e.payload, 'private')).length
-    return (priv / Math.max(1, msgs.length)) * 100
-  }, [meaningfulEvents])
+  const messageEvents = useMemo(
+    () => meaningfulEvents.filter((e) => e.event_type === 'message_sent' || e.event_type === 'message'),
+    [meaningfulEvents],
+  )
+
+  const privateStats = useMemo(() => {
+    const total = messageEvents.length
+    const priv = messageEvents.filter((e) => getBool(e.payload, 'private')).length
+    const ratio = total ? (priv / total) * 100 : 0
+    return { total, priv, ratio }
+  }, [messageEvents])
+
+  const lastDateLabel = useMemo(() => {
+    const last = state.events[state.events.length - 1]
+    if (!last?.timestamp) return '---'
+    const ms = Date.parse(last.timestamp)
+    if (!Number.isFinite(ms)) return '---'
+    return new Date(ms).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+  }, [state.events])
 
   const handleLeftDrag = useCallback((delta: number) => {
     setLeftWidth((w) => Math.max(MIN_PANEL, Math.min(MAX_PANEL, w + delta)))
@@ -160,51 +171,54 @@ export default function App() {
           </nav>
           {state.meta && (
             <span className="hud-header-meta">
-              {state.meta.scenario} / {state.meta.governance}
+              {state.meta.scenario}
+              {state.meta.governance ? ` / ${state.meta.governance}` : ''}
               {state.meta.seed !== null ? ` / seed${state.meta.seed}` : ''}
+              {state.meta.variant ? ` / ${state.meta.variant}` : ''}
             </span>
           )}
         </div>
 
         <div className="hud-header-stats">
-          <div className="hud-header-stat">
-            <span className="hud-header-stat-label">
-              {typeof state.currentRound === 'number' ? 'Раунд' : 'День'}
-            </span>
-            <span className="hud-header-stat-value accent">
-              {typeof state.currentRound === 'number'
-                ? state.currentRound
-                : (() => {
-                    const last = state.events[state.events.length - 1]
-                    if (!last?.timestamp) return '---'
-                    const ms = Date.parse(last.timestamp)
-                    if (!Number.isFinite(ms)) return '---'
-                    return new Date(ms).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
-                  })()}
-            </span>
-          </div>
-          <div className="hud-header-stat">
-            <span className="hud-header-stat-label">Событий</span>
-            <span className="hud-header-stat-value">{meaningfulEvents.length}</span>
-          </div>
-          <div className="hud-header-stat">
-            <span className="hud-header-stat-label">Приватных</span>
-            <span className={`hud-header-stat-value ${privateRatio > 50 ? 'danger' : ''}`}>
-              {privateRatio.toFixed(0)}%
-            </span>
-          </div>
-          <div className="hud-header-stat">
-            <span className="hud-header-stat-label">Агентов</span>
-            <span className="hud-header-stat-value">{state.nodes.length}</span>
-          </div>
+          {view === 'monitor' && (
+            <>
+              <div className="hud-header-stat">
+                <span className="hud-header-stat-label">Раунд</span>
+                <span className="hud-header-stat-value accent">
+                  {typeof state.currentRound === 'number' ? state.currentRound : '—'}
+                </span>
+              </div>
+              <div className="hud-header-stat">
+                <span className="hud-header-stat-label">День</span>
+                <span className="hud-header-stat-value">{lastDateLabel}</span>
+              </div>
+              <div className="hud-header-stat">
+                <span className="hud-header-stat-label">Событий</span>
+                <span className="hud-header-stat-value">{meaningfulEvents.length}</span>
+              </div>
+              <div className="hud-header-stat">
+                <span className="hud-header-stat-label">Приватных</span>
+                <span
+                  className={`hud-header-stat-value ${(privateStats.total >= 5 && privateStats.ratio > 80) ? 'danger' : ''}`}
+                  title={privateStats.total ? `${privateStats.priv}/${privateStats.total}` : 'Нет сообщений'}
+                >
+                  {privateStats.ratio.toFixed(0)}%
+                </span>
+              </div>
+              <div className="hud-header-stat">
+                <span className="hud-header-stat-label">Агентов</span>
+                <span className="hud-header-stat-value">{state.nodes.length}</span>
+              </div>
 
-          {state.done && <span className="badge success">✓ Завершено</span>}
-          {state.error && <span className="badge danger">⚠ Ошибка</span>}
+              {state.done && <span className="badge success">✓ Завершено</span>}
+              {state.error && <span className="badge danger">⚠ Ошибка</span>}
 
-          {mode !== 'idle' && (
-            <button className="btn-clipped danger small" onClick={disconnect}>
-              Стоп
-            </button>
+              {mode !== 'idle' && (
+                <button className="btn-clipped danger small" onClick={disconnect}>
+                  Стоп
+                </button>
+              )}
+            </>
           )}
           <button
             className="btn-clipped small"

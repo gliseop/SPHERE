@@ -136,6 +136,8 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
       .force('link', d3.forceLink<D3Node, D3Link>().id((d) => d.id).strength(0.08).distance(80))
       .force('charge', d3.forceManyBody().strength(-180))
       .force('center', d3.forceCenter(width / 2, height / 2))
+      .force('x', d3.forceX(width / 2).strength(0.03))
+      .force('y', d3.forceY(height / 2).strength(0.03))
       .force('collision', d3.forceCollide().radius(20))
       .alphaDecay(0.02)
       .velocityDecay(0.3)
@@ -161,6 +163,8 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
       const { width: w, height: h } = container.getBoundingClientRect()
       svg.attr('width', w).attr('height', h)
       simRef.current?.force('center', d3.forceCenter(w / 2, h / 2))
+      simRef.current?.force('x', d3.forceX(w / 2).strength(0.03))
+      simRef.current?.force('y', d3.forceY(h / 2).strength(0.03))
       simRef.current?.alpha(0.3).restart()
     })
     ro.observe(container)
@@ -179,6 +183,9 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
     if (!sim || !svgEl) return
 
     const svg = d3.select(svgEl)
+    const { width, height } = containerRef.current?.getBoundingClientRect() ?? { width: 0, height: 0 }
+    const cx = width ? width / 2 : 0
+    const cy = height ? height / 2 : 0
 
     const newNodesMap = new Map<string, D3Node>()
     for (const n of nodes) {
@@ -187,7 +194,12 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
         existing.reputation = n.reputation
         newNodesMap.set(n.id, existing)
       } else {
-        newNodesMap.set(n.id, { id: n.id, reputation: n.reputation })
+        newNodesMap.set(n.id, {
+          id: n.id,
+          reputation: n.reputation,
+          x: cx + (Math.random() - 0.5) * 40,
+          y: cy + (Math.random() - 0.5) * 40,
+        })
       }
     }
     nodesRef.current = newNodesMap
@@ -294,6 +306,14 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
 
     sim.nodes(d3Nodes)
     ;(sim.force('link') as d3.ForceLink<D3Node, D3Link>).links(d3Links)
+
+    const nodeCount = d3Nodes.length
+    ;(sim.force('charge') as d3.ForceManyBody<D3Node>).strength(nodeCount <= 3 ? -120 : -180)
+    ;(sim.force('collision') as d3.ForceCollide<D3Node>).radius(nodeCount <= 3 ? 26 : 20)
+    ;(sim.force('link') as d3.ForceLink<D3Node, D3Link>)
+      .strength(nodeCount <= 3 ? 0.12 : 0.08)
+      .distance(nodeCount <= 3 ? 60 : 80)
+
     sim.alpha(0.3).restart()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, edges, events, names])

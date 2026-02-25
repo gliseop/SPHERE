@@ -56,13 +56,16 @@ export function ScenariosView({ onLaunch, user }: {
   onStartLive?: () => void
   user: AuthUser | null
 }) {
-  const [scenarios, setScenarios] = useState<Scenario[]>([])
+  const [scenarios, setScenarios] = useState<Scenario[] | null>(null)
   const [editing, setEditing] = useState<Scenario | null>(null)
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    apiClient.get('/api/scenarios').then((r) => r.json()).then(setScenarios).catch(() => {})
+    apiClient.get('/api/scenarios')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => setScenarios(Array.isArray(data) ? data : []))
+      .catch(() => setScenarios([]))
   }, [])
 
   async function handleSave() {
@@ -73,11 +76,12 @@ export function ScenariosView({ onLaunch, user }: {
         ? await apiClient.put(`/api/scenarios/${editing.id}`, editing)
         : await apiClient.post('/api/scenarios', editing)
       const saved: Scenario = await res.json()
-      setScenarios((prev) =>
-        editing.id
-          ? prev.map((s) => (s.id === saved.id ? saved : s))
-          : [...prev, saved]
-      )
+      setScenarios((prev) => {
+        const list = Array.isArray(prev) ? prev : []
+        return editing.id
+          ? list.map((s) => (s.id === saved.id ? saved : s))
+          : [...list, saved]
+      })
       setEditing(null)
     } finally {
       setSaving(false)
@@ -87,7 +91,7 @@ export function ScenariosView({ onLaunch, user }: {
   async function handleDelete(id: string) {
     if (!window.confirm('Удалить сценарий? Это действие необратимо.')) return
     await apiClient.delete(`/api/scenarios/${id}`)
-    setScenarios((prev) => prev.filter((s) => s.id !== id))
+    setScenarios((prev) => (Array.isArray(prev) ? prev.filter((s) => s.id !== id) : []))
   }
 
   async function handleRun(id: string) {
@@ -136,6 +140,8 @@ export function ScenariosView({ onLaunch, user }: {
     if (!editing) return
     setEditing({ ...editing, agents: editing.agents.filter((_, idx) => idx !== i) })
   }
+
+  const scenarioList = scenarios ?? []
 
   if (editing) {
     return (
@@ -314,7 +320,7 @@ export function ScenariosView({ onLaunch, user }: {
   return (
     <div className="scenarios-view">
       <div className="scenarios-header">
-        <span>Сценарии ({scenarios.length})</span>
+        <span>Сценарии ({scenarios === null ? '…' : scenarioList.length})</span>
         {user?.role === 'admin' && (
           <button className="btn-clipped primary" onClick={() => setEditing({ ...EMPTY_SCENARIO })}>
             + Создать сценарий
@@ -322,9 +328,9 @@ export function ScenariosView({ onLaunch, user }: {
         )}
       </div>
 
-      {scenarios.length === 0 && (
+      {scenarioList.length === 0 && (
         <div className="scenarios-empty">
-          <div className="text-muted">Нет сохранённых сценариев</div>
+          <div className="text-muted">{scenarios === null ? 'Загрузка…' : 'Нет сохранённых сценариев'}</div>
           <div style={{ fontSize: '0.7rem', marginTop: '0.5rem', color: 'var(--text-muted)' }}>
             Создайте первый сценарий чтобы начать симуляцию
           </div>
@@ -332,7 +338,7 @@ export function ScenariosView({ onLaunch, user }: {
       )}
 
       <div className="scenarios-list">
-        {scenarios.map((s) => (
+        {scenarioList.map((s) => (
           <div key={s.id} className="scenario-card hud-panel">
             <div className="corner tl" /><div className="corner tr" />
             <div className="corner bl" /><div className="corner br" />

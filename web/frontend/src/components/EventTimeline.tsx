@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SimEvent } from '../types'
 import { getString, getBool } from '../utils/payload'
 
@@ -42,21 +42,22 @@ export function EventTimeline({ events, selectedAgent }: Props) {
   const [autoScroll, setAutoScroll] = useState(true)
   const [visibleIds, setVisibleIds] = useState<Set<number>>(new Set())
 
-  const filtered = selectedAgent
-    ? events.filter(
-        (e) =>
-          e.agent_id === selectedAgent ||
-          getString(e.payload, 'to_id') === selectedAgent ||
-          getString(e.payload, 'target') === selectedAgent
-      )
-    : events
+  const filtered = useMemo(() => {
+    if (!selectedAgent) return events
+    return events.filter(
+      (e) =>
+        e.agent_id === selectedAgent ||
+        getString(e.payload, 'to_id') === selectedAgent ||
+        getString(e.payload, 'target') === selectedAgent
+    )
+  }, [events, selectedAgent])
 
   useEffect(() => {
     const timer = setTimeout(() => {
       setVisibleIds(new Set(filtered.map((_, i) => i)))
     }, 50)
     return () => clearTimeout(timer)
-  }, [filtered.length])
+  }, [filtered])
 
   useEffect(() => {
     if (!autoScroll || !trackRef.current) return

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { SimEvent, ThreadGroup } from '../types'
 import { getString, getBool } from '../utils/payload'
 import { toDayKey, formatDayLabel } from '../utils/time'
+import { Markdown } from './Markdown'
 
 interface Props {
   events: SimEvent[]
@@ -51,6 +52,26 @@ function fmtTime(ts: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function isLongText(text: string): boolean {
+  if (!text) return false
+  if (text.length > 800) return true
+  const lines = text.split('\n').length
+  return lines > 10
+}
+
+function CollapsibleMarkdown({ content, className }: { content: string; className?: string }) {
+  if (!isLongText(content)) return <Markdown content={content} className={className} />
+  const preview = content.replace(/\s+/g, ' ').trim().slice(0, 180)
+  return (
+    <details className="md-details">
+      <summary className="md-summary">
+        {preview}{preview.length < content.length ? '…' : ''}
+      </summary>
+      <Markdown content={content} className={className} />
+    </details>
+  )
 }
 
 function channelIcon(channel: string): string {
@@ -199,7 +220,11 @@ function ThreadView({
               className={`thread-bubble ${mine ? 'left' : 'right'}`}
             >
               <div className="thread-bubble-author">{dn(msg.agent_id, names)}</div>
-              <div className="thread-bubble-content">{content}</div>
+              <div className="thread-bubble-content">
+                {content
+                  ? <CollapsibleMarkdown content={content} />
+                  : <span className="text-muted">—</span>}
+              </div>
               {bubbleTime && <div className="thread-bubble-time">{bubbleTime}</div>}
             </div>
           )
@@ -237,7 +262,11 @@ function DocumentView({
         </span>
         <span className="document-toggle">{expanded ? 'Свернуть' : 'Развернуть'}</span>
       </button>
-      {expanded && <pre className="document-content">{content}</pre>}
+      {expanded && (
+        <div className="document-content">
+          {content ? <Markdown content={content} /> : <span className="text-muted">—</span>}
+        </div>
+      )}
     </div>
   )
 }
@@ -284,6 +313,8 @@ function EventView({
     const content = getString(payload, 'content')
     const response = getString(payload, 'response')
     const isPrivate = getBool(payload, 'private')
+    const showContent = Boolean(content && content !== 'msg')
+    const showResponse = Boolean(response)
     return (
       <div className={`activity-item message${isPrivate ? ' private' : ''}`}>
         <div className="activity-item-header">
@@ -293,8 +324,21 @@ function EventView({
           <span className="activity-agent">{dn(toId, names)}</span>
           {timestamp && <span className="activity-time">{fmtTime(timestamp)}</span>}
         </div>
-        {content && content !== 'msg' && <div className="activity-content">{content}</div>}
-        {response && <div className="activity-response">{response}</div>}
+        {showContent && (
+          <div className="activity-content">
+            <CollapsibleMarkdown content={content} />
+          </div>
+        )}
+        {showResponse && (
+          <div className="activity-response">
+            <CollapsibleMarkdown content={response} />
+          </div>
+        )}
+        {!showContent && !showResponse && (
+          <div className="activity-content text-muted">
+            (сообщение без сохранённого текста)
+          </div>
+        )}
       </div>
     )
   }
