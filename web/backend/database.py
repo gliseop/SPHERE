@@ -1,12 +1,14 @@
 """SQLite-хранилище учётных записей пользователей MAGISTRY."""
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "users.db"
+_DEFAULT_DB_PATH = Path(__file__).parent / "users.db"
+DB_PATH = Path(os.environ.get("MAGISTRY_USERS_DB") or _DEFAULT_DB_PATH)
 
 
 @dataclass
