@@ -85,6 +85,7 @@ export function ScenariosView({ onLaunch, user }: {
   }
 
   async function handleDelete(id: string) {
+    if (!window.confirm('Удалить сценарий? Это действие необратимо.')) return
     await apiClient.delete(`/api/scenarios/${id}`)
     setScenarios((prev) => prev.filter((s) => s.id !== id))
   }

@@ -62,13 +62,17 @@ export default function App() {
   const [activeRuns, setActiveRuns] = useState<Array<{ run_name: string; pid: number; status: 'running' | 'finished'; returncode?: number }>>([])
 
   useEffect(() => {
+    if (!auth.isAuthenticated) return
     function poll() {
-      apiClient.get('/api/runs/active').then((r) => r.json()).then(setActiveRuns).catch(() => {})
+      apiClient.get('/api/runs/active')
+        .then((r) => r.ok ? r.json() : [])
+        .then((data) => setActiveRuns(Array.isArray(data) ? data : []))
+        .catch(() => {})
     }
     poll()
     const interval = setInterval(poll, 5_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [auth.isAuthenticated])
 
   const [leftWidth, setLeftWidth] = useState<number>(() => {
     const stored = localStorage.getItem('magistry-left-w')
