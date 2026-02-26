@@ -1,7 +1,11 @@
 import { test, expect, type APIRequestContext } from '@playwright/test'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 
 const ADMIN_USER = process.env.PW_ADMIN_USER ?? 'pw_admin'
 const ADMIN_PASS = process.env.PW_ADMIN_PASS ?? 'pw_password'
+
+const RESULTS_DIR = path.resolve(__dirname, '../../..', 'results')
 
 async function apiLogin(request: APIRequestContext): Promise<string> {
   const res = await request.post('/api/auth/login', {
@@ -62,14 +66,11 @@ test('delete run via UI (runner not selectable)', async ({ page, request }) => {
   await expect(launchPanel.getByText('Runner')).toHaveCount(0)
   await expect(launchPanel.getByText('Mock')).toHaveCount(0)
 
-  // Arrange: create a tiny mock run (fast, deterministic) via API.
-  const launch = await request.post('/api/runs/launch', {
-    headers: { Authorization: `Bearer ${token}` },
-    data: { scenario: 'S1', governance: 'G1', seed: '', runner: 'mock', rounds: 1 },
-  })
-  expect(launch.ok()).toBeTruthy()
-  const { run_name } = (await launch.json()) as { run_name: string }
-  expect(run_name).toMatch(/^S1_G1_seed\d+_mock$/)
+  // Arrange: create a tiny run artifact directly in results/ (no LLM dependency).
+  const seed = Date.now() % 1_000_000_000
+  const run_name = `S1_G1_seed${seed}_cognitive`
+  const eventsPath = path.join(RESULTS_DIR, `${run_name}_events.jsonl`)
+  await fs.writeFile(eventsPath, '', 'utf8')
 
   // Wait until the run appears in the table (poll refreshRuns).
   await expect(page.locator('td.runs-name-cell', { hasText: run_name })).toBeVisible({ timeout: 30_000 })
@@ -85,13 +86,27 @@ test('delete run via UI (runner not selectable)', async ({ page, request }) => {
 test('playback websocket closes and UI returns to idle', async ({ page, request }) => {
   const token = await apiLogin(request)
 
-  // Arrange: create a tiny run first.
-  const launch = await request.post('/api/runs/launch', {
-    headers: { Authorization: `Bearer ${token}` },
-    data: { scenario: 'S1', governance: 'G1', seed: 314159, runner: 'mock', rounds: 1 },
-  })
-  expect(launch.ok()).toBeTruthy()
-  const { run_name } = (await launch.json()) as { run_name: string }
+  // Arrange: create a tiny playbackable run without launching a simulation.
+  const seed = 314159
+  const run_name = `S1_G1_seed${seed}_cognitive`
+  const eventsPath = path.join(RESULTS_DIR, `${run_name}_events.jsonl`)
+  const namesPath = path.join(RESULTS_DIR, `${run_name}_names.json`)
+  await fs.writeFile(
+    namesPath,
+    JSON.stringify({ off_1: 'Чиновник 1', biz_1: 'Подрядчик 1' }, null, 2),
+    'utf8',
+  )
+  await fs.writeFile(
+    eventsPath,
+    `${JSON.stringify({
+      round: 0,
+      event_type: 'message_sent',
+      agent_id: 'off_1',
+      payload: { to_id: 'biz_1', private: false, content: 'hi', response: 'ok' },
+      timestamp: '2026-02-26T00:00:00.000Z',
+    })}\n`,
+    'utf8',
+  )
 
   // Open app with token
   await page.addInitScript((t) => localStorage.setItem('magistry_token', t), token)

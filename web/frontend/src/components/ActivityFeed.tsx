@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { SimEvent, ThreadGroup } from '../types'
+import type { SimEvent, SimMeta, ThreadGroup } from '../types'
 import { getString, getBool } from '../utils/payload'
 import { toDayKey, formatDayLabel } from '../utils/time'
 import { Markdown } from './Markdown'
@@ -7,6 +7,8 @@ import { Markdown } from './Markdown'
 interface Props {
   events: SimEvent[]
   names: Record<string, string>
+  mode?: 'idle' | 'playback' | 'live'
+  meta?: SimMeta | null
   selectedAgent: string | null
   onClearFilter?: () => void
   focusDay?: string | null
@@ -355,6 +357,8 @@ function EventView({
 export function ActivityFeed({
   events,
   names,
+  mode,
+  meta,
   selectedAgent,
   onClearFilter,
   focusDay,
@@ -406,6 +410,13 @@ export function ActivityFeed({
     setOpenDocs((prev) => ({ ...prev, [docId]: !prev[docId] }))
   }
 
+  const emptyText = (() => {
+    if (selectedAgent) return 'Нет событий по выбранному агенту'
+    if (mode === 'live') return meta ? 'Live подключён — ждём события…' : 'Подключение к Live…'
+    if (mode === 'playback') return meta ? 'Воспроизведение — нет событий' : 'Загрузка…'
+    return 'Запустите прогон чтобы увидеть активность'
+  })()
+
   return (
     <div className="activity-feed">
       <div className="activity-feed-header">
@@ -428,7 +439,7 @@ export function ActivityFeed({
       >
         {grouped.length === 0 && (
           <div className="activity-feed-empty">
-            <span className="text-muted">Запустите прогон чтобы увидеть активность</span>
+            <span className="text-muted">{emptyText}</span>
           </div>
         )}
         {grouped.map((group) => (

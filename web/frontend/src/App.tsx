@@ -368,6 +368,8 @@ export default function App() {
                 <ActivityFeed
                   events={state.events}
                   names={state.names}
+                  mode={mode}
+                  meta={state.meta}
                   selectedAgent={selectedNode}
                   onClearFilter={() => setSelectedNode(null)}
                   focusDay={focusDay}

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import os as _os
 import re
 import secrets
+import time
 import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
@@ -58,6 +60,26 @@ try:
     )
 except ValueError:
     _MAX_BODY_BYTES = 2 * 1024 * 1024
+
+try:
+    _WS_MAX_STR_CHARS = max(200, int(_os.environ.get("MAGISTRY_WS_MAX_STR_CHARS", "2500")))
+except ValueError:
+    _WS_MAX_STR_CHARS = 2500
+
+try:
+    _WS_PING_INTERVAL_S = max(2.0, float(_os.environ.get("MAGISTRY_WS_PING_INTERVAL_S", "15")))
+except ValueError:
+    _WS_PING_INTERVAL_S = 15.0
+
+try:
+    _LIVE_HISTORY_EVENTS = max(0, int(_os.environ.get("MAGISTRY_LIVE_HISTORY_EVENTS", "60")))
+except ValueError:
+    _LIVE_HISTORY_EVENTS = 60
+
+try:
+    _LIVE_GRAPH_THROTTLE_S = max(0.05, float(_os.environ.get("MAGISTRY_LIVE_GRAPH_THROTTLE_S", "0.25")))
+except ValueError:
+    _LIVE_GRAPH_THROTTLE_S = 0.25
 
 
 def _validate_run_name(name: str) -> None:
@@ -359,6 +381,92 @@ def _load_names(run_name: str) -> dict[str, str]:
         return {}
 
 
+def _seed_builder_from_names(builder: GraphStateBuilder, names: dict[str, str]) -> None:
+    """Pre-create graph nodes so UI can render agents before events arrive."""
+    for agent_id in names.keys():
+        try:
+            builder._ensure_agent(str(agent_id))
+        except Exception:
+            continue
+
+
+def _truncate_json_value(value: Any, *, max_chars: int) -> tuple[Any, bool]:
+    if isinstance(value, str):
+        if len(value) <= max_chars:
+            return value, False
+        return value[:max_chars] + "…", True
+
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        truncated = False
+        for k, v in value.items():
+            nv, t = _truncate_json_value(v, max_chars=max_chars)
+            out[k] = nv
+            truncated = truncated or t
+        return out, truncated
+
+    if isinstance(value, list):
+        out_list: list[Any] = []
+        truncated = False
+        for item in value:
+            nv, t = _truncate_json_value(item, max_chars=max_chars)
+            out_list.append(nv)
+            truncated = truncated or t
+        return out_list, truncated
+
+    return value, False
+
+
+def _event_for_ws(event: dict[str, Any]) -> dict[str, Any]:
+    """Shrink large text fields for WS transport (helps reverse-proxies)."""
+    if _WS_MAX_STR_CHARS <= 0:
+        return event
+    trimmed, truncated = _truncate_json_value(event, max_chars=_WS_MAX_STR_CHARS)
+    if isinstance(trimmed, dict):
+        if truncated:
+            trimmed["_truncated"] = True
+        return trimmed
+    return event
+
+
+async def _bootstrap_graph_from_file(
+    path: Path,
+    builder: GraphStateBuilder,
+    *,
+    tail_events: int,
+) -> tuple[int, bytes, list[dict]]:
+    """Ingest existing JSONL into graph state and return last events for UI."""
+    keep_tail = deque(maxlen=tail_events) if tail_events > 0 else None
+    buf = bytearray()
+    file_pos = 0
+
+    async with aiofiles.open(path, "rb") as f:
+        while True:
+            chunk = await f.read(64 * 1024)
+            if not chunk:
+                file_pos = await f.tell()
+                break
+            buf.extend(chunk)
+            while True:
+                nl = buf.find(b"\n")
+                if nl < 0:
+                    break
+                line_bytes = bytes(buf[:nl])
+                del buf[: nl + 1]
+                line = line_bytes.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                builder.ingest(event)
+                if keep_tail is not None:
+                    keep_tail.append(event)
+
+    return file_pos, bytes(buf), (list(keep_tail) if keep_tail is not None else [])
+
+
 async def _stream_events_from_file(
     path: Path, speed: float = 1.0
 ) -> AsyncIterator[dict]:
@@ -547,12 +655,13 @@ async def ws_playback(
     names = _load_names(name)
     await websocket.send_json({"type": "meta", **meta, "names": names})
     builder = GraphStateBuilder()
+    _seed_builder_from_names(builder, names)
     await websocket.send_json({"type": "graph_state", **builder.state()})
 
     try:
         async for event in _stream_events_from_file(path, speed=speed):
-            await websocket.send_json({"type": "event", "data": event})
             builder.ingest(event)
+            await websocket.send_json({"type": "event", "data": _event_for_ws(event)})
             await websocket.send_json({"type": "graph_state", **builder.state()})
 
         await websocket.send_json({"type": "done"})
@@ -587,6 +696,11 @@ async def ws_live(
     watched_run: str | None = None
     watched_path: Path | None = None
     file_pos = 0
+    buf = bytearray()
+    bootstrapped = False
+    last_send = time.monotonic()
+    last_graph_send = 0.0
+    graph_dirty = False
 
     try:
         if run_name:
@@ -633,44 +747,98 @@ async def ws_live(
                 continue
 
             target_path = RESULTS_DIR / f"{target_run}_events.jsonl"
-            if not target_path.exists():
-                await asyncio.sleep(0.5)
-                continue
 
             if target_run != watched_run or target_path != watched_path:
                 watched_run = target_run
                 watched_path = target_path
                 file_pos = 0
+                buf = bytearray()
                 builder = GraphStateBuilder()
-                meta = _parse_run_name(target_path.name)
                 names = _load_names(target_run)
+                _seed_builder_from_names(builder, names)
+                bootstrapped = False
+                graph_dirty = False
+                meta = _parse_run_name(f"{target_run}_events.jsonl")
                 await websocket.send_json(
                     {"type": "meta", **meta, "names": names, "run_name": target_run}
                 )
                 await websocket.send_json({"type": "graph_state", **builder.state()})
+                last_send = time.monotonic()
+                last_graph_send = last_send
+
+            if watched_path and not watched_path.exists():
+                now = time.monotonic()
+                if now - last_send >= _WS_PING_INTERVAL_S:
+                    await websocket.send_json({"type": "ping", "t": time.time()})
+                    last_send = now
+                await asyncio.sleep(0.5)
+                continue
+
+            if watched_path and not bootstrapped:
+                try:
+                    file_pos, leftover, tail_events = await _bootstrap_graph_from_file(
+                        watched_path,
+                        builder,
+                        tail_events=_LIVE_HISTORY_EVENTS,
+                    )
+                except OSError:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                buf = bytearray(leftover)
+                await websocket.send_json({"type": "graph_state", **builder.state()})
+                last_send = time.monotonic()
+                last_graph_send = last_send
+                for ev in tail_events:
+                    await websocket.send_json(
+                        {"type": "event", "data": _event_for_ws(ev)}
+                    )
+                    last_send = time.monotonic()
+                bootstrapped = True
 
             try:
                 # Держим дескриптор открытым и читаем "хвост" до смены watched_run.
+                assert watched_path is not None
                 async with aiofiles.open(watched_path, "rb") as f:
                     while True:
                         await f.seek(file_pos)
-                        raw = await f.read()
-                        file_pos += len(raw)
+                        chunk = await f.read(64 * 1024)
+                        if chunk:
+                            file_pos += len(chunk)
+                            buf.extend(chunk)
 
-                        new_lines = raw.decode("utf-8", errors="replace")
-                        for line in new_lines.splitlines():
-                            line = line.strip()
-                            if not line:
-                                continue
-                            try:
-                                event = json.loads(line)
-                            except json.JSONDecodeError:
-                                continue
-                            await websocket.send_json({"type": "event", "data": event})
-                            builder.ingest(event)
+                            while True:
+                                nl = buf.find(b"\n")
+                                if nl < 0:
+                                    break
+                                line_bytes = bytes(buf[:nl])
+                                del buf[: nl + 1]
+                                line = line_bytes.decode("utf-8", errors="replace").strip()
+                                if not line:
+                                    continue
+                                try:
+                                    event = json.loads(line)
+                                except json.JSONDecodeError:
+                                    continue
+                                builder.ingest(event)
+                                await websocket.send_json(
+                                    {"type": "event", "data": _event_for_ws(event)}
+                                )
+                                last_send = time.monotonic()
+                                graph_dirty = True
+
+                        now = time.monotonic()
+                        if graph_dirty and (now - last_graph_send) >= _LIVE_GRAPH_THROTTLE_S:
                             await websocket.send_json(
                                 {"type": "graph_state", **builder.state()}
                             )
+                            last_graph_send = now
+                            last_send = now
+                            graph_dirty = False
+
+                        if now - last_send >= _WS_PING_INTERVAL_S:
+                            await websocket.send_json({"type": "ping", "t": time.time()})
+                            last_send = now
 
                         await asyncio.sleep(0.5)
 
@@ -708,6 +876,7 @@ async def ws_live(
                         if next_run != watched_run:
                             break
                         if watched_path and not watched_path.exists():
+                            bootstrapped = False
                             break
             except OSError:
                 await asyncio.sleep(0.5)
