@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { apiClient } from '../utils/apiClient'
 import type { AuthUser } from '../hooks/useAuth'
 
@@ -18,6 +18,7 @@ interface Scenario {
   rounds: number
   seed: number | null
   agents: Agent[]
+  sim_config?: Record<string, unknown> | null
   runner?: string
 }
 
@@ -47,19 +48,35 @@ const SCENARIO_OPTIONS = [
 const GOVERNANCE_OPTIONS = [
   { value: 'G0', label: 'G0 — Без контроля' },
   { value: 'G1', label: 'G1 — Аудитор (рекомендательный)' },
-  { value: 'G2', label: 'G2 — Аудитор с репутацией' },
+  { value: 'G2', label: 'G2 — Аудитор (санкции по репутации)' },
   { value: 'G3', label: 'G3 — Полный контроль (трибунал)' },
 ]
 
-export function ScenariosView({ onLaunch, user }: {
+export function ScenariosView({ onLaunch, onGoLive, user }: {
   onLaunch?: () => void
-  onStartLive?: () => void
+  onGoLive?: (runName?: string) => void
   user: AuthUser | null
 }) {
   const [scenarios, setScenarios] = useState<Scenario[] | null>(null)
   const [editing, setEditing] = useState<Scenario | null>(null)
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [simConfigText, setSimConfigText] = useState('')
+  const [simConfigError, setSimConfigError] = useState<string | null>(null)
+  const [simConfigLoading, setSimConfigLoading] = useState(false)
+  const prevEditingRef = useRef<Scenario | null>(null)
+
+  useEffect(() => {
+    if (editing && prevEditingRef.current === null) {
+      setSimConfigText(editing.sim_config ? JSON.stringify(editing.sim_config, null, 2) : '')
+      setSimConfigError(null)
+    }
+    if (!editing && prevEditingRef.current !== null) {
+      setSimConfigText('')
+      setSimConfigError(null)
+    }
+    prevEditingRef.current = editing
+  }, [editing])
 
   useEffect(() => {
     apiClient.get('/api/scenarios')
@@ -70,9 +87,28 @@ export function ScenariosView({ onLaunch, user }: {
 
   async function handleSave() {
     if (!editing) return
+    let simConfig: Record<string, unknown> | undefined
+    if (simConfigText.trim()) {
+      try {
+        const parsed = JSON.parse(simConfigText) as unknown
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          setSimConfigError('Ожидается JSON-объект (ScenarioConfig)')
+          return
+        }
+        simConfig = parsed as Record<string, unknown>
+      } catch (e) {
+        setSimConfigError(e instanceof Error ? e.message : 'Некорректный JSON')
+        return
+      }
+    }
+
     setSaving(true)
     try {
-      const payload: Scenario = { ...editing, runner: 'cognitive' }
+      const payload: Scenario = {
+        ...editing,
+        runner: 'cognitive',
+        sim_config: simConfig,
+      }
       const res = editing.id
         ? await apiClient.put(`/api/scenarios/${editing.id}`, payload)
         : await apiClient.post('/api/scenarios', payload)
@@ -97,15 +133,19 @@ export function ScenariosView({ onLaunch, user }: {
 
   async function handleRun(s: Scenario) {
     try {
-      const res = await apiClient.post('/api/runs/launch', {
-        scenario: s.scenario,
-        governance: s.governance,
-        seed: s.seed,
-        runner: 'cognitive',
-        rounds: s.rounds,
-      })
+      const res = s.id
+        ? await apiClient.post(`/api/scenarios/${s.id}/run`)
+        : await apiClient.post('/api/runs/launch', {
+          scenario: s.scenario,
+          governance: s.governance,
+          seed: s.seed,
+          runner: 'cognitive',
+          rounds: s.rounds,
+        })
       if (res.ok) {
+        const data = await res.json().catch(() => null) as { run_name?: string } | null
         onLaunch?.()
+        if (data?.run_name) onGoLive?.(data.run_name)
       }
     } catch {
       // Ошибка сети — молча обрабатываем
@@ -139,6 +179,9 @@ export function ScenariosView({ onLaunch, user }: {
     if (field === 'role') {
       const prefix = value === 'official' ? 'off' : value === 'business' ? 'biz' : 'aud'
       agents[i].id = `${prefix}_${editing.agents[i].name.toLowerCase().replace(/\s+/g, '_').slice(0, 12)}`
+      if (value === 'auditor') {
+        agents[i].initial_reputation = 0
+      }
     }
     setEditing({ ...editing, agents })
   }
@@ -209,7 +252,7 @@ export function ScenariosView({ onLaunch, user }: {
 
           <div className="form-row">
             <div className="form-field">
-              <label>Раундов</label>
+              <label title="Количество шагов симуляции (раундов)">Шагов</label>
               <input
                 className="hud-input"
                 type="number"
@@ -235,6 +278,75 @@ export function ScenariosView({ onLaunch, user }: {
             <div className="text-muted" style={{ fontSize: '0.7rem' }}>
               Cognitive (LLM)
             </div>
+          </div>
+
+          <div className="form-field">
+            <div className="form-field-header">
+              <label>S &amp; G (сим-конфиг)</label>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <button
+                  className="btn-clipped small"
+                  onClick={async () => {
+                    setSimConfigLoading(true)
+                    try {
+                      const qs = new URLSearchParams({ governance: editing.governance })
+                      const res = await apiClient.get(`/api/templates/scenarios/${editing.scenario}?${qs.toString()}`)
+                      if (!res.ok) {
+                        const text = await res.text().catch(() => '')
+                        window.alert(text || 'Не удалось загрузить шаблон')
+                        return
+                      }
+                      const cfg = await res.json().catch(() => null) as Record<string, unknown> | null
+                      if (!cfg || typeof cfg !== 'object') {
+                        window.alert('Шаблон вернул некорректные данные')
+                        return
+                      }
+                      cfg.max_rounds = editing.rounds
+                      if (editing.seed !== null) cfg.seed = editing.seed
+                      setSimConfigText(JSON.stringify(cfg, null, 2))
+                      setSimConfigError(null)
+                    } finally {
+                      setSimConfigLoading(false)
+                    }
+                  }}
+                  disabled={simConfigLoading}
+                  title="Подставить полный конфиг симуляции из встроенного шаблона (с учётом G)"
+                >
+                  {simConfigLoading ? '…' : '⭳ Из шаблона'}
+                </button>
+                <button
+                  className="btn-clipped danger small"
+                  onClick={() => {
+                    if (!simConfigText) return
+                    if (!window.confirm('Очистить сим-конфиг? Будет использован встроенный шаблон.')) return
+                    setSimConfigText('')
+                    setSimConfigError(null)
+                  }}
+                  title="Убрать кастомизацию (вернуться к S*/G*)"
+                >
+                  Очистить
+                </button>
+              </div>
+            </div>
+            <div className="text-muted" style={{ fontSize: '0.7rem', marginTop: '0.25rem' }}>
+              Пусто = запуск по встроенным шаблонам S/G. Здесь можно увидеть и изменить «что зашито» (агенты, потребности, параметры).
+            </div>
+            <textarea
+              className="hud-input"
+              rows={10}
+              value={simConfigText}
+              onChange={(e) => {
+                setSimConfigText(e.target.value)
+                if (simConfigError) setSimConfigError(null)
+              }}
+              placeholder="(опционально) JSON ScenarioConfig"
+              style={{ marginTop: '0.5rem', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace' }}
+            />
+            {simConfigError && (
+              <div style={{ marginTop: '0.5rem' }}>
+                <span className="badge danger small">JSON: {simConfigError}</span>
+              </div>
+            )}
           </div>
 
           <div className="form-field">
@@ -267,7 +379,8 @@ export function ScenariosView({ onLaunch, user }: {
                     value={agent.initial_reputation}
                     onChange={(e) => updateAgent(i, 'initial_reputation', Number(e.target.value))}
                     style={{ width: '70px' }}
-                    title="Начальная репутация"
+                    disabled={agent.role === 'auditor'}
+                    title={agent.role === 'auditor' ? 'У ИИ-аудитора нет репутации' : 'Начальная репутация'}
                   />
                   <button className="btn-clipped danger small" onClick={() => removeAgent(i)}>✕</button>
                 </div>
@@ -351,8 +464,9 @@ export function ScenariosView({ onLaunch, user }: {
               <div className="scenario-card-meta">
                 {s.scenario && <span className="badge small accent">{s.scenario}</span>}
                 {s.governance && <span className="badge small info">{s.governance}</span>}
+                {s.sim_config && <span className="badge small warning" title="Есть кастомный сим-конфиг">custom</span>}
                 <span className="badge small">{s.agents?.length ?? 0} аг.</span>
-                <span className="badge small">{s.rounds} раундов</span>
+                <span className="badge small" title="Количество шагов симуляции (раундов)">{s.rounds} шагов</span>
                 {s.seed !== null && <span className="badge small">seed {s.seed}</span>}
               </div>
             </div>

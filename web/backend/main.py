@@ -34,6 +34,10 @@ from .graph_state import GraphStateBuilder, build_graph_state
 RESULTS_DIR = (Path(__file__).parent.parent.parent / "results").resolve()
 SCENARIOS_DIR = (Path(__file__).parent.parent.parent / "scenarios").resolve()
 SCENARIOS_DIR.mkdir(parents=True, exist_ok=True)
+AGENT_TYPES_DIR = (Path(__file__).parent.parent.parent / "data" / "agent_types").resolve()
+AGENT_TYPES_DIR.mkdir(parents=True, exist_ok=True)
+PERSONALITIES_DIR = (Path(__file__).parent.parent.parent / "data" / "personalities").resolve()
+PERSONALITIES_DIR.mkdir(parents=True, exist_ok=True)
 ARTIFACTS_DIR = (RESULTS_DIR / "artifacts").resolve()
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
@@ -80,6 +84,17 @@ def _validate_scenario_id(scenario_id: str) -> None:
     resolved = (SCENARIOS_DIR / f"{scenario_id}.json").resolve()
     if not str(resolved).startswith(str(SCENARIOS_DIR)):
         raise HTTPException(status_code=400, detail="Invalid scenario ID")
+
+
+def _validate_library_id(item_id: str, base_dir: Path, *, kind: str) -> None:
+    """Проверить ID элемента (agent-type/personality) на безопасный путь."""
+    from fastapi import HTTPException
+
+    if not _SCENARIO_ID_RE.fullmatch(item_id):
+        raise HTTPException(status_code=400, detail=f"Invalid {kind} ID")
+    resolved = (base_dir / f"{item_id}.json").resolve()
+    if not str(resolved).startswith(str(base_dir)):
+        raise HTTPException(status_code=400, detail=f"Invalid {kind} ID")
 
 
 def _resolve_seed(value: object | None) -> int:
@@ -395,7 +410,11 @@ async def ws_playback(
 
 
 @app.websocket("/ws/live")
-async def ws_live(websocket: WebSocket, token: str | None = None) -> None:
+async def ws_live(
+    websocket: WebSocket,
+    token: str | None = None,
+    run_name: str | None = None,
+) -> None:
     """WebSocket для мониторинга текущего прогона.
 
     Следит за самым свежим *_events.jsonl файлом и пушит новые строки.
@@ -410,32 +429,55 @@ async def ws_live(websocket: WebSocket, token: str | None = None) -> None:
         await websocket.close(code=1008)
         return
 
+    from web.backend.runner import list_active
+
     builder = GraphStateBuilder()
+    watched_run: str | None = None
     watched_path: Path | None = None
     file_pos = 0
 
     try:
+        if run_name:
+            _validate_run_name(run_name)
+
         while True:
-            candidates = sorted(
-                RESULTS_DIR.glob("*_events.jsonl"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if not candidates:
-                await asyncio.sleep(1.0)
+            active = list_active()
+            running = [r for r in active if r.get("status") == "running"]
+
+            target_run: str | None = None
+            if run_name:
+                target_run = run_name
+                if not any(r.get("run_name") == run_name for r in running):
+                    await websocket.send_json({"type": "done"})
+                    await websocket.close(code=1000)
+                    return
+            else:
+                if not running:
+                    await websocket.send_json({"type": "done"})
+                    await websocket.close(code=1000)
+                    return
+                target_run = str(running[-1].get("run_name") or "")
+
+            if not target_run:
+                await asyncio.sleep(0.5)
                 continue
 
-            latest = candidates[0]
-            if latest != watched_path:
-                watched_path = latest
+            target_path = RESULTS_DIR / f"{target_run}_events.jsonl"
+            if not target_path.exists():
+                await asyncio.sleep(0.5)
+                continue
+
+            if target_run != watched_run or target_path != watched_path:
+                watched_run = target_run
+                watched_path = target_path
                 file_pos = 0
                 builder = GraphStateBuilder()
-                meta = _parse_run_name(latest.name)
-                names = _load_names(latest.stem.replace("_events", ""))
-                await websocket.send_json({"type": "meta", **meta, "names": names})
+                meta = _parse_run_name(target_path.name)
+                names = _load_names(target_run)
                 await websocket.send_json(
-                    {"type": "graph_state", **builder.state()}
+                    {"type": "meta", **meta, "names": names, "run_name": target_run}
                 )
+                await websocket.send_json({"type": "graph_state", **builder.state()})
 
             # Открываем в бинарном режиме для точного отслеживания байтовой позиции
             async with aiofiles.open(watched_path, "rb") as f:
@@ -462,6 +504,87 @@ async def ws_live(websocket: WebSocket, token: str | None = None) -> None:
 
     except WebSocketDisconnect:
         pass
+
+
+@app.get("/api/templates/scenarios")
+async def list_template_scenarios(_user: User = Depends(require_viewer)) -> list[dict]:
+    """Вернуть список встроенных шаблонов сценариев (S*)."""
+    from magistry_sim.scenarios import SCENARIOS
+
+    items = []
+    for sid, cfg in sorted(SCENARIOS.items(), key=lambda x: x[0].value):
+        items.append(
+            {
+                "id": sid.value,
+                "title": cfg.title,
+                "description": cfg.description,
+                "max_rounds": cfg.max_rounds,
+                "seed": cfg.seed,
+                "corruption_level": getattr(cfg, "corruption_level", 0.0),
+            }
+        )
+    return items
+
+
+@app.get("/api/templates/scenarios/{scenario_id}")
+async def get_template_scenario(
+    scenario_id: str,
+    governance: str | None = None,
+    _user: User = Depends(require_viewer),
+) -> dict:
+    """Вернуть полный конфиг встроенного сценария.
+
+    Query params:
+        governance: Если указан, добавить governance-агентов (auditor/jury) и
+            установить режим управления в конфиге.
+    """
+    from fastapi import HTTPException
+    from magistry_sim.enums import GovernanceMode, ScenarioId
+    from magistry_sim.scenarios import add_governance_agents, get_scenario
+
+    try:
+        sid = ScenarioId(scenario_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Unknown scenario") from exc
+
+    cfg = get_scenario(sid)
+
+    if governance:
+        try:
+            gov = GovernanceMode(governance)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Unknown governance") from exc
+        cfg = add_governance_agents(cfg, gov)
+
+    return cfg.model_dump(mode="json")
+
+
+@app.get("/api/templates/governance")
+async def list_governance_modes(_user: User = Depends(require_viewer)) -> list[dict]:
+    """Вернуть список режимов управления (G0-G3) с пояснениями."""
+    from magistry_sim.enums import GovernanceMode
+
+    labels = {
+        "G0": "Без контроля",
+        "G1": "Аудитор (рекомендательный)",
+        "G2": "Аудитор (санкции по репутации)",
+        "G3": "Полный контроль (трибунал)",
+    }
+    descriptions = {
+        "G0": "Нет надзора со стороны аудитора или трибунала.",
+        "G1": "Аудитор может наблюдать и давать рекомендации.",
+        "G2": "Аудитор может рекомендовать заморозку репутации участников.",
+        "G3": "Аудитор может инициировать трибунал; решение принимает коллегия присяжных.",
+    }
+
+    return [
+        {
+            "id": mode.value,
+            "label": f"{mode.value} — {labels.get(mode.value, mode.value)}",
+            "description": descriptions.get(mode.value, ""),
+        }
+        for mode in GovernanceMode
+    ]
 
 
 @app.get("/api/scenarios")
@@ -559,6 +682,104 @@ async def delete_scenario(scenario_id: str, _user: User = Depends(require_admin)
     path.unlink()
 
 
+@app.get("/api/agent-types")
+async def list_agent_types(_user: User = Depends(require_viewer)) -> list[dict]:
+    """Вернуть список типов агентов (шаблоны)."""
+    result = []
+    for p in sorted(AGENT_TYPES_DIR.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            result.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return result
+
+
+@app.post("/api/agent-types", status_code=201)
+async def create_agent_type(data: dict, _user: User = Depends(require_admin)) -> dict:
+    """Создать новый тип агента."""
+    item_id = str(uuid.uuid4())
+    data["id"] = item_id
+    path = AGENT_TYPES_DIR / f"{item_id}.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+@app.put("/api/agent-types/{type_id}")
+async def update_agent_type(type_id: str, data: dict, _user: User = Depends(require_admin)) -> dict:
+    """Обновить тип агента."""
+    from fastapi import HTTPException
+
+    _validate_library_id(type_id, AGENT_TYPES_DIR, kind="agent-type")
+    path = AGENT_TYPES_DIR / f"{type_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Agent type not found")
+    data["id"] = type_id
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+@app.delete("/api/agent-types/{type_id}", status_code=204)
+async def delete_agent_type(type_id: str, _user: User = Depends(require_admin)) -> None:
+    """Удалить тип агента."""
+    from fastapi import HTTPException
+
+    _validate_library_id(type_id, AGENT_TYPES_DIR, kind="agent-type")
+    path = AGENT_TYPES_DIR / f"{type_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Agent type not found")
+    path.unlink()
+
+
+@app.get("/api/personalities")
+async def list_personalities(_user: User = Depends(require_viewer)) -> list[dict]:
+    """Вернуть список личностей (шаблоны)."""
+    result = []
+    for p in sorted(PERSONALITIES_DIR.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            result.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+    return result
+
+
+@app.post("/api/personalities", status_code=201)
+async def create_personality(data: dict, _user: User = Depends(require_admin)) -> dict:
+    """Создать новую личность."""
+    item_id = str(uuid.uuid4())
+    data["id"] = item_id
+    path = PERSONALITIES_DIR / f"{item_id}.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+@app.put("/api/personalities/{personality_id}")
+async def update_personality(personality_id: str, data: dict, _user: User = Depends(require_admin)) -> dict:
+    """Обновить личность."""
+    from fastapi import HTTPException
+
+    _validate_library_id(personality_id, PERSONALITIES_DIR, kind="personality")
+    path = PERSONALITIES_DIR / f"{personality_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Personality not found")
+    data["id"] = personality_id
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+@app.delete("/api/personalities/{personality_id}", status_code=204)
+async def delete_personality(personality_id: str, _user: User = Depends(require_admin)) -> None:
+    """Удалить личность."""
+    from fastapi import HTTPException
+
+    _validate_library_id(personality_id, PERSONALITIES_DIR, kind="personality")
+    path = PERSONALITIES_DIR / f"{personality_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Personality not found")
+    path.unlink()
+
+
 @app.post("/api/scenarios/{scenario_id}/run", status_code=202)
 async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -> dict:
     """Запустить прогон по сценарию.
@@ -579,13 +800,31 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
         raise HTTPException(status_code=404, detail="Scenario not found")
     scenario = json.loads(path.read_text(encoding="utf-8"))
     try:
-        result = launch_simulation(
-            scenario=scenario.get("scenario", "S1"),
-            governance=scenario.get("governance", "G1"),
-            seed=_resolve_seed(scenario.get("seed")),
-            runner_type=scenario.get("runner", "mock"),
-            rounds=scenario.get("rounds", 10),
-        )
+        governance = scenario.get("governance", "G1")
+        seed = _resolve_seed(scenario.get("seed"))
+        runner_type = scenario.get("runner", "mock")
+        rounds = scenario.get("rounds", 10)
+        sim_config = scenario.get("sim_config")
+        if isinstance(sim_config, dict):
+            from web.backend.runner import launch_simulation_from_config
+
+            suffix = scenario_id.replace("-", "")[:8]
+            result = launch_simulation_from_config(
+                scenario_config=sim_config,
+                governance=governance,
+                seed=seed,
+                runner_type=runner_type,
+                rounds=rounds,
+                variant=f"scn{suffix}",
+            )
+        else:
+            result = launch_simulation(
+                scenario=scenario.get("scenario", "S1"),
+                governance=governance,
+                seed=seed,
+                runner_type=runner_type,
+                rounds=rounds,
+            )
         return {"status": "accepted", **result}
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))

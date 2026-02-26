@@ -42,6 +42,106 @@ def _write_names_json(run_name: str, scenario_id: str, governance: str) -> None:
         pass
 
 
+def _write_names_json_from_config(
+    run_name: str, scenario_config: dict, governance: str
+) -> None:
+    """Сгенерировать файл имён агентов из JSON-конфига сценария."""
+    try:
+        from magistry_sim.config import ScenarioConfig
+        from magistry_sim.enums import GovernanceMode
+        from magistry_sim.scenarios import add_governance_agents
+
+        cfg = ScenarioConfig.model_validate(scenario_config)
+        full = add_governance_agents(cfg, GovernanceMode(governance))
+        names = {agent.id: agent.name for agent in full.agents}
+        path = _RESULTS_DIR / f"{run_name}_names.json"
+        path.write_text(
+            json.dumps(names, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def launch_simulation_from_config(
+    scenario_config: dict,
+    governance: str,
+    seed: int = 42,
+    runner_type: str = "mock",
+    rounds: int = 10,
+    variant: str | None = None,
+) -> dict:
+    """Запустить симуляцию на основе JSON-конфига ScenarioConfig."""
+    scenario_id = str(scenario_config.get("id", "S1") or "S1")
+    safe_variant = "".join(
+        ch if ch.isalnum() or ch in ("_", "-") else "-"
+        for ch in (variant or "custom")
+    )
+    run_name = f"{scenario_id}_{governance}_seed{seed}_{safe_variant}_{runner_type}"
+
+    if run_name in _active:
+        proc = _active[run_name]
+        if proc.poll() is None:
+            raise RuntimeError(f"Прогон {run_name} уже запущен (PID {proc.pid})")
+        else:
+            del _active[run_name]
+
+    _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    jsonl_path = _RESULTS_DIR / f"{run_name}_events.jsonl"
+    summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
+    stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
+    stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
+    scenario_path = _RESULTS_DIR / f"{run_name}_scenario.json"
+
+    try:
+        scenario_path.write_text(
+            json.dumps(scenario_config, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+    _write_names_json_from_config(run_name, scenario_config, governance)
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "magistry_sim.cli",
+        "--scenario-json",
+        str(scenario_path),
+        "--governance",
+        governance,
+        "--seed",
+        str(seed),
+        "--runner",
+        runner_type,
+        "--rounds",
+        str(rounds),
+        "--jsonl",
+        str(jsonl_path),
+        "--summary-json",
+        str(summary_path),
+    ]
+
+    with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(_PROJECT_ROOT),
+            stdout=stdout,
+            stderr=stderr,
+        )
+    _active[run_name] = proc
+
+    return {
+        "run_name": run_name,
+        "pid": proc.pid,
+        "stdout_log": stdout_path.name,
+        "stderr_log": stderr_path.name,
+        "scenario_json": scenario_path.name,
+    }
+
+
 def launch_simulation(
     scenario: str,
     governance: str,

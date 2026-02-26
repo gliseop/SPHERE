@@ -14,6 +14,7 @@ from .config import ScenarioConfig
 from .context import build_situation
 from .enums import GovernanceMode
 from .reputation import (
+    POSITION_THRESHOLDS,
     apply_decay,
     apply_growth,
     compute_round_growth,
@@ -107,7 +108,12 @@ class Environment:
         for profile in self._scenario.agents:
             self._state.agents[profile.id] = profile
             self._state.graph.add_agent(profile.id)
-            self._state.reputation[profile.id] = ReputationRecord()
+            has_governance_capability = any(
+                cap.action in ("audit", "vote")
+                for cap in (profile.capabilities or [])
+            )
+            if not has_governance_capability:
+                self._state.reputation[profile.id] = ReputationRecord()
 
             res = profile.initial_resources
             self._state.resources.init_agent(
@@ -446,20 +452,80 @@ class Environment:
 
         # Пересчёт репутации
         decay_factor = self._scenario.governance.reputation_decay
+        complaint_events = self._state.event_log.get_events(
+            event_type="complaint_filed", round=self._state.round
+        )
+        complaints_by_owner: dict[str, int] = {}
+        for ev in complaint_events:
+            case_id = str(ev.payload.get("case_id", "") or "")
+            case = self._state.cases.get(case_id)
+            if case is None:
+                continue
+            complaints_by_owner[case.owner_id] = (
+                complaints_by_owner.get(case.owner_id, 0) + 1
+            )
+
+        rep_metrics: dict[str, dict[str, object]] = {}
         for agent_id, rep in self._state.reputation.items():
+            before_score = float(rep.score)
+            before_level = int(rep.position_level)
+
             apply_decay(rep, decay_factor=decay_factor)
-            cases_resolved = len([
-                e
-                for e in self._state.event_log.get_events(
+
+            cases_resolved = len(
+                self._state.event_log.get_events(
                     event_type="case_resolved",
                     agent_id=agent_id,
                     round=self._state.round,
                 )
-            ])
+            )
+            complaints_received = int(complaints_by_owner.get(agent_id, 0))
+
             growth = compute_round_growth(
-                rep, cases_resolved=cases_resolved
+                rep,
+                cases_resolved=cases_resolved,
+                complaints_received=complaints_received,
             )
             apply_growth(rep, growth)
+
+            current_title = POSITION_THRESHOLDS[0][1]
+            next_title = ""
+            next_threshold: float | None = None
+            position_level = 0
+            for idx, (threshold, title) in enumerate(POSITION_THRESHOLDS):
+                if rep.score >= threshold:
+                    current_title = title
+                    position_level = idx
+                else:
+                    next_title = title
+                    next_threshold = float(threshold)
+                    break
+
+            rep.position_level = position_level
+            if position_level > before_level:
+                self._state.event_log.log(
+                    round=self._state.round,
+                    event_type="position_promoted",
+                    agent_id=agent_id,
+                    payload={
+                        "title": current_title,
+                        "level": position_level,
+                        "from_level": before_level,
+                    },
+                )
+
+            rep_metrics[agent_id] = {
+                "score": float(rep.score),
+                "delta": float(rep.score) - before_score,
+                "growth": float(growth),
+                "decay_factor": float(decay_factor),
+                "cases_resolved": cases_resolved,
+                "complaints_received": complaints_received,
+                "title": current_title,
+                "next_title": next_title,
+                "next_threshold": next_threshold,
+                "position_level": position_level,
+            }
 
         # Обработка отчётов аудитора (G2+)
         if governance in (GovernanceMode.G2, GovernanceMode.G3):
@@ -491,6 +557,17 @@ class Environment:
                     and governance == GovernanceMode.G3
                 ):
                     self._form_tribunal(case_id, case.owner_id)
+
+        for agent_id, rep in self._state.reputation.items():
+            metrics = rep_metrics.get(agent_id, {})
+            metrics["score"] = float(rep.score)
+            metrics["frozen"] = bool(rep.frozen)
+            self._state.event_log.log(
+                round=self._state.round,
+                event_type="reputation_snapshot",
+                agent_id=agent_id,
+                payload=metrics,
+            )
 
         # Проверка кворума трибуналов
         required_votes = max(1, self._scenario.governance.jury_size)

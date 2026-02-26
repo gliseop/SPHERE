@@ -5,7 +5,7 @@ import type { AuthUser } from '../hooks/useAuth'
 
 interface Props {
   onPlayback: (run: RunInfo, speed: number) => void
-  onLive: () => void
+  onLive: (runName?: string) => void
   speed: number
   onSpeedChange: (s: number) => void
   mode: string
@@ -22,6 +22,7 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, ac
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
 
   const activeSet = new Set(activeRuns)
+  const hasRunning = activeRuns.length > 0
 
   const refreshRuns = useCallback(() => {
     apiClient.get('/api/runs')
@@ -123,13 +124,22 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, ac
           ▶ Воспроизвести
         </button>
 
-        <button
-          className="btn-clipped success full-width"
-          disabled={!isIdle}
-          onClick={onLive}
-        >
-          ● Live
-        </button>
+        {hasRunning && (
+          <button
+            className="btn-clipped success full-width"
+            onClick={() => {
+              const target = selected && activeSet.has(selected.name)
+                ? selected.name
+                : activeRuns[activeRuns.length - 1]
+              onLive(target)
+            }}
+            title={selected && activeSet.has(selected.name)
+              ? 'Live по выбранному активному прогону'
+              : 'Live по самому свежему активному прогону'}
+          >
+            ● Live
+          </button>
+        )}
       </div>
 
       <div style={{ padding: '0.375rem 0.875rem', borderTop: '1px solid var(--border)' }}>

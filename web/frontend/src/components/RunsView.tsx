@@ -10,9 +10,19 @@ interface ActiveRun {
   returncode?: number
 }
 
+interface SavedScenario {
+  id?: string
+  name: string
+  scenario: string
+  governance: string
+  rounds: number
+  seed: number | null
+  sim_config?: Record<string, unknown> | null
+}
+
 interface Props {
   onPlayback: (run: RunInfo, speed: number) => void
-  onLive: () => void
+  onLive: (runName?: string) => void
   speed: number
   mode: string
   user: AuthUser | null
@@ -28,17 +38,20 @@ const SCENARIO_OPTIONS = [
 const GOVERNANCE_OPTIONS = [
   { value: 'G0', label: 'G0 — Без контроля' },
   { value: 'G1', label: 'G1 — Аудитор (рекомендательный)' },
-  { value: 'G2', label: 'G2 — Аудитор с репутацией' },
+  { value: 'G2', label: 'G2 — Аудитор (санкции по репутации)' },
   { value: 'G3', label: 'G3 — Полный контроль (трибунал)' },
 ]
 
 type FilterKey = 'all' | 'S0' | 'S1' | 'S2'
 
-export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
+export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: Props) {
   const [runs, setRuns] = useState<RunInfo[] | null>(null)
   const [filter, setFilter] = useState<FilterKey>('all')
 
   // Launch form state
+  const [launchSource, setLaunchSource] = useState<'template' | 'saved'>('template')
+  const [savedScenarios, setSavedScenarios] = useState<SavedScenario[] | null>(null)
+  const [launchScenarioId, setLaunchScenarioId] = useState('')
   const [launchScenario, setLaunchScenario] = useState('S1')
   const [launchGovernance, setLaunchGovernance] = useState('G1')
   const [launchSeed, setLaunchSeed] = useState('')
@@ -60,6 +73,14 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
     return () => clearInterval(interval)
   }, [refreshRuns])
 
+  useEffect(() => {
+    if (user?.role !== 'admin') return
+    apiClient.get('/api/scenarios')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => setSavedScenarios(Array.isArray(data) ? data : []))
+      .catch(() => setSavedScenarios([]))
+  }, [user?.role])
+
   const activeNames = new Set(activeRuns.filter((a) => a.status === 'running').map((a) => a.run_name))
   const hasRunning = activeNames.size > 0
 
@@ -71,14 +92,25 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
   async function handleLaunch() {
     setLaunching(true)
     try {
-      const res = await apiClient.post('/api/runs/launch', {
-        scenario: launchScenario,
-        governance: launchGovernance,
-        seed: launchSeed ? Number(launchSeed) : null,
-        runner: 'cognitive',
-        rounds: launchRounds ? Number(launchRounds) : 25,
-      })
-      if (res.ok) refreshRuns()
+      if (launchSource === 'saved') {
+        if (!launchScenarioId) return
+      }
+
+      const res = launchSource === 'saved'
+        ? await apiClient.post(`/api/scenarios/${launchScenarioId}/run`)
+        : await apiClient.post('/api/runs/launch', {
+          scenario: launchScenario,
+          governance: launchGovernance,
+          seed: launchSeed ? Number(launchSeed) : null,
+          runner: 'cognitive',
+          rounds: launchRounds ? Number(launchRounds) : 25,
+        })
+      if (!res.ok) return
+      const data = await res.json().catch(() => null) as { run_name?: string } | null
+      refreshRuns()
+      if (data?.run_name) {
+        onLive(data.run_name)
+      }
     } finally {
       setLaunching(false)
     }
@@ -110,6 +142,10 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
     }
   }
 
+  const selectedSaved = launchSource === 'saved'
+    ? (savedScenarios ?? []).find((s) => s.id === launchScenarioId) ?? null
+    : null
+
   const isIdle = mode === 'idle'
 
   return (
@@ -136,34 +172,75 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
           <div className="runs-launch-title">Запуск нового прогона</div>
           <div className="runs-launch-grid">
             <div className="form-field">
-              <label>Сценарий</label>
-              <select className="hud-input" value={launchScenario} onChange={(e) => setLaunchScenario(e.target.value)}>
-                {SCENARIO_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
+              <label>Источник</label>
+              <select
+                className="hud-input"
+                value={launchSource}
+                onChange={(e) => setLaunchSource(e.target.value as 'template' | 'saved')}
+              >
+                <option value="template">Шаблон (S/G)</option>
+                <option value="saved">Сценарий (из библиотеки)</option>
               </select>
             </div>
-            <div className="form-field">
-              <label>Управление</label>
-              <select className="hud-input" value={launchGovernance} onChange={(e) => setLaunchGovernance(e.target.value)}>
-                {GOVERNANCE_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </div>
-            <div className="form-field">
-              <label>Seed (пусто = случайный)</label>
-              <input className="hud-input" type="number" value={launchSeed} onChange={(e) => setLaunchSeed(e.target.value)} placeholder="42" />
-            </div>
-            <div className="form-field">
-              <label>Раундов</label>
-              <input className="hud-input" type="number" value={launchRounds} onChange={(e) => setLaunchRounds(e.target.value)} placeholder="25" />
-            </div>
-            <div className="form-field" style={{ justifyContent: 'flex-end', gridColumn: 'span 2' }}>
+
+            {launchSource === 'template' ? (
+              <>
+                <div className="form-field">
+                  <label>Сценарий</label>
+                  <select className="hud-input" value={launchScenario} onChange={(e) => setLaunchScenario(e.target.value)}>
+                    {SCENARIO_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-field">
+                  <label>Управление</label>
+                  <select className="hud-input" value={launchGovernance} onChange={(e) => setLaunchGovernance(e.target.value)}>
+                    {GOVERNANCE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-field">
+                  <label>Seed (пусто = случайный)</label>
+                  <input className="hud-input" type="number" value={launchSeed} onChange={(e) => setLaunchSeed(e.target.value)} placeholder="42" />
+                </div>
+                <div className="form-field">
+                  <label title="Количество шагов симуляции (раундов)">Шагов</label>
+                  <input className="hud-input" type="number" value={launchRounds} onChange={(e) => setLaunchRounds(e.target.value)} placeholder="25" />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="form-field" style={{ gridColumn: 'span 2' }}>
+                  <label>Сценарий</label>
+                  <select className="hud-input" value={launchScenarioId} onChange={(e) => setLaunchScenarioId(e.target.value)}>
+                    <option value="">— выбрать —</option>
+                    {(savedScenarios ?? []).map((s) => (
+                      <option key={s.id ?? s.name} value={s.id ?? ''} disabled={!s.id}>
+                        {s.name} ({s.scenario}/{s.governance})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-field" style={{ gridColumn: 'span 3' }}>
+                  <label>Параметры</label>
+                  <div className="text-muted" style={{ fontSize: '0.7rem' }}>
+                    {selectedSaved
+                      ? `${selectedSaved.scenario} / ${selectedSaved.governance} / шагов: ${selectedSaved.rounds}`
+                        + (selectedSaved.seed !== null ? ` / seed ${selectedSaved.seed}` : '')
+                        + (selectedSaved.sim_config ? ' / custom' : '')
+                      : 'Выберите сценарий из библиотеки'}
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div className="form-field" style={{ justifyContent: 'flex-end', gridColumn: 'span 3' }}>
               <button
                 className="btn-clipped primary full-width"
                 onClick={handleLaunch}
-                disabled={launching || !isIdle}
+                disabled={launching || !isIdle || (launchSource === 'saved' && !launchScenarioId)}
               >
                 {launching ? 'Запуск...' : '▶ Запустить'}
               </button>
@@ -182,6 +259,13 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
                 <div className="active-dot" />
                 <span className="runs-active-name">{a.run_name}</span>
                 <span className="runs-active-pid">PID {a.pid}</span>
+                <button
+                  className="btn-clipped success small"
+                  onClick={() => onLive(a.run_name)}
+                  title="Перейти в монитор (Live)"
+                >
+                  ● Live
+                </button>
                 {user?.role === 'admin' && (
                   <button
                     className="btn-clipped danger small"
@@ -235,6 +319,15 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
                     >
                       ▶
                     </button>
+                    {isActive && (
+                      <button
+                        className="btn-clipped success small"
+                        onClick={() => onLive(r.name)}
+                        title="Перейти в монитор (Live)"
+                      >
+                        ●
+                      </button>
+                    )}
                     {isActive && user?.role === 'admin' && (
                       <button
                         className="btn-clipped danger small"

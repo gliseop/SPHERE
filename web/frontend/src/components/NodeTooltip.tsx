@@ -4,6 +4,11 @@ import { SUSPICIOUS_THRESHOLD } from '../constants'
 interface D3Node {
   id: string
   reputation: number
+  has_reputation?: boolean
+  reputation_frozen?: boolean
+  position_title?: string
+  next_position_title?: string
+  next_position_threshold?: number
   x?: number
   y?: number
 }
@@ -20,7 +25,8 @@ interface Props {
 function roleLabel(id: string): string {
   if (id.startsWith('off_')) return 'Чиновник'
   if (id.startsWith('biz_')) return 'Подрядчик'
-  if (id.startsWith('aud_')) return 'Аудитор'
+  if (id === 'auditor' || id.startsWith('aud_')) return 'Аудитор'
+  if (id.startsWith('juror_')) return 'Присяжный'
   if (id.startsWith('fam_')) return 'Семья'
   if (id.startsWith('soc_')) return 'Общество'
   return 'Агент'
@@ -29,7 +35,8 @@ function roleLabel(id: string): string {
 function roleBadgeClass(id: string): string {
   if (id.startsWith('off_')) return 'badge danger'
   if (id.startsWith('biz_')) return 'badge info'
-  if (id.startsWith('aud_')) return 'badge accent'
+  if (id === 'auditor' || id.startsWith('aud_')) return 'badge accent'
+  if (id.startsWith('juror_')) return 'badge violet'
   if (id.startsWith('fam_')) return 'badge warning'
   if (id.startsWith('soc_')) return 'badge success'
   return 'badge'
@@ -49,8 +56,9 @@ export function NodeTooltip({ node, edges, events, names, x, y }: Props) {
 
   // Собрать историю репутации для этого агента (последние 5)
   const repHistory = events
-    .filter((e) => e.event_type === 'reputation_modified' && e.payload.target === node.id)
+    .filter((e) => e.event_type === 'reputation_snapshot' && e.agent_id === node.id)
     .slice(-5)
+  const hasRep = node.has_reputation !== false
 
   const style: React.CSSProperties = {
     left: x + 14,
@@ -81,7 +89,7 @@ export function NodeTooltip({ node, edges, events, names, x, y }: Props) {
         <div className="stat-card" style={{ padding: '0.375rem 0.5rem' }}>
           <div className="stat-label">Репутация</div>
           <div className="stat-value" style={{ fontSize: '1rem' }}>
-            {node.reputation.toFixed(1)}
+            {hasRep ? node.reputation.toFixed(1) : '—'}
           </div>
         </div>
         <div className="stat-card" style={{ padding: '0.375rem 0.5rem' }}>
@@ -126,7 +134,8 @@ export function NodeTooltip({ node, edges, events, names, x, y }: Props) {
           </div>
           {repHistory.map((e, i) => {
             const delta = typeof e.payload.delta === 'number' ? e.payload.delta : 0
-            const reason = typeof e.payload.reason === 'string' ? e.payload.reason : ''
+            const cases = typeof e.payload.cases_resolved === 'number' ? e.payload.cases_resolved : null
+            const complaints = typeof e.payload.complaints_received === 'number' ? e.payload.complaints_received : null
             const sign = delta >= 0 ? '+' : ''
             return (
               <div key={i} style={{ display: 'flex', gap: '0.35rem', alignItems: 'baseline', padding: '0.1rem 0', borderBottom: '1px solid var(--border)', fontSize: '0.5rem' }}>
@@ -134,9 +143,10 @@ export function NodeTooltip({ node, edges, events, names, x, y }: Props) {
                 <span style={{ color: delta >= 0 ? 'var(--success)' : 'var(--danger)', fontWeight: 600, flexShrink: 0 }}>
                   {sign}{delta.toFixed(2)}
                 </span>
-                {reason && (
+                {(cases !== null || complaints !== null) && (
                   <span style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {reason}
+                    {cases !== null ? `дел: ${cases}` : ''}
+                    {complaints !== null ? `  жалоб: ${complaints}` : ''}
                   </span>
                 )}
               </div>

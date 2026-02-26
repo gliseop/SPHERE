@@ -365,7 +365,7 @@ export function ActivityFeed({
   const pausedRef = useRef(false)
 
   const filtered = useMemo(() => {
-    const noIdle = events.filter((e) => e.event_type !== 'idle')
+    const noIdle = events.filter((e) => e.event_type !== 'idle' && e.event_type !== 'reputation_snapshot')
     if (!selectedAgent) return noIdle
     return noIdle.filter((event) => belongsToAgent(event, selectedAgent))
   }, [events, selectedAgent])

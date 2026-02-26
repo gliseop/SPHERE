@@ -1,0 +1,391 @@
+import { useEffect, useMemo, useState } from 'react'
+import { apiClient } from '../utils/apiClient'
+import type { AuthUser } from '../hooks/useAuth'
+
+type TechniqueValue =
+  | 'denial_of_injury'
+  | 'denial_of_victim'
+  | 'condemnation_of_condemners'
+  | 'appeal_to_higher_loyalties'
+  | 'denial_of_responsibility'
+  | 'everyone_does_it'
+  | 'claim_of_entitlement'
+  | 'defense_of_necessity'
+
+const TECHNIQUES: Array<{ value: TechniqueValue; label: string }> = [
+  { value: 'denial_of_injury', label: 'Отрицание ущерба' },
+  { value: 'denial_of_victim', label: 'Отрицание жертвы' },
+  { value: 'condemnation_of_condemners', label: 'Осуждение осуждающих' },
+  { value: 'appeal_to_higher_loyalties', label: 'Апелляция к высшим ценностям' },
+  { value: 'denial_of_responsibility', label: 'Отрицание ответственности' },
+  { value: 'everyone_does_it', label: '«Все так делают»' },
+  { value: 'claim_of_entitlement', label: 'Претензия на право' },
+  { value: 'defense_of_necessity', label: 'Защита необходимостью' },
+]
+
+interface Hexaco {
+  honesty_humility: number
+  emotionality: number
+  extraversion: number
+  agreeableness: number
+  conscientiousness: number
+  openness: number
+}
+
+interface DarkTriad {
+  narcissism: number
+  machiavellianism: number
+  psychopathy: number
+}
+
+interface Personality {
+  id?: string
+  name: string
+  description?: string
+  biography: string
+  hexaco: Hexaco
+  dark_triad: DarkTriad
+  neutralization_techniques: TechniqueValue[]
+}
+
+const EMPTY_PERSONALITY: Personality = {
+  name: '',
+  description: '',
+  biography: '',
+  hexaco: {
+    honesty_humility: 50,
+    emotionality: 50,
+    extraversion: 50,
+    agreeableness: 50,
+    conscientiousness: 50,
+    openness: 50,
+  },
+  dark_triad: {
+    narcissism: 30,
+    machiavellianism: 30,
+    psychopathy: 30,
+  },
+  neutralization_techniques: [],
+}
+
+type Archetype = 'idealist' | 'pragmatist' | 'opportunist' | 'initiator' | 'machiavellist'
+
+function classifyArchetype(p: Personality): Archetype {
+  const hh = p.hexaco.honesty_humility
+  const con = p.hexaco.conscientiousness
+  const agr = p.hexaco.agreeableness
+  const narc = p.dark_triad.narcissism
+  const mach = p.dark_triad.machiavellianism
+  const psyc = p.dark_triad.psychopathy
+  const darkMax = Math.max(narc, mach, psyc)
+
+  if (hh >= 80 && con >= 80 && darkMax < 20) return 'idealist'
+  if (hh <= 15 && agr <= 15 && mach >= 90 && psyc >= 70) return 'machiavellist'
+  if (hh <= 20 && mach >= 80 && narc >= 70) return 'initiator'
+  if (hh <= 40 && narc >= 50) return 'opportunist'
+  return 'pragmatist'
+}
+
+function archetypeLabel(a: Archetype): string {
+  if (a === 'idealist') return 'Идеалист'
+  if (a === 'machiavellist') return 'Макиавеллист'
+  if (a === 'initiator') return 'Инициатор'
+  if (a === 'opportunist') return 'Оппортунист'
+  return 'Прагматик'
+}
+
+function archetypeBadgeClass(a: Archetype): string {
+  if (a === 'idealist') return 'success'
+  if (a === 'machiavellist') return 'violet'
+  if (a === 'initiator') return 'danger'
+  if (a === 'opportunist') return 'warning'
+  return 'info'
+}
+
+function clamp01_100(n: number): number {
+  if (!Number.isFinite(n)) return 0
+  return Math.max(0, Math.min(100, Math.round(n)))
+}
+
+export function PersonalitiesView({ user }: { user: AuthUser | null }) {
+  const [items, setItems] = useState<Personality[] | null>(null)
+  const [editing, setEditing] = useState<Personality | null>(null)
+  const [showJson, setShowJson] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    apiClient.get('/api/personalities')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => setItems(Array.isArray(data) ? data : []))
+      .catch(() => setItems([]))
+  }, [])
+
+  const archetype = useMemo(() => (editing ? classifyArchetype(editing) : null), [editing])
+
+  async function handleSave() {
+    if (!editing) return
+    const payload: Personality = {
+      ...editing,
+      name: editing.name.trim(),
+      description: (editing.description || '').trim(),
+      biography: (editing.biography || '').trim(),
+      hexaco: {
+        honesty_humility: clamp01_100(editing.hexaco.honesty_humility),
+        emotionality: clamp01_100(editing.hexaco.emotionality),
+        extraversion: clamp01_100(editing.hexaco.extraversion),
+        agreeableness: clamp01_100(editing.hexaco.agreeableness),
+        conscientiousness: clamp01_100(editing.hexaco.conscientiousness),
+        openness: clamp01_100(editing.hexaco.openness),
+      },
+      dark_triad: {
+        narcissism: clamp01_100(editing.dark_triad.narcissism),
+        machiavellianism: clamp01_100(editing.dark_triad.machiavellianism),
+        psychopathy: clamp01_100(editing.dark_triad.psychopathy),
+      },
+      neutralization_techniques: (editing.neutralization_techniques || []).slice(),
+    }
+    if (!payload.name) return
+
+    setSaving(true)
+    try {
+      const res = payload.id
+        ? await apiClient.put(`/api/personalities/${payload.id}`, payload)
+        : await apiClient.post('/api/personalities', payload)
+      if (!res.ok) return
+      const saved = await res.json().catch(() => null) as Personality | null
+      if (!saved) return
+      setItems((prev) => {
+        const list = Array.isArray(prev) ? prev : []
+        return payload.id
+          ? list.map((p) => (p.id === saved.id ? saved : p))
+          : [saved, ...list]
+      })
+      setEditing(null)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!window.confirm('Удалить личность? Это действие необратимо.')) return
+    await apiClient.delete(`/api/personalities/${id}`)
+    setItems((prev) => (Array.isArray(prev) ? prev.filter((p) => p.id !== id) : []))
+  }
+
+  function toggleTechnique(value: TechniqueValue) {
+    if (!editing) return
+    const set = new Set(editing.neutralization_techniques || [])
+    if (set.has(value)) set.delete(value)
+    else set.add(value)
+    setEditing({ ...editing, neutralization_techniques: [...set] })
+  }
+
+  const list = items ?? []
+
+  if (editing) {
+    return (
+      <div className="library-editor">
+        <div className="library-editor-header">
+          <span>{editing.id ? 'Редактировать личность' : 'Новая личность'}</span>
+          <button className="btn-clipped small" onClick={() => setEditing(null)}>✕ Отмена</button>
+        </div>
+
+        <div className="scenarios-form">
+          <div className="form-field">
+            <label>Название</label>
+            <input
+              className="hud-input"
+              value={editing.name}
+              onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+              placeholder="Например: Прагматик-посредник"
+            />
+          </div>
+
+          <div className="form-field">
+            <label>Описание</label>
+            <textarea
+              className="hud-input"
+              rows={2}
+              value={editing.description ?? ''}
+              onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+              placeholder="Коротко: для каких ролей и поведения"
+            />
+          </div>
+
+          <div className="form-field">
+            <label>Биография (для промпта)</label>
+            <textarea
+              className="hud-input"
+              rows={6}
+              value={editing.biography}
+              onChange={(e) => setEditing({ ...editing, biography: e.target.value })}
+              placeholder="Короткая биография / мотивация / слепые зоны"
+            />
+            {archetype && (
+              <div style={{ marginTop: '0.25rem' }}>
+                <span className={`badge small ${archetypeBadgeClass(archetype)}`}>
+                  {archetypeLabel(archetype)}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="form-field">
+            <div className="form-field-header">
+              <label>HEXACO (0–100)</label>
+              <span className="text-muted" style={{ fontSize: '0.7rem' }}>
+                personality model
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+              {([
+                ['honesty_humility', 'Honesty-Humility'],
+                ['emotionality', 'Emotionality'],
+                ['extraversion', 'Extraversion'],
+                ['agreeableness', 'Agreeableness'],
+                ['conscientiousness', 'Conscientiousness'],
+                ['openness', 'Openness'],
+              ] as Array<[keyof Hexaco, string]>).map(([key, label]) => (
+                <div key={key} className="form-field">
+                  <label>{label}</label>
+                  <input
+                    className="hud-input"
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={editing.hexaco[key]}
+                    onChange={(e) => setEditing({
+                      ...editing,
+                      hexaco: { ...editing.hexaco, [key]: Number(e.target.value) },
+                    })}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="form-field">
+            <label>Тёмная триада (0–100)</label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
+              {([
+                ['narcissism', 'Narcissism'],
+                ['machiavellianism', 'Machiavellianism'],
+                ['psychopathy', 'Psychopathy'],
+              ] as Array<[keyof DarkTriad, string]>).map(([key, label]) => (
+                <div key={key} className="form-field">
+                  <label>{label}</label>
+                  <input
+                    className="hud-input"
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={editing.dark_triad[key]}
+                    onChange={(e) => setEditing({
+                      ...editing,
+                      dark_triad: { ...editing.dark_triad, [key]: Number(e.target.value) },
+                    })}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="form-field">
+            <label>Техники нейтрализации</label>
+            <div className="hud-panel compact" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+              {TECHNIQUES.map((t) => {
+                const checked = editing.neutralization_techniques.includes(t.value)
+                return (
+                  <label key={t.value} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.75rem', textTransform: 'none', letterSpacing: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleTechnique(t.value)}
+                    />
+                    <span>{t.label}</span>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="form-field">
+            <button
+              className="btn-clipped small"
+              onClick={() => setShowJson(!showJson)}
+              style={{ marginBottom: '0.5rem', width: 'fit-content' }}
+            >
+              {showJson ? '▲ Скрыть JSON' : '▼ JSON-превью'}
+            </button>
+            {showJson && (
+              <pre className="json-preview">{JSON.stringify(editing, null, 2)}</pre>
+            )}
+          </div>
+        </div>
+
+        <div className="scenarios-editor-footer">
+          <button
+            className="btn-clipped primary"
+            onClick={handleSave}
+            disabled={saving || !editing.name.trim()}
+          >
+            {saving ? 'Сохранение...' : '✓ Сохранить'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="library-view">
+      <div className="library-header">
+        <span>Личности ({items === null ? '…' : list.length})</span>
+        {user?.role === 'admin' && (
+          <button className="btn-clipped primary" onClick={() => setEditing({ ...EMPTY_PERSONALITY })}>
+            + Создать личность
+          </button>
+        )}
+      </div>
+
+      {list.length === 0 && (
+        <div className="scenarios-empty">
+          <div className="text-muted">{items === null ? 'Загрузка…' : 'Нет личностей'}</div>
+          <div style={{ fontSize: '0.7rem', marginTop: '0.5rem', color: 'var(--text-muted)' }}>
+            Личность — это прозрачный набор черт (HEXACO + Тёмная триада) + биография для промпта.
+          </div>
+        </div>
+      )}
+
+      <div className="library-list">
+        {list.map((p) => {
+          const a = classifyArchetype(p)
+          return (
+            <div key={p.id ?? p.name} className="library-card hud-panel">
+              <div className="corner tl" /><div className="corner tr" />
+              <div className="corner bl" /><div className="corner br" />
+              <div className="scenario-card-body">
+                <div className="scenario-card-title">{p.name}</div>
+                {p.description && <div className="scenario-card-desc">{p.description}</div>}
+                <div className="scenario-card-meta">
+                  <span className={`badge small ${archetypeBadgeClass(a)}`}>{archetypeLabel(a)}</span>
+                  <span className="badge small">{p.neutralization_techniques?.length ?? 0} техн.</span>
+                </div>
+              </div>
+              <div className="scenario-card-actions">
+                {user?.role === 'admin' && (
+                  <>
+                    <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_PERSONALITY, ...p })} title="Редактировать">✎</button>
+                    {p.id && (
+                      <button className="btn-clipped danger small" onClick={() => handleDelete(p.id!)} title="Удалить">✕</button>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+

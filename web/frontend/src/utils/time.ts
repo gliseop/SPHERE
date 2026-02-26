@@ -30,7 +30,7 @@ export function toDayKey(event: { timestamp?: string; round?: number | null }): 
  */
 export function formatDayLabel(dayKey: string): string {
   if (dayKey.startsWith('round-')) {
-    return `Раунд ${dayKey.slice(6)}`
+    return `Шаг ${dayKey.slice(6)}`
   }
   if (dayKey === 'undated') {
     return 'Без даты'

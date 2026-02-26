@@ -9,6 +9,9 @@ import { RunSelector } from './components/RunSelector'
 import { AgentList } from './components/AgentList'
 import { ScenariosView } from './components/ScenariosView'
 import { RunsView } from './components/RunsView'
+import { AgentTypesView } from './components/AgentTypesView'
+import { PersonalitiesView } from './components/PersonalitiesView'
+import { APP_NAME } from './constants'
 import { getBool } from './utils/payload'
 import { apiClient } from './utils/apiClient'
 import type { RunInfo } from './types'
@@ -16,6 +19,7 @@ import './styles/hud.css'
 
 const MIN_PANEL = 150
 const MAX_PANEL = 400
+const COLLAPSED_PANEL = 44
 
 function ResizeHandle({ onDrag }: { onDrag: (delta: number) => void }) {
   const dragging = useRef(false)
@@ -55,7 +59,7 @@ function ResizeHandle({ onDrag }: { onDrag: (delta: number) => void }) {
 export default function App() {
   const { state, mode, startPlayback, startLive, disconnect } = useSimulation()
   const auth = useAuth()
-  const [view, setView] = useState<'monitor' | 'scenarios' | 'runs'>('monitor')
+  const [view, setView] = useState<'monitor' | 'scenarios' | 'runs' | 'agentTypes' | 'personalities'>('monitor')
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [speed, setSpeed] = useState(3.0)
   const [focusDay, setFocusDay] = useState<string | null>(null)
@@ -82,9 +86,13 @@ export default function App() {
     const stored = localStorage.getItem('magistry-right-w')
     return stored ? Math.max(MIN_PANEL, Math.min(MAX_PANEL, Number(stored))) : 260
   })
+  const [leftCollapsed, setLeftCollapsed] = useState<boolean>(() => localStorage.getItem('magistry-left-collapsed') === '1')
+  const [rightCollapsed, setRightCollapsed] = useState<boolean>(() => localStorage.getItem('magistry-right-collapsed') === '1')
 
   useEffect(() => { localStorage.setItem('magistry-left-w', String(leftWidth)) }, [leftWidth])
   useEffect(() => { localStorage.setItem('magistry-right-w', String(rightWidth)) }, [rightWidth])
+  useEffect(() => { localStorage.setItem('magistry-left-collapsed', leftCollapsed ? '1' : '0') }, [leftCollapsed])
+  useEffect(() => { localStorage.setItem('magistry-right-collapsed', rightCollapsed ? '1' : '0') }, [rightCollapsed])
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const stored = localStorage.getItem('magistry-theme') as 'light' | 'dark' | null
@@ -98,7 +106,7 @@ export default function App() {
   }, [theme])
 
   const meaningfulEvents = useMemo(
-    () => state.events.filter((e) => e.event_type !== 'idle'),
+    () => state.events.filter((e) => e.event_type !== 'idle' && e.event_type !== 'reputation_snapshot'),
     [state.events],
   )
 
@@ -119,16 +127,26 @@ export default function App() {
     if (!last?.timestamp) return '---'
     const ms = Date.parse(last.timestamp)
     if (!Number.isFinite(ms)) return '---'
-    return new Date(ms).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+    return new Date(ms).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
+  }, [state.events])
+
+  const lastTimestampTitle = useMemo(() => {
+    const last = state.events[state.events.length - 1]
+    if (!last?.timestamp) return ''
+    const ms = Date.parse(last.timestamp)
+    if (!Number.isFinite(ms)) return ''
+    return new Date(ms).toLocaleString('ru-RU')
   }, [state.events])
 
   const handleLeftDrag = useCallback((delta: number) => {
+    if (leftCollapsed) setLeftCollapsed(false)
     setLeftWidth((w) => Math.max(MIN_PANEL, Math.min(MAX_PANEL, w + delta)))
-  }, [])
+  }, [leftCollapsed])
 
   const handleRightDrag = useCallback((delta: number) => {
+    if (rightCollapsed) setRightCollapsed(false)
     setRightWidth((w) => Math.max(MIN_PANEL, Math.min(MAX_PANEL, w - delta)))
-  }, [])
+  }, [rightCollapsed])
 
   if (!auth.isAuthenticated) {
     return <LoginPage onLogin={auth.login} />
@@ -143,7 +161,7 @@ export default function App() {
         <div className="corner br accent" />
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span className="hud-header-logo">MAGISTRY</span>
+          <span className="hud-header-logo">{APP_NAME}</span>
           <nav className="hud-nav">
             <button
               className={`hud-nav-tab${view === 'monitor' ? ' active' : ''}`}
@@ -156,6 +174,19 @@ export default function App() {
               onClick={() => setView('scenarios')}
             >
               Сценарии
+            </button>
+            <button
+              className={`hud-nav-tab${view === 'agentTypes' ? ' active' : ''}`}
+              onClick={() => setView('agentTypes')}
+              title="Типы агентов"
+            >
+              Типы
+            </button>
+            <button
+              className={`hud-nav-tab${view === 'personalities' ? ' active' : ''}`}
+              onClick={() => setView('personalities')}
+            >
+              Личности
             </button>
             <button
               className={`hud-nav-tab${view === 'runs' ? ' active' : ''}`}
@@ -183,14 +214,14 @@ export default function App() {
           {view === 'monitor' && (
             <>
               <div className="hud-header-stat">
-                <span className="hud-header-stat-label">Раунд</span>
+                <span className="hud-header-stat-label" title="Шаг симуляции (раунд). Это не обязательно календарный день.">Шаг</span>
                 <span className="hud-header-stat-value accent">
                   {typeof state.currentRound === 'number' ? state.currentRound : '—'}
                 </span>
               </div>
               <div className="hud-header-stat">
-                <span className="hud-header-stat-label">День</span>
-                <span className="hud-header-stat-value">{lastDateLabel}</span>
+                <span className="hud-header-stat-label" title="Дата последнего события (симуляционное время, если включено).">Дата</span>
+                <span className="hud-header-stat-value" title={lastTimestampTitle}>{lastDateLabel}</span>
               </div>
               <div className="hud-header-stat">
                 <span className="hud-header-stat-label">Событий</span>
@@ -255,35 +286,50 @@ export default function App() {
       {view === 'monitor' && (
         <>
           <div className="app-main">
-            <aside className="panel-left" style={{ width: leftWidth, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              <div className="panel-left-controls">
-                <RunSelector
-                  onPlayback={(run: RunInfo, spd: number) => {
-                    setSelectedNode(null)
-                    startPlayback(run, spd)
-                  }}
-                  onLive={() => {
-                    setSelectedNode(null)
-                    startLive()
-                  }}
-                  speed={speed}
-                  onSpeedChange={setSpeed}
-                  mode={mode}
-                  user={auth.user}
-                  activeRuns={activeRuns.filter((a) => a.status === 'running').map((a) => a.run_name)}
-                  onGoToRuns={() => setView('runs')}
-                />
-              </div>
-              <div className="panel-left-agents">
-                <AgentList
-                  nodes={state.nodes}
-                  edges={state.edges}
-                  events={state.events}
-                  selectedNode={selectedNode}
-                  names={state.names}
-                  onSelect={(id) => setSelectedNode(id || null)}
-                />
-              </div>
+            <aside
+              className={`panel-left${leftCollapsed ? ' collapsed' : ''}`}
+              style={{ width: leftCollapsed ? COLLAPSED_PANEL : leftWidth, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+            >
+              <button
+                className="btn-clipped small panel-collapse-btn left"
+                onClick={() => setLeftCollapsed((v) => !v)}
+                title={leftCollapsed ? 'Развернуть левую панель' : 'Свернуть левую панель'}
+              >
+                {leftCollapsed ? '▶' : '◀'}
+              </button>
+
+              {!leftCollapsed && (
+                <>
+                  <div className="panel-left-controls">
+                    <RunSelector
+                      onPlayback={(run: RunInfo, spd: number) => {
+                        setSelectedNode(null)
+                        startPlayback(run, spd)
+                      }}
+                      onLive={(runName?: string) => {
+                        setSelectedNode(null)
+                        startLive(runName)
+                      }}
+                      speed={speed}
+                      onSpeedChange={setSpeed}
+                      mode={mode}
+                      user={auth.user}
+                      activeRuns={activeRuns.filter((a) => a.status === 'running').map((a) => a.run_name)}
+                      onGoToRuns={() => setView('runs')}
+                    />
+                  </div>
+                  <div className="panel-left-agents">
+                    <AgentList
+                      nodes={state.nodes}
+                      edges={state.edges}
+                      events={state.events}
+                      selectedNode={selectedNode}
+                      names={state.names}
+                      onSelect={(id) => setSelectedNode(id || null)}
+                    />
+                  </div>
+                </>
+              )}
             </aside>
 
             <ResizeHandle onDrag={handleLeftDrag} />
@@ -309,14 +355,23 @@ export default function App() {
 
             <ResizeHandle onDrag={handleRightDrag} />
 
-            <aside className="panel-right" style={{ width: rightWidth }}>
-              <ActivityFeed
-                events={state.events}
-                names={state.names}
-                selectedAgent={selectedNode}
-                onClearFilter={() => setSelectedNode(null)}
-                focusDay={focusDay}
-              />
+            <aside className={`panel-right${rightCollapsed ? ' collapsed' : ''}`} style={{ width: rightCollapsed ? COLLAPSED_PANEL : rightWidth }}>
+              <button
+                className="btn-clipped small panel-collapse-btn right"
+                onClick={() => setRightCollapsed((v) => !v)}
+                title={rightCollapsed ? 'Развернуть правую панель' : 'Свернуть правую панель'}
+              >
+                {rightCollapsed ? '◀' : '▶'}
+              </button>
+              {!rightCollapsed && (
+                <ActivityFeed
+                  events={state.events}
+                  names={state.names}
+                  selectedAgent={selectedNode}
+                  onClearFilter={() => setSelectedNode(null)}
+                  focusDay={focusDay}
+                />
+              )}
             </aside>
           </div>
 
@@ -330,7 +385,27 @@ export default function App() {
 
       {view === 'scenarios' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <ScenariosView onLaunch={() => setView('monitor')} user={auth.user} />
+          <ScenariosView
+            onLaunch={() => setView('monitor')}
+            onGoLive={(runName?: string) => {
+              setSelectedNode(null)
+              startLive(runName)
+              setView('monitor')
+            }}
+            user={auth.user}
+          />
+        </div>
+      )}
+
+      {view === 'agentTypes' && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <AgentTypesView user={auth.user} />
+        </div>
+      )}
+
+      {view === 'personalities' && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <PersonalitiesView user={auth.user} />
         </div>
       )}
 
@@ -342,9 +417,9 @@ export default function App() {
               startPlayback(run, spd)
               setView('monitor')
             }}
-            onLive={() => {
+            onLive={(runName?: string) => {
               setSelectedNode(null)
-              startLive()
+              startLive(runName)
               setView('monitor')
             }}
             speed={speed}

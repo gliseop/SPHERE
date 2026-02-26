@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
@@ -258,6 +259,12 @@ def main() -> None:
         help="Идентификатор сценария (S0–S6)",
     )
     parser.add_argument(
+        "--scenario-json",
+        type=str,
+        default=None,
+        help="Путь к JSON-конфигу ScenarioConfig (перекрывает --scenario)",
+    )
+    parser.add_argument(
         "--governance",
         type=str,
         default=None,
@@ -348,15 +355,30 @@ def main() -> None:
         _list_scenarios()
         return
 
-    try:
-        scenario_id = ScenarioId(args.scenario)
-    except ValueError:
-        console.print(
-            f"[red]Неизвестный сценарий: {args.scenario}[/red]"
-        )
-        sys.exit(1)
+    if args.scenario_json:
+        try:
+            raw = json.loads(Path(args.scenario_json).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            console.print(f"[red]Не удалось прочитать --scenario-json: {exc}[/red]")
+            sys.exit(1)
 
-    scenario = get_scenario(scenario_id)
+        from .config import ScenarioConfig
+
+        try:
+            scenario = ScenarioConfig.model_validate(raw)
+        except Exception as exc:
+            console.print(f"[red]Некорректный ScenarioConfig в --scenario-json: {exc}[/red]")
+            sys.exit(1)
+    else:
+        try:
+            scenario_id = ScenarioId(args.scenario)
+        except ValueError:
+            console.print(
+                f"[red]Неизвестный сценарий: {args.scenario}[/red]"
+            )
+            sys.exit(1)
+
+        scenario = get_scenario(scenario_id)
 
     if args.rounds is not None:
         scenario = scenario.model_copy(
@@ -395,15 +417,26 @@ def main() -> None:
         f"({governance or scenario.governance.mode})[/bold]"
     )
 
-    result = env.run()
+    stream_path: Path | None = None
+    if args.jsonl:
+        stream_path = Path(args.jsonl)
+        stream_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            stream_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        env.state.event_log.set_stream_path(stream_path)
+
+    try:
+        result = env.run()
+    finally:
+        if stream_path is not None:
+            env.state.event_log.close_stream()
     metrics = compute_metrics(result)
 
     _print_result(result, metrics)
 
     if args.jsonl:
-        from pathlib import Path
-
-        env.state.event_log.save_jsonl(Path(args.jsonl))
         console.print(f"Журнал сохранён: {args.jsonl}")
 
     if args.summary_json:

@@ -17,6 +17,11 @@ export interface ThreadGroup {
 export interface GraphNode {
   id: string
   reputation: number
+  has_reputation?: boolean
+  reputation_frozen?: boolean
+  position_title?: string
+  next_position_title?: string
+  next_position_threshold?: number
 }
 
 export interface GraphEdge {

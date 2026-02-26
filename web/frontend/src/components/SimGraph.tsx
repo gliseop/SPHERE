@@ -17,6 +17,11 @@ interface Props {
 interface D3Node extends d3.SimulationNodeDatum {
   id: string
   reputation: number
+  has_reputation?: boolean
+  reputation_frozen?: boolean
+  position_title?: string
+  next_position_title?: string
+  next_position_threshold?: number
 }
 
 interface D3Link extends d3.SimulationLinkDatum<D3Node> {
@@ -29,7 +34,8 @@ interface D3Link extends d3.SimulationLinkDatum<D3Node> {
 function nodeColor(id: string): string {
   if (id.startsWith('off_')) return '#ef4444'
   if (id.startsWith('biz_')) return '#3b82f6'
-  if (id.startsWith('aud_')) return '#f97316'
+  if (id === 'auditor' || id.startsWith('aud_')) return '#f97316'
+  if (id.startsWith('juror_')) return '#a78bfa'
   if (id.startsWith('fam_')) return '#f59e0b'
   if (id.startsWith('soc_')) return '#10b981'
   return '#6b7280'
@@ -192,11 +198,21 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
       const existing = nodesRef.current.get(n.id)
       if (existing) {
         existing.reputation = n.reputation
+        existing.has_reputation = n.has_reputation
+        existing.reputation_frozen = n.reputation_frozen
+        existing.position_title = n.position_title
+        existing.next_position_title = n.next_position_title
+        existing.next_position_threshold = n.next_position_threshold
         newNodesMap.set(n.id, existing)
       } else {
         newNodesMap.set(n.id, {
           id: n.id,
           reputation: n.reputation,
+          has_reputation: n.has_reputation,
+          reputation_frozen: n.reputation_frozen,
+          position_title: n.position_title,
+          next_position_title: n.next_position_title,
+          next_position_threshold: n.next_position_threshold,
           x: cx + (Math.random() - 0.5) * 40,
           y: cy + (Math.random() - 0.5) * 40,
         })

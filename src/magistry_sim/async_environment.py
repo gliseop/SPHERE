@@ -80,7 +80,12 @@ class AsyncEnvironment:
         for profile in self._config.agents:
             self.state.agents[profile.id] = profile
             self.state.graph.add_agent(profile.id)
-            self.state.reputation[profile.id] = ReputationRecord()
+            has_governance_capability = any(
+                cap.action in ("audit", "vote")
+                for cap in (profile.capabilities or [])
+            )
+            if not has_governance_capability:
+                self.state.reputation[profile.id] = ReputationRecord()
 
             res = profile.initial_resources
             self.state.resources.init_agent(

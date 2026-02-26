@@ -45,6 +45,33 @@ class GraphStateBuilder:
         if not isinstance(payload, dict):
             payload = {}
 
+        if event_type == "reputation_snapshot":
+            target = aid
+            score = _as_float(payload.get("score", DEFAULT_REPUTATION), default=DEFAULT_REPUTATION)
+            frozen = bool(payload.get("frozen", False))
+            title = payload.get("title")
+            next_title = payload.get("next_title")
+            next_threshold = payload.get("next_threshold")
+            if target:
+                self._ensure_agent(target)
+                self.agents[target]["reputation"] = round(float(score), 2)
+                self.agents[target]["has_reputation"] = True
+                self.agents[target]["reputation_frozen"] = frozen
+                if isinstance(title, str) and title:
+                    self.agents[target]["position_title"] = title
+                if isinstance(next_title, str) and next_title:
+                    self.agents[target]["next_position_title"] = next_title
+                if next_threshold is not None:
+                    self.agents[target]["next_position_threshold"] = _as_float(next_threshold, default=0.0)
+            return
+
+        if event_type == "reputation_frozen":
+            target = aid
+            if target:
+                self._ensure_agent(target)
+                self.agents[target]["reputation_frozen"] = True
+            return
+
         if event_type == "reputation_modified":
             target = str(payload.get("target", aid) or aid)
             delta = _as_float(payload.get("delta", 0.0), default=0.0)
@@ -53,6 +80,7 @@ class GraphStateBuilder:
                 self.agents[target]["reputation"] = round(
                     float(self.agents[target]["reputation"]) + delta, 2
                 )
+                self.agents[target]["has_reputation"] = True
             return
 
         if event_type == "graph_updated":
@@ -102,7 +130,13 @@ class GraphStateBuilder:
 
     def _ensure_agent(self, agent_id: str) -> None:
         if agent_id and agent_id not in self.agents:
-            self.agents[agent_id] = {"id": agent_id, "reputation": DEFAULT_REPUTATION}
+            no_rep = agent_id in ("auditor",) or agent_id.startswith("juror_")
+            self.agents[agent_id] = {
+                "id": agent_id,
+                "reputation": DEFAULT_REPUTATION,
+                "has_reputation": not no_rep,
+                "reputation_frozen": False,
+            }
 
     def _add_edge(self, a: str, b: str, delta: float) -> None:
         if not a or not b:
@@ -119,4 +153,3 @@ def _as_float(value: Any, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
-

@@ -99,11 +99,14 @@ export function useSimulation() {
     [connect]
   )
 
-  const startLive = useCallback(() => {
+  const startLive = useCallback((runName?: string) => {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const token = getToken()
-    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ''
-    const url = `${proto}//${window.location.host}/ws/live${tokenParam}`
+    const qs = new URLSearchParams()
+    if (token) qs.set('token', token)
+    if (runName) qs.set('run_name', runName)
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    const url = `${proto}//${window.location.host}/ws/live${suffix}`
     connect(url, 'live')
   }, [connect])
 

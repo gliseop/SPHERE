@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { APP_NAME } from '../constants'
 
 interface Props {
   onLogin: (username: string, password: string) => Promise<string | null>
@@ -26,7 +27,7 @@ export function LoginPage({ onLogin }: Props) {
         <div className="corner tr" />
         <div className="corner bl" />
         <div className="corner br accent" />
-        <h1 className="login-title">MAGISTRY</h1>
+        <h1 className="login-title">{APP_NAME}</h1>
         <form onSubmit={handleSubmit} className="login-form">
           <div className="form-field">
             <label>Имя пользователя</label>
