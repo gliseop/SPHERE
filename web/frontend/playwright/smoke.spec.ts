@@ -52,42 +52,34 @@ test('header metrics only on monitor', async ({ page, request }) => {
   await expect(headerStats.getByText('Событий')).toBeVisible()
 })
 
-test('launch run (random seed) and delete via UI', async ({ page, request }) => {
-  await openAuthedApp(page, request)
+test('delete run via UI (runner not selectable)', async ({ page, request }) => {
+  const token = await openAuthedApp(page, request)
 
   await page.getByRole('button', { name: /^Прогоны/ }).click()
 
   const launchPanel = page.locator('.runs-launch-panel')
   await expect(launchPanel).toBeVisible()
+  await expect(launchPanel.getByText('Runner')).toHaveCount(0)
+  await expect(launchPanel.getByText('Mock')).toHaveCount(0)
 
-  // Make it fast.
-  await launchPanel.locator('.form-field', { hasText: 'Раундов' }).locator('input').fill('1')
-
-  // Empty seed -> random on backend
-  await launchPanel
-    .locator('.form-field', { hasText: 'Seed (пусто = случайный)' })
-    .locator('input')
-    .fill('')
-
-  const respPromise = page.waitForResponse((r) =>
-    r.request().method() === 'POST' && /\/api\/runs\/launch$/.test(r.url())
-  )
-  await launchPanel.getByRole('button', { name: /Запустить/ }).click()
-  const resp = await respPromise
-  expect(resp.ok()).toBeTruthy()
-
-  const json = (await resp.json()) as { run_name: string }
-  expect(json.run_name).toMatch(/^S\d+_G\d+_seed\d+_mock$/)
+  // Arrange: create a tiny mock run (fast, deterministic) via API.
+  const launch = await request.post('/api/runs/launch', {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { scenario: 'S1', governance: 'G1', seed: '', runner: 'mock', rounds: 1 },
+  })
+  expect(launch.ok()).toBeTruthy()
+  const { run_name } = (await launch.json()) as { run_name: string }
+  expect(run_name).toMatch(/^S1_G1_seed\d+_mock$/)
 
   // Wait until the run appears in the table (poll refreshRuns).
-  await expect(page.locator('td.runs-name-cell', { hasText: json.run_name })).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('td.runs-name-cell', { hasText: run_name })).toBeVisible({ timeout: 30_000 })
 
   // Delete it via UI
   page.once('dialog', (d) => d.accept())
-  const row = page.locator('tbody tr', { hasText: json.run_name })
+  const row = page.locator('tbody tr', { hasText: run_name })
   await row.locator('button[title="Удалить"]').click()
 
-  await expect(page.locator('tbody tr', { hasText: json.run_name })).toHaveCount(0, { timeout: 30_000 })
+  await expect(page.locator('tbody tr', { hasText: run_name })).toHaveCount(0, { timeout: 30_000 })
 })
 
 test('playback websocket closes and UI returns to idle', async ({ page, request }) => {

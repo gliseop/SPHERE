@@ -18,7 +18,7 @@ interface Scenario {
   rounds: number
   seed: number | null
   agents: Agent[]
-  runner: 'mock' | 'cognitive'
+  runner?: string
 }
 
 const EMPTY_SCENARIO: Scenario = {
@@ -29,7 +29,7 @@ const EMPTY_SCENARIO: Scenario = {
   rounds: 10,
   seed: null,
   agents: [],
-  runner: 'mock',
+  runner: 'cognitive',
 }
 
 const ROLE_OPTIONS = [
@@ -72,9 +72,10 @@ export function ScenariosView({ onLaunch, user }: {
     if (!editing) return
     setSaving(true)
     try {
+      const payload: Scenario = { ...editing, runner: 'cognitive' }
       const res = editing.id
-        ? await apiClient.put(`/api/scenarios/${editing.id}`, editing)
-        : await apiClient.post('/api/scenarios', editing)
+        ? await apiClient.put(`/api/scenarios/${editing.id}`, payload)
+        : await apiClient.post('/api/scenarios', payload)
       const saved: Scenario = await res.json()
       setScenarios((prev) => {
         const list = Array.isArray(prev) ? prev : []
@@ -94,9 +95,15 @@ export function ScenariosView({ onLaunch, user }: {
     setScenarios((prev) => (Array.isArray(prev) ? prev.filter((s) => s.id !== id) : []))
   }
 
-  async function handleRun(id: string) {
+  async function handleRun(s: Scenario) {
     try {
-      const res = await apiClient.post(`/api/scenarios/${id}/run`)
+      const res = await apiClient.post('/api/runs/launch', {
+        scenario: s.scenario,
+        governance: s.governance,
+        seed: s.seed,
+        runner: 'cognitive',
+        rounds: s.rounds,
+      })
       if (res.ok) {
         onLaunch?.()
       }
@@ -224,15 +231,10 @@ export function ScenariosView({ onLaunch, user }: {
           </div>
 
           <div className="form-field">
-            <label>Runner</label>
-            <select
-              className="hud-input"
-              value={editing.runner}
-              onChange={(e) => setEditing({ ...editing, runner: e.target.value as 'mock' | 'cognitive' })}
-            >
-              <option value="mock">Mock — детерминированный (быстрый)</option>
-              <option value="cognitive">Cognitive — LLM-агенты (реальный)</option>
-            </select>
+            <label>Режим</label>
+            <div className="text-muted" style={{ fontSize: '0.7rem' }}>
+              Cognitive (LLM)
+            </div>
           </div>
 
           <div className="form-field">
@@ -304,8 +306,9 @@ export function ScenariosView({ onLaunch, user }: {
             <button
               className="btn-clipped success"
               onClick={async () => {
+                const snapshot: Scenario = { ...editing, runner: 'cognitive' }
                 await handleSave()
-                if (editing.id) await handleRun(editing.id)
+                await handleRun(snapshot)
               }}
               disabled={saving || !editing.name}
             >
@@ -351,16 +354,13 @@ export function ScenariosView({ onLaunch, user }: {
                 <span className="badge small">{s.agents?.length ?? 0} аг.</span>
                 <span className="badge small">{s.rounds} раундов</span>
                 {s.seed !== null && <span className="badge small">seed {s.seed}</span>}
-                <span className={`badge small ${(s.runner ?? 'mock') === 'cognitive' ? 'accent' : ''}`}>
-                  {s.runner ?? 'mock'}
-                </span>
               </div>
             </div>
             <div className="scenario-card-actions">
               {user?.role === 'admin' && (
                 <>
-                  <button className="btn-clipped success small" onClick={() => s.id && handleRun(s.id)} title="Запустить">▶</button>
-                  <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_SCENARIO, ...s })} title="Редактировать">✎</button>
+                  <button className="btn-clipped success small" onClick={() => handleRun(s)} title="Запустить">▶</button>
+                  <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_SCENARIO, ...s, runner: 'cognitive' })} title="Редактировать">✎</button>
                   <button className="btn-clipped danger small" onClick={() => s.id && handleDelete(s.id)} title="Удалить">✕</button>
                 </>
               )}

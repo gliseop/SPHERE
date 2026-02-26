@@ -42,7 +42,6 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
   const [launchScenario, setLaunchScenario] = useState('S1')
   const [launchGovernance, setLaunchGovernance] = useState('G1')
   const [launchSeed, setLaunchSeed] = useState('')
-  const [launchRunner, setLaunchRunner] = useState('mock')
   const [launchRounds, setLaunchRounds] = useState('25')
   const [launching, setLaunching] = useState(false)
   const [stopping, setStopping] = useState<string | null>(null)
@@ -76,7 +75,7 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
         scenario: launchScenario,
         governance: launchGovernance,
         seed: launchSeed ? Number(launchSeed) : null,
-        runner: launchRunner,
+        runner: 'cognitive',
         rounds: launchRounds ? Number(launchRounds) : 25,
       })
       if (res.ok) refreshRuns()
@@ -160,14 +159,7 @@ export function RunsView({ onPlayback, speed, mode, user, activeRuns }: Props) {
               <label>Раундов</label>
               <input className="hud-input" type="number" value={launchRounds} onChange={(e) => setLaunchRounds(e.target.value)} placeholder="25" />
             </div>
-            <div className="form-field">
-              <label>Runner</label>
-              <select className="hud-input" value={launchRunner} onChange={(e) => setLaunchRunner(e.target.value)}>
-                <option value="mock">Mock</option>
-                <option value="cognitive">Cognitive</option>
-              </select>
-            </div>
-            <div className="form-field" style={{ justifyContent: 'flex-end' }}>
+            <div className="form-field" style={{ justifyContent: 'flex-end', gridColumn: 'span 2' }}>
               <button
                 className="btn-clipped primary full-width"
                 onClick={handleLaunch}
