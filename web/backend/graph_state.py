@@ -19,6 +19,11 @@ THREAD_MESSAGE_DELTA = 0.1
 THREAD_MAX_DELTA = 1.0
 
 
+def _is_governance_agent(agent_id: str) -> bool:
+    """Return True for governance agents that should not display reputation."""
+    return agent_id in ("auditor",) or agent_id.startswith(("aud_", "juror_"))
+
+
 def build_graph_state(events: list[dict]) -> dict:
     """Reconstruct {"nodes": [...], "edges": [...]} from an event stream."""
     builder = GraphStateBuilder()
@@ -55,7 +60,7 @@ class GraphStateBuilder:
             if target:
                 self._ensure_agent(target)
                 self.agents[target]["reputation"] = round(float(score), 2)
-                self.agents[target]["has_reputation"] = True
+                self.agents[target]["has_reputation"] = not _is_governance_agent(target)
                 self.agents[target]["reputation_frozen"] = frozen
                 if isinstance(title, str) and title:
                     self.agents[target]["position_title"] = title
@@ -80,7 +85,7 @@ class GraphStateBuilder:
                 self.agents[target]["reputation"] = round(
                     float(self.agents[target]["reputation"]) + delta, 2
                 )
-                self.agents[target]["has_reputation"] = True
+                self.agents[target]["has_reputation"] = not _is_governance_agent(target)
             return
 
         if event_type == "graph_updated":
@@ -130,7 +135,7 @@ class GraphStateBuilder:
 
     def _ensure_agent(self, agent_id: str) -> None:
         if agent_id and agent_id not in self.agents:
-            no_rep = agent_id in ("auditor",) or agent_id.startswith("juror_")
+            no_rep = _is_governance_agent(agent_id)
             self.agents[agent_id] = {
                 "id": agent_id,
                 "reputation": DEFAULT_REPUTATION,

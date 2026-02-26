@@ -26,6 +26,8 @@ const INITIAL_STATE: SimState = {
   error: null,
 }
 
+const MAX_EVENTS = 10_000
+
 export function useSimulation() {
   const [state, setState] = useState<SimState>(INITIAL_STATE)
   const [mode, setMode] = useState<SimMode>('idle')
@@ -62,14 +64,18 @@ export function useSimulation() {
               meta: { scenario: msg.scenario, governance: msg.governance, seed: msg.seed, variant: msg.variant ?? null, names: msg.names ?? {} },
               names: msg.names ?? {},
             }
-          case 'event':
+          case 'event': {
+            const nextEvents = prev.events.length >= MAX_EVENTS
+              ? [...prev.events.slice(-(MAX_EVENTS - 1)), msg.data]
+              : [...prev.events, msg.data]
             return {
               ...prev,
-              events: [...prev.events, msg.data],
+              events: nextEvents,
               currentRound: typeof msg.data.round === 'number'
                 ? msg.data.round
                 : prev.currentRound,
             }
+          }
           case 'graph_state':
             return { ...prev, nodes: msg.nodes, edges: msg.edges }
           case 'done':

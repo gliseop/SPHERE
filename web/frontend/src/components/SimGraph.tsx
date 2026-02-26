@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as d3 from 'd3'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
 import { SUSPICIOUS_THRESHOLD } from '../constants'
@@ -65,14 +65,17 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
   const selectedRef = useRef(selectedNode)
 
   // Строим Set приватных рёбер из событий
-  const privateEdges = new Set<string>()
-  for (const e of events) {
-    if ((e.event_type === 'message_sent' || e.event_type === 'message') && getBool(e.payload, 'private')) {
-      const from = e.agent_id
-      const to = getString(e.payload, 'to_id')
-      if (from && to) privateEdges.add([from, to].sort().join('|'))
+  const privateEdges = useMemo(() => {
+    const edgesSet = new Set<string>()
+    for (const e of events) {
+      if ((e.event_type === 'message_sent' || e.event_type === 'message') && getBool(e.payload, 'private')) {
+        const from = e.agent_id
+        const to = getString(e.payload, 'to_id')
+        if (from && to) edgesSet.add([from, to].sort().join('|'))
+      }
     }
-  }
+    return edgesSet
+  }, [events])
 
   // Синхронизируем ref selectedNode чтобы tick не захватывал устаревший closure
   useEffect(() => {
@@ -332,7 +335,7 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
 
     sim.alpha(0.3).restart()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges, events, names])
+  }, [nodes, edges, names])
 
   // SVG рендерится всегда — иначе useEffect([], []) срабатывает когда svgRef=null
   // и D3 никогда не инициализируется. Пустое состояние — оверлей поверх SVG.

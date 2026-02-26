@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +16,18 @@ _RESULTS_DIR = _PROJECT_ROOT / "results"
 
 # Хранилище активных процессов: run_name -> subprocess.Popen
 _active: dict[str, subprocess.Popen] = {}
+_active_lock = threading.Lock()
+
+_logger = logging.getLogger(__name__)
+
+try:
+    _MAX_RUNNING = max(1, int(os.environ.get("MAGISTRY_MAX_RUNNING", "5")))
+except ValueError:
+    _MAX_RUNNING = 5
+
+
+class TooManyRunsError(RuntimeError):
+    """Exceeded the max number of concurrent runs."""
 
 
 def _write_names_json(run_name: str, scenario_id: str, governance: str) -> None:
@@ -39,7 +54,7 @@ def _write_names_json(run_name: str, scenario_id: str, governance: str) -> None:
             encoding="utf-8",
         )
     except Exception:
-        pass
+        _logger.exception("Failed to write names JSON for run %s", run_name)
 
 
 def _write_names_json_from_config(
@@ -60,7 +75,7 @@ def _write_names_json_from_config(
             encoding="utf-8",
         )
     except Exception:
-        pass
+        _logger.exception("Failed to write names JSON for run %s", run_name)
 
 
 def launch_simulation_from_config(
@@ -79,59 +94,72 @@ def launch_simulation_from_config(
     )
     run_name = f"{scenario_id}_{governance}_seed{seed}_{safe_variant}_{runner_type}"
 
-    if run_name in _active:
-        proc = _active[run_name]
-        if proc.poll() is None:
+    with _active_lock:
+        running_count = 0
+        finished = []
+        for name, proc in _active.items():
+            if proc.poll() is None:
+                running_count += 1
+            else:
+                finished.append(name)
+        for name in finished:
+            del _active[name]
+
+        if running_count >= _MAX_RUNNING:
+            raise TooManyRunsError(
+                f"Превышен лимит одновременных прогонов ({running_count}/{_MAX_RUNNING})"
+            )
+
+        if run_name in _active:
+            proc = _active[run_name]
             raise RuntimeError(f"Прогон {run_name} уже запущен (PID {proc.pid})")
-        else:
-            del _active[run_name]
 
-    _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    jsonl_path = _RESULTS_DIR / f"{run_name}_events.jsonl"
-    summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
-    stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
-    stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
-    scenario_path = _RESULTS_DIR / f"{run_name}_scenario.json"
+        jsonl_path = _RESULTS_DIR / f"{run_name}_events.jsonl"
+        summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
+        stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
+        stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
+        scenario_path = _RESULTS_DIR / f"{run_name}_scenario.json"
 
-    try:
-        scenario_path.write_text(
-            json.dumps(scenario_config, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
+        try:
+            scenario_path.write_text(
+                json.dumps(scenario_config, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            _logger.exception("Failed to write scenario JSON for run %s", run_name)
 
-    _write_names_json_from_config(run_name, scenario_config, governance)
+        _write_names_json_from_config(run_name, scenario_config, governance)
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "magistry_sim.cli",
-        "--scenario-json",
-        str(scenario_path),
-        "--governance",
-        governance,
-        "--seed",
-        str(seed),
-        "--runner",
-        runner_type,
-        "--rounds",
-        str(rounds),
-        "--jsonl",
-        str(jsonl_path),
-        "--summary-json",
-        str(summary_path),
-    ]
+        cmd = [
+            sys.executable,
+            "-m",
+            "magistry_sim.cli",
+            "--scenario-json",
+            str(scenario_path),
+            "--governance",
+            governance,
+            "--seed",
+            str(seed),
+            "--runner",
+            runner_type,
+            "--rounds",
+            str(rounds),
+            "--jsonl",
+            str(jsonl_path),
+            "--summary-json",
+            str(summary_path),
+        ]
 
-    with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(_PROJECT_ROOT),
-            stdout=stdout,
-            stderr=stderr,
-        )
-    _active[run_name] = proc
+        with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(_PROJECT_ROOT),
+                stdout=stdout,
+                stderr=stderr,
+            )
+        _active[run_name] = proc
 
     return {
         "run_name": run_name,
@@ -166,44 +194,66 @@ def launch_simulation(
     """
     run_name = f"{scenario}_{governance}_seed{seed}_{runner_type}"
 
-    # Проверить, не запущен ли уже
-    if run_name in _active:
-        proc = _active[run_name]
-        if proc.poll() is None:
+    with _active_lock:
+        running_count = 0
+        finished = []
+        for name, proc in _active.items():
+            if proc.poll() is None:
+                running_count += 1
+            else:
+                finished.append(name)
+        for name in finished:
+            del _active[name]
+
+        if running_count >= _MAX_RUNNING:
+            raise TooManyRunsError(
+                f"Превышен лимит одновременных прогонов ({running_count}/{_MAX_RUNNING})"
+            )
+
+        # Проверить, не запущен ли уже
+        if run_name in _active:
+            proc = _active[run_name]
             raise RuntimeError(f"Прогон {run_name} уже запущен (PID {proc.pid})")
-        else:
-            del _active[run_name]
 
-    _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    jsonl_path = _RESULTS_DIR / f"{run_name}_events.jsonl"
-    summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
-    stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
-    stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
+        jsonl_path = _RESULTS_DIR / f"{run_name}_events.jsonl"
+        summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
+        stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
+        stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
 
-    _write_names_json(run_name, scenario, governance)
+        _write_names_json(run_name, scenario, governance)
 
-    cmd = [
-        sys.executable, "-m", "magistry_sim.cli",
-        "--scenario", scenario,
-        "--governance", governance,
-        "--seed", str(seed),
-        "--runner", runner_type,
-        "--rounds", str(rounds),
-        "--jsonl", str(jsonl_path),
-        "--summary-json", str(summary_path),
-    ]
+        cmd = [
+            sys.executable,
+            "-m",
+            "magistry_sim.cli",
+            "--scenario",
+            scenario,
+            "--governance",
+            governance,
+            "--seed",
+            str(seed),
+            "--runner",
+            runner_type,
+            "--rounds",
+            str(rounds),
+            "--jsonl",
+            str(jsonl_path),
+            "--summary-json",
+            str(summary_path),
+        ]
 
-    # Важно: не использовать PIPE без чтения stdout/stderr — иначе процесс может
-    # зависнуть при заполнении буфера (особенно для verbose-runner-ов).
-    with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(_PROJECT_ROOT),
-            stdout=stdout,
-            stderr=stderr,
-        )
-    _active[run_name] = proc
+        # Важно: не использовать PIPE без чтения stdout/stderr — иначе процесс может
+        # зависнуть при заполнении буфера (особенно для verbose-runner-ов).
+        with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(_PROJECT_ROOT),
+                stdout=stdout,
+                stderr=stderr,
+            )
+        _active[run_name] = proc
 
     return {
         "run_name": run_name,
@@ -219,36 +269,37 @@ def list_active() -> list[dict]:
     Returns:
         Список словарей с именем прогона, PID и статусом.
     """
-    result = []
-    finished = []
-    for name, proc in _active.items():
-        poll = proc.poll()
-        if poll is None:
-            result.append(
-                {
-                    "run_name": name,
-                    "pid": proc.pid,
-                    "status": "running",
-                    "stdout_log": f"{name}_stdout.log",
-                    "stderr_log": f"{name}_stderr.log",
-                }
-            )
-        else:
-            result.append(
-                {
-                    "run_name": name,
-                    "pid": proc.pid,
-                    "status": "finished",
-                    "returncode": poll,
-                    "stdout_log": f"{name}_stdout.log",
-                    "stderr_log": f"{name}_stderr.log",
-                }
-            )
-            finished.append(name)
-    # Очистить завершённые
-    for name in finished:
-        del _active[name]
-    return result
+    with _active_lock:
+        result = []
+        finished = []
+        for name, proc in _active.items():
+            poll = proc.poll()
+            if poll is None:
+                result.append(
+                    {
+                        "run_name": name,
+                        "pid": proc.pid,
+                        "status": "running",
+                        "stdout_log": f"{name}_stdout.log",
+                        "stderr_log": f"{name}_stderr.log",
+                    }
+                )
+            else:
+                result.append(
+                    {
+                        "run_name": name,
+                        "pid": proc.pid,
+                        "status": "finished",
+                        "returncode": poll,
+                        "stdout_log": f"{name}_stdout.log",
+                        "stderr_log": f"{name}_stderr.log",
+                    }
+                )
+                finished.append(name)
+        # Очистить завершённые
+        for name in finished:
+            del _active[name]
+        return result
 
 
 def stop_simulation(run_name: str) -> Optional[dict]:
@@ -260,7 +311,8 @@ def stop_simulation(run_name: str) -> Optional[dict]:
     Returns:
         Словарь со статусом или None если прогон не найден.
     """
-    proc = _active.get(run_name)
+    with _active_lock:
+        proc = _active.get(run_name)
     if proc is None:
         return None
     proc.terminate()
@@ -268,5 +320,7 @@ def stop_simulation(run_name: str) -> Optional[dict]:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
-    del _active[run_name]
+    with _active_lock:
+        if _active.get(run_name) is proc:
+            del _active[run_name]
     return {"run_name": run_name, "status": "stopped"}

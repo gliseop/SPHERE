@@ -9,7 +9,7 @@ import re
 import secrets
 import uuid
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
 import aiofiles
 from dotenv import load_dotenv
@@ -18,8 +18,11 @@ load_dotenv()
 
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .auth import (
     create_access_token,
@@ -29,7 +32,7 @@ from .auth import (
     verify_ws_token,
 )
 from .database import User, get_user_by_username, init_db
-from .graph_state import GraphStateBuilder, build_graph_state
+from .graph_state import GraphStateBuilder
 
 RESULTS_DIR = (Path(__file__).parent.parent.parent / "results").resolve()
 SCENARIOS_DIR = (Path(__file__).parent.parent.parent / "scenarios").resolve()
@@ -44,6 +47,17 @@ FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
 _RUN_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 _DOC_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+_MAX_SEED = 2_147_483_647
+_MAX_ROUNDS = 1_000
+
+try:
+    _MAX_BODY_BYTES = max(
+        1,
+        int(_os.environ.get("MAGISTRY_MAX_BODY_BYTES", str(2 * 1024 * 1024))),
+    )
+except ValueError:
+    _MAX_BODY_BYTES = 2 * 1024 * 1024
 
 
 def _validate_run_name(name: str) -> None:
@@ -122,6 +136,8 @@ def _resolve_seed(value: object | None) -> int:
     if isinstance(value, int):
         if value < 0:
             raise HTTPException(status_code=400, detail="Invalid seed")
+        if value > _MAX_SEED:
+            raise HTTPException(status_code=400, detail="Invalid seed")
         return value
 
     if isinstance(value, float):
@@ -129,6 +145,8 @@ def _resolve_seed(value: object | None) -> int:
             raise HTTPException(status_code=400, detail="Invalid seed")
         seed = int(value)
         if seed < 0:
+            raise HTTPException(status_code=400, detail="Invalid seed")
+        if seed > _MAX_SEED:
             raise HTTPException(status_code=400, detail="Invalid seed")
         return seed
 
@@ -142,12 +160,104 @@ def _resolve_seed(value: object | None) -> int:
             raise HTTPException(status_code=400, detail="Invalid seed") from exc
         if seed < 0:
             raise HTTPException(status_code=400, detail="Invalid seed")
+        if seed > _MAX_SEED:
+            raise HTTPException(status_code=400, detail="Invalid seed")
         return seed
 
     raise HTTPException(status_code=400, detail="Invalid seed")
 
 
+def _resolve_rounds(value: object | None, *, default: int = 10) -> int:
+    """Преобразовать rounds в int и ограничить разумным максимумом."""
+    from fastapi import HTTPException
+
+    if value is None:
+        rounds = default
+    elif isinstance(value, bool):
+        raise HTTPException(status_code=400, detail="Invalid rounds")
+    else:
+        try:
+            rounds = int(value)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid rounds") from exc
+
+    if rounds < 1 or rounds > _MAX_ROUNDS:
+        raise HTTPException(status_code=400, detail="Invalid rounds")
+    return rounds
+
+
+class ScenarioAgentPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
+    name: str = Field(min_length=1, max_length=128)
+    role: Literal["official", "business", "auditor"]
+    initial_reputation: float = Field(ge=0.0, le=100.0)
+
+
+class ScenarioPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5_000)
+    scenario: str = Field(default="S1", pattern=r"^S\\d+$")
+    governance: str = Field(default="G1", pattern=r"^G\\d+$")
+    rounds: int = Field(default=10, ge=1, le=_MAX_ROUNDS)
+    seed: int | None = Field(default=None, ge=0, le=_MAX_SEED)
+    runner: str | None = Field(default=None, max_length=64)
+    agents: list[ScenarioAgentPayload] = Field(default_factory=list, max_length=200)
+    sim_config: dict[str, Any] | None = None
+
+
+class _BodySizeLimitMiddleware:
+    """Ограничить размер тела HTTP-запроса, чтобы избежать DoS через большие JSON."""
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        for k, v in scope.get("headers", []):
+            if k.lower() != b"content-length":
+                continue
+            try:
+                if int(v) > self.max_bytes:
+                    res = JSONResponse(
+                        {"detail": "Request body too large"}, status_code=413
+                    )
+                    await res(scope, receive, send)
+                    return
+            except ValueError:
+                break
+
+        received = 0
+        class _RequestBodyTooLarge(Exception):
+            pass
+
+        async def limited_receive():
+            nonlocal received
+            message = await receive()
+            if message.get("type") == "http.request":
+                body = message.get("body") or b""
+                received += len(body)
+                if received > self.max_bytes:
+                    raise _RequestBodyTooLarge
+            return message
+
+        try:
+            await self.app(scope, limited_receive, send)
+        except _RequestBodyTooLarge:
+            res = JSONResponse({"detail": "Request body too large"}, status_code=413)
+            await res(scope, receive, send)
+
+
 app = FastAPI(title="MAGISTRY Graph UI")
+
+app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_MAX_BODY_BYTES)
 
 _ALLOWED_ORIGIN = _os.environ.get("ALLOWED_ORIGIN", "http://localhost:5173")
 
@@ -280,7 +390,13 @@ async def list_runs(_user: User = Depends(require_viewer)) -> list[dict]:
 
 
 @app.get("/api/run/{name}")
-async def get_run(name: str, _user: User = Depends(require_viewer)) -> dict:
+async def get_run(
+    name: str,
+    offset: int = 0,
+    limit: int = 1_000,
+    include_events: bool = True,
+    _user: User = Depends(require_viewer),
+) -> dict:
     """Вернуть все события прогона.
 
     Args:
@@ -292,20 +408,40 @@ async def get_run(name: str, _user: User = Depends(require_viewer)) -> dict:
     """
     from fastapi import HTTPException
 
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="Invalid offset")
+    if limit < 0:
+        raise HTTPException(status_code=400, detail="Invalid limit")
+    if limit > 10_000:
+        raise HTTPException(status_code=400, detail="Limit too large")
+
     _validate_run_name(name)
     path = RESULTS_DIR / f"{name}_events.jsonl"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Run not found")
-    events = []
+    builder = GraphStateBuilder()
+    events: list[dict] = []
+    total = 0
     async with aiofiles.open(path, encoding="utf-8") as f:
         async for line in f:
             line = line.strip()
-            if line:
-                events.append(json.loads(line))
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            builder.ingest(event)
+            if include_events and total >= offset and len(events) < limit:
+                events.append(event)
+            total += 1
     return {
         "name": name,
         "events": events,
-        "graph": build_graph_state(events),
+        "offset": offset,
+        "limit": limit,
+        "total_events": total,
+        "graph": builder.state(),
         "meta": _parse_run_name(f"{name}_events.jsonl"),
     }
 
@@ -438,7 +574,12 @@ async def ws_live(
 
     try:
         if run_name:
-            _validate_run_name(run_name)
+            try:
+                _validate_run_name(run_name)
+            except Exception:
+                await websocket.send_json({"type": "error", "message": "Invalid run name"})
+                await websocket.close()
+                return
 
         while True:
             active = list_active()
@@ -456,7 +597,20 @@ async def ws_live(
                     await websocket.send_json({"type": "done"})
                     await websocket.close(code=1000)
                     return
-                target_run = str(running[-1].get("run_name") or "")
+                for r in reversed(running):
+                    candidate = str(r.get("run_name") or "")
+                    if not candidate:
+                        continue
+                    try:
+                        _validate_run_name(candidate)
+                    except Exception:
+                        continue
+                    target_run = candidate
+                    break
+                if not target_run:
+                    await websocket.send_json({"type": "done"})
+                    await websocket.close(code=1000)
+                    return
 
             if not target_run:
                 await asyncio.sleep(0.5)
@@ -479,28 +633,68 @@ async def ws_live(
                 )
                 await websocket.send_json({"type": "graph_state", **builder.state()})
 
-            # Открываем в бинарном режиме для точного отслеживания байтовой позиции
-            async with aiofiles.open(watched_path, "rb") as f:
-                await f.seek(file_pos)
-                raw = await f.read()
-                file_pos += len(raw)
-            new_lines = raw.decode("utf-8", errors="replace")
+            try:
+                # Держим дескриптор открытым и читаем "хвост" до смены watched_run.
+                async with aiofiles.open(watched_path, "rb") as f:
+                    while True:
+                        await f.seek(file_pos)
+                        raw = await f.read()
+                        file_pos += len(raw)
 
-            for line in new_lines.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                await websocket.send_json({"type": "event", "data": event})
-                builder.ingest(event)
-                await websocket.send_json(
-                    {"type": "graph_state", **builder.state()}
-                )
+                        new_lines = raw.decode("utf-8", errors="replace")
+                        for line in new_lines.splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                event = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            await websocket.send_json({"type": "event", "data": event})
+                            builder.ingest(event)
+                            await websocket.send_json(
+                                {"type": "graph_state", **builder.state()}
+                            )
 
-            await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.5)
+
+                        # Проверяем, нужно ли переключиться на другой прогон.
+                        active = list_active()
+                        running = [r for r in active if r.get("status") == "running"]
+
+                        next_run: str | None = None
+                        if run_name:
+                            next_run = run_name
+                            if not any(r.get("run_name") == run_name for r in running):
+                                await websocket.send_json({"type": "done"})
+                                await websocket.close(code=1000)
+                                return
+                        else:
+                            if not running:
+                                await websocket.send_json({"type": "done"})
+                                await websocket.close(code=1000)
+                                return
+                            for r in reversed(running):
+                                candidate = str(r.get("run_name") or "")
+                                if not candidate:
+                                    continue
+                                try:
+                                    _validate_run_name(candidate)
+                                except Exception:
+                                    continue
+                                next_run = candidate
+                                break
+                            if not next_run:
+                                await websocket.send_json({"type": "done"})
+                                await websocket.close(code=1000)
+                                return
+
+                        if next_run != watched_run:
+                            break
+                        if watched_path and not watched_path.exists():
+                            break
+            except OSError:
+                await asyncio.sleep(0.5)
 
     except WebSocketDisconnect:
         pass
@@ -625,17 +819,18 @@ async def get_scenario(scenario_id: str, _user: User = Depends(require_viewer)) 
 
 
 @app.post("/api/scenarios", status_code=201)
-async def create_scenario(data: dict, _user: User = Depends(require_admin)) -> dict:
+async def create_scenario(payload: ScenarioPayload, _user: User = Depends(require_admin)) -> dict:
     """Создать новый сценарий.
 
     Args:
-        data: Данные сценария.
+        payload: Данные сценария.
         _user: Аутентифицированный пользователь с ролью admin.
 
     Returns:
         Сохранённый сценарий с назначенным id.
     """
     scenario_id = str(uuid.uuid4())
+    data = payload.model_dump(mode="json")
     data["id"] = scenario_id
     path = SCENARIOS_DIR / f"{scenario_id}.json"
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -643,12 +838,16 @@ async def create_scenario(data: dict, _user: User = Depends(require_admin)) -> d
 
 
 @app.put("/api/scenarios/{scenario_id}")
-async def update_scenario(scenario_id: str, data: dict, _user: User = Depends(require_admin)) -> dict:
+async def update_scenario(
+    scenario_id: str,
+    payload: ScenarioPayload,
+    _user: User = Depends(require_admin),
+) -> dict:
     """Обновить сценарий.
 
     Args:
         scenario_id: UUID строка.
-        data: Новые данные сценария.
+        payload: Новые данные сценария.
         _user: Аутентифицированный пользователь с ролью admin.
 
     Returns:
@@ -660,6 +859,7 @@ async def update_scenario(scenario_id: str, data: dict, _user: User = Depends(re
     path = SCENARIOS_DIR / f"{scenario_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Scenario not found")
+    data = payload.model_dump(mode="json")
     data["id"] = scenario_id
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return data
@@ -792,7 +992,7 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
         Словарь с run_name и статусом.
     """
     from fastapi import HTTPException
-    from web.backend.runner import launch_simulation
+    from web.backend.runner import TooManyRunsError, launch_simulation
 
     _validate_scenario_id(scenario_id)
     path = SCENARIOS_DIR / f"{scenario_id}.json"
@@ -803,7 +1003,7 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
         governance = scenario.get("governance", "G1")
         seed = _resolve_seed(scenario.get("seed"))
         runner_type = scenario.get("runner", "mock")
-        rounds = scenario.get("rounds", 10)
+        rounds = _resolve_rounds(scenario.get("rounds"), default=10)
         sim_config = scenario.get("sim_config")
         if isinstance(sim_config, dict):
             from web.backend.runner import launch_simulation_from_config
@@ -826,6 +1026,8 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
                 rounds=rounds,
             )
         return {"status": "accepted", **result}
+    except TooManyRunsError as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
@@ -842,22 +1044,24 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
         Словарь с run_name и PID.
     """
     from fastapi import HTTPException
-    from web.backend.runner import launch_simulation
+    from web.backend.runner import TooManyRunsError, launch_simulation
 
     scenario = data.get("scenario", "S1")
     governance = data.get("governance", "G1")
     seed = _resolve_seed(data.get("seed"))
     runner_type = data.get("runner", "mock")
-    rounds = data.get("rounds", 10)
+    rounds = _resolve_rounds(data.get("rounds"), default=10)
     try:
         result = launch_simulation(
             scenario=scenario,
             governance=governance,
             seed=seed,
             runner_type=runner_type,
-            rounds=int(rounds),
+            rounds=rounds,
         )
         return {"status": "accepted", **result}
+    except TooManyRunsError as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 

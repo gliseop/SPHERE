@@ -67,6 +67,7 @@ export default function App() {
 
   useEffect(() => {
     if (!auth.isAuthenticated) return
+    if (view !== 'monitor' && view !== 'runs' && mode !== 'live') return
     function poll() {
       apiClient.get('/api/runs/active')
         .then((r) => r.ok ? r.json() : [])
@@ -76,7 +77,7 @@ export default function App() {
     poll()
     const interval = setInterval(poll, 5_000)
     return () => clearInterval(interval)
-  }, [auth.isAuthenticated])
+  }, [auth.isAuthenticated, view, mode])
 
   const [leftWidth, setLeftWidth] = useState<number>(() => {
     const stored = localStorage.getItem('magistry-left-w')

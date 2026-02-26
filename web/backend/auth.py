@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -13,7 +14,19 @@ from .database import User, get_user_by_username
 
 _oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
-_JWT_SECRET: str = os.environ.get("JWT_SECRET", "dev-secret-CHANGE-IN-PRODUCTION")
+_DEV_MODE = os.environ.get("MAGISTRY_DEV", "").strip() == "1"
+_JWT_SECRET_ENV = (os.environ.get("JWT_SECRET") or "").strip()
+if not _JWT_SECRET_ENV:
+    if _DEV_MODE:
+        _JWT_SECRET: str = "dev-secret-CHANGE-IN-PRODUCTION"
+    else:
+        print(
+            "JWT_SECRET is required. Set JWT_SECRET or export MAGISTRY_DEV=1 for dev mode.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+else:
+    _JWT_SECRET = _JWT_SECRET_ENV
 _JWT_ALGORITHM = "HS256"
 _JWT_EXPIRE_HOURS: int = int(os.environ.get("JWT_EXPIRE_HOURS", "24"))
 

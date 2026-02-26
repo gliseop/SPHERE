@@ -340,7 +340,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                 if (simConfigError) setSimConfigError(null)
               }}
               placeholder="(опционально) JSON ScenarioConfig"
-              style={{ marginTop: '0.5rem', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace' }}
+              style={{ marginTop: '0.5rem', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace' }}
             />
             {simConfigError && (
               <div style={{ marginTop: '0.5rem' }}>
