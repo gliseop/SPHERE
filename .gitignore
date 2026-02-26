@@ -7,4 +7,3 @@ __pycache__/
 .playwright-mcp
 results/
 screenshots/
-scenarios/
