@@ -22,6 +22,22 @@ interface Scenario {
   runner?: string
 }
 
+interface TemplateScenario {
+  id: string
+  title: string
+  description?: string
+}
+
+interface GovernanceModeItem {
+  id: string
+  label: string
+  description?: string
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
 const EMPTY_SCENARIO: Scenario = {
   name: '',
   description: '',
@@ -39,17 +55,17 @@ const ROLE_OPTIONS = [
   { value: 'auditor',  label: 'Аудитор' },
 ]
 
-const SCENARIO_OPTIONS = [
-  { value: 'S0', label: 'S0 — Чистая сделка' },
-  { value: 'S1', label: 'S1 — Прямой сговор' },
-  { value: 'S2', label: 'S2 — Кумовство при найме' },
+const FALLBACK_SCENARIOS: TemplateScenario[] = [
+  { id: 'S0', title: 'Чистая сделка' },
+  { id: 'S1', title: 'Прямой сговор' },
+  { id: 'S2', title: 'Кумовство при найме' },
 ]
 
-const GOVERNANCE_OPTIONS = [
-  { value: 'G0', label: 'G0 — Без контроля' },
-  { value: 'G1', label: 'G1 — Аудитор (рекомендательный)' },
-  { value: 'G2', label: 'G2 — Аудитор (санкции по репутации)' },
-  { value: 'G3', label: 'G3 — Полный контроль (трибунал)' },
+const FALLBACK_GOVERNANCE: GovernanceModeItem[] = [
+  { id: 'G0', label: 'G0 — Без контроля' },
+  { id: 'G1', label: 'G1 — Аудитор (рекомендательный)' },
+  { id: 'G2', label: 'G2 — Аудитор (санкции по репутации)' },
+  { id: 'G3', label: 'G3 — Полный контроль (трибунал)' },
 ]
 
 export function ScenariosView({ onLaunch, onGoLive, user }: {
@@ -58,22 +74,37 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
   user: AuthUser | null
 }) {
   const [scenarios, setScenarios] = useState<Scenario[] | null>(null)
+  const [templateScenarios, setTemplateScenarios] = useState<TemplateScenario[] | null>(null)
+  const [governanceModes, setGovernanceModes] = useState<GovernanceModeItem[] | null>(null)
   const [editing, setEditing] = useState<Scenario | null>(null)
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
   const [simConfigText, setSimConfigText] = useState('')
   const [simConfigError, setSimConfigError] = useState<string | null>(null)
   const [simConfigLoading, setSimConfigLoading] = useState(false)
+  const [secondaryPrompt, setSecondaryPrompt] = useState('')
+  const [secondaryFamily, setSecondaryFamily] = useState('0')
+  const [secondarySociety, setSecondarySociety] = useState('0')
+  const [secondaryReplace, setSecondaryReplace] = useState(true)
+  const [secondaryLoading, setSecondaryLoading] = useState(false)
   const prevEditingRef = useRef<Scenario | null>(null)
 
   useEffect(() => {
     if (editing && prevEditingRef.current === null) {
       setSimConfigText(editing.sim_config ? JSON.stringify(editing.sim_config, null, 2) : '')
       setSimConfigError(null)
+      setSecondaryPrompt('')
+      setSecondaryFamily('0')
+      setSecondarySociety('0')
+      setSecondaryReplace(true)
     }
     if (!editing && prevEditingRef.current !== null) {
       setSimConfigText('')
       setSimConfigError(null)
+      setSecondaryPrompt('')
+      setSecondaryFamily('0')
+      setSecondarySociety('0')
+      setSecondaryReplace(true)
     }
     prevEditingRef.current = editing
   }, [editing])
@@ -83,6 +114,56 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
       .then((r) => r.ok ? r.json() : [])
       .then((data) => setScenarios(Array.isArray(data) ? data : []))
       .catch(() => setScenarios([]))
+  }, [])
+
+  useEffect(() => {
+    apiClient.get('/api/templates/scenarios')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setTemplateScenarios(
+            data
+              .map((x): TemplateScenario | null => {
+                if (!isRecord(x)) return null
+                const idRaw = x.id
+                const id = typeof idRaw === 'string' ? idRaw : String(idRaw ?? '')
+                if (!id) return null
+                const titleRaw = x.title
+                const title = typeof titleRaw === 'string' ? titleRaw : id
+                const description = typeof x.description === 'string' ? x.description : undefined
+                return description ? { id, title, description } : { id, title }
+              })
+              .filter((x): x is TemplateScenario => x !== null),
+          )
+          return
+        }
+        setTemplateScenarios([])
+      })
+      .catch(() => setTemplateScenarios([]))
+
+    apiClient.get('/api/templates/governance')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setGovernanceModes(
+            data
+              .map((x): GovernanceModeItem | null => {
+                if (!isRecord(x)) return null
+                const idRaw = x.id
+                const id = typeof idRaw === 'string' ? idRaw : String(idRaw ?? '')
+                if (!id) return null
+                const labelRaw = x.label
+                const label = typeof labelRaw === 'string' ? labelRaw : id
+                const description = typeof x.description === 'string' ? x.description : undefined
+                return description ? { id, label, description } : { id, label }
+              })
+              .filter((x): x is GovernanceModeItem => x !== null),
+          )
+          return
+        }
+        setGovernanceModes([])
+      })
+      .catch(() => setGovernanceModes([]))
   }, [])
 
   async function handleSave() {
@@ -231,8 +312,10 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                 value={editing.scenario}
                 onChange={(e) => setEditing({ ...editing, scenario: e.target.value })}
               >
-                {SCENARIO_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
+                {(templateScenarios ?? FALLBACK_SCENARIOS).map((o) => (
+                  <option key={o.id} value={o.id} title={o.description || ''}>
+                    {o.id} — {o.title}
+                  </option>
                 ))}
               </select>
             </div>
@@ -243,8 +326,8 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                 value={editing.governance}
                 onChange={(e) => setEditing({ ...editing, governance: e.target.value })}
               >
-                {GOVERNANCE_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
+                {(governanceModes ?? FALLBACK_GOVERNANCE).map((o) => (
+                  <option key={o.id} value={o.id} title={o.description || ''}>{o.label}</option>
                 ))}
               </select>
             </div>
@@ -347,6 +430,125 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                 <span className="badge danger small">JSON: {simConfigError}</span>
               </div>
             )}
+          </div>
+
+          <div className="form-field">
+            <div className="form-field-header">
+              <label>Вторичные агенты (LLM)</label>
+              <button
+                className="btn-clipped primary small"
+                onClick={async () => {
+                  const familyCount = Math.max(0, Number(secondaryFamily) || 0)
+                  const societyCount = Math.max(0, Number(secondarySociety) || 0)
+                  if ((familyCount + societyCount) <= 0) return
+                  if (!secondaryPrompt.trim()) {
+                    window.alert('Опишите среду/контекст в промпте (хотя бы 1–2 предложения).')
+                    return
+                  }
+
+                  let simConfig: Record<string, unknown> | null = null
+                  if (simConfigText.trim()) {
+                    try {
+                      const parsed = JSON.parse(simConfigText) as unknown
+                      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+                        setSimConfigError('Ожидается JSON-объект (ScenarioConfig)')
+                        return
+                      }
+                      simConfig = parsed as Record<string, unknown>
+                    } catch (e) {
+                      setSimConfigError(e instanceof Error ? e.message : 'Некорректный JSON')
+                      return
+                    }
+                  }
+
+                  setSecondaryLoading(true)
+                  try {
+                    const res = await apiClient.post('/api/ai/secondary-agents', {
+                      scenario: editing.scenario,
+                      governance: editing.governance,
+                      seed: editing.seed,
+                      rounds: editing.rounds,
+                      prompt: secondaryPrompt,
+                      family_count: familyCount,
+                      society_count: societyCount,
+                      replace_existing: secondaryReplace,
+                      sim_config: simConfig,
+                    })
+                    if (!res.ok) {
+                      const text = await res.text().catch(() => '')
+                      window.alert(text || 'Не удалось сгенерировать вторичных агентов')
+                      return
+                    }
+                    const cfg = await res.json().catch(() => null) as Record<string, unknown> | null
+                    if (!cfg || typeof cfg !== 'object') {
+                      window.alert('Сервер вернул некорректные данные')
+                      return
+                    }
+                    setSimConfigText(JSON.stringify(cfg, null, 2))
+                    setSimConfigError(null)
+                  } finally {
+                    setSecondaryLoading(false)
+                  }
+                }}
+                disabled={
+                  secondaryLoading
+                  || ((Number(secondaryFamily) || 0) + (Number(secondarySociety) || 0) <= 0)
+                  || !secondaryPrompt.trim()
+                }
+                title="Добавить fam_*/soc_* агентов в сим-конфиг (или создать конфиг из шаблона) через LLM"
+              >
+                {secondaryLoading ? '…' : '+ Сгенерировать'}
+              </button>
+            </div>
+            <div className="text-muted" style={{ fontSize: '0.7rem', marginTop: '0.25rem' }}>
+              Генератор добавляет вторичных агентов (fam_*/soc_*) и обновляет JSON ScenarioConfig.
+              Рекомендуется включать контекст среды: город/организация/давление/«нормы».
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+              <div className="form-field" style={{ margin: 0 }}>
+                <label>Семья (fam_*)</label>
+                <input
+                  className="hud-input"
+                  type="number"
+                  min={0}
+                  max={20}
+                  value={secondaryFamily}
+                  onChange={(e) => setSecondaryFamily(e.target.value)}
+                />
+              </div>
+              <div className="form-field" style={{ margin: 0 }}>
+                <label>Общество (soc_*)</label>
+                <input
+                  className="hud-input"
+                  type="number"
+                  min={0}
+                  max={20}
+                  value={secondarySociety}
+                  onChange={(e) => setSecondarySociety(e.target.value)}
+                />
+              </div>
+              <div className="form-field" style={{ margin: 0, alignSelf: 'end' }}>
+                <label style={{ opacity: 0 }}>replace</label>
+                <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.75rem', textTransform: 'none', letterSpacing: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={secondaryReplace}
+                    onChange={() => setSecondaryReplace((v) => !v)}
+                  />
+                  <span className="text-muted">Заменить существующих fam_/soc_</span>
+                </label>
+              </div>
+            </div>
+
+            <textarea
+              className="hud-input"
+              rows={4}
+              value={secondaryPrompt}
+              onChange={(e) => setSecondaryPrompt(e.target.value)}
+              placeholder="Контекст среды: организация, город, нормы, давление, риски, медиа/общественное мнение... (и любые пожелания к вторичным агентам)"
+              style={{ marginTop: '0.5rem' }}
+            />
           </div>
 
           <div className="form-field">

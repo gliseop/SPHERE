@@ -200,12 +200,28 @@ class ScenarioPayload(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=5_000)
-    scenario: str = Field(default="S1", pattern=r"^S\\d+$")
-    governance: str = Field(default="G1", pattern=r"^G\\d+$")
+    scenario: str = Field(default="S1", pattern=r"^S\d+$")
+    governance: str = Field(default="G1", pattern=r"^G\d+$")
     rounds: int = Field(default=10, ge=1, le=_MAX_ROUNDS)
     seed: int | None = Field(default=None, ge=0, le=_MAX_SEED)
     runner: str | None = Field(default=None, max_length=64)
     agents: list[ScenarioAgentPayload] = Field(default_factory=list, max_length=200)
+    sim_config: dict[str, Any] | None = None
+
+
+class SecondaryAgentsPayload(BaseModel):
+    """Запрос на генерацию/обновление вторичных агентов через LLM."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scenario: str = Field(default="S1", pattern=r"^S\d+$")
+    governance: str = Field(default="G1", pattern=r"^G\d+$")
+    seed: int | None = Field(default=None, ge=0, le=_MAX_SEED)
+    rounds: int | None = Field(default=None, ge=1, le=_MAX_ROUNDS)
+    prompt: str = Field(min_length=1, max_length=10_000)
+    family_count: int = Field(default=0, ge=0, le=20)
+    society_count: int = Field(default=0, ge=0, le=20)
+    replace_existing: bool = True
     sim_config: dict[str, Any] | None = None
 
 
@@ -781,6 +797,347 @@ async def list_governance_modes(_user: User = Depends(require_viewer)) -> list[d
     ]
 
 
+@app.post("/api/ai/secondary-agents")
+async def generate_secondary_agents(
+    payload: SecondaryAgentsPayload,
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Сгенерировать вторичных агентов (fam_*/soc_*) и вернуть обновлённый ScenarioConfig."""
+    from fastapi import HTTPException
+
+    if not _os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(status_code=409, detail="OPENAI_API_KEY is not set")
+
+    total = int(payload.family_count) + int(payload.society_count)
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Nothing to generate")
+
+    from magistry_sim.config import AgentProfile, Connection, ScenarioConfig
+    from magistry_sim.enums import GovernanceMode, ScenarioId
+    from magistry_sim.llm import create_provider
+    from magistry_sim.personality import NeutralizationTechnique
+    from magistry_sim.scenarios import add_governance_agents, get_scenario
+
+    try:
+        if payload.sim_config:
+            base_cfg = ScenarioConfig.model_validate(payload.sim_config)
+        else:
+            sid = ScenarioId(payload.scenario)
+            gov = GovernanceMode(payload.governance)
+            base_cfg = add_governance_agents(get_scenario(sid), gov)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid sim_config: {exc}") from exc
+
+    updates: dict[str, Any] = {}
+    if payload.rounds is not None:
+        updates["max_rounds"] = int(payload.rounds)
+    if payload.seed is not None:
+        updates["seed"] = int(payload.seed)
+    if updates:
+        base_cfg = base_cfg.model_copy(update=updates)
+
+    def _is_secondary(aid: str) -> bool:
+        return aid.startswith(("fam_", "soc_"))
+
+    if payload.replace_existing:
+        kept: list[AgentProfile] = []
+        for agent in base_cfg.agents:
+            if _is_secondary(agent.id):
+                continue
+            if agent.connections:
+                kept_conns = [
+                    c for c in agent.connections if not _is_secondary(c.target_id)
+                ]
+                agent = agent.model_copy(update={"connections": kept_conns})
+            kept.append(agent)
+        base_cfg = base_cfg.model_copy(update={"agents": kept})
+
+    existing_ids = {a.id for a in base_cfg.agents}
+
+    def _next_id(prefix: str) -> str:
+        n = 1
+        while True:
+            candidate = f"{prefix}_{n}"
+            if candidate not in existing_ids:
+                existing_ids.add(candidate)
+                return candidate
+            n += 1
+
+    requested_family = [_next_id("fam") for _ in range(int(payload.family_count))]
+    requested_society = [_next_id("soc") for _ in range(int(payload.society_count))]
+    requested_ids = requested_family + requested_society
+
+    primary_agents = [
+        {"id": a.id, "name": a.name, "position": a.position}
+        for a in base_cfg.agents
+        if a.id not in requested_ids
+    ]
+    primary_ids = [a["id"] for a in primary_agents]
+
+    techniques = [t.value for t in NeutralizationTechnique]
+
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "narrative_context": {"type": "string", "maxLength": 2000},
+            "agents": {
+                "type": "array",
+                "minItems": total,
+                "maxItems": total,
+                "items": {"$ref": "#/$defs/agent"},
+            },
+        },
+        "required": ["narrative_context", "agents"],
+        "$defs": {
+            "capability": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "action": {"type": "string", "maxLength": 64},
+                    "case_types": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 64},
+                    },
+                },
+                "required": ["action", "case_types"],
+            },
+            "connection": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "target_id": {"type": "string", "maxLength": 64},
+                    "name": {"type": "string", "maxLength": 128},
+                    "relation": {"type": "string", "maxLength": 128},
+                    "strength": {
+                        "type": "number",
+                        "minimum": 0.0,
+                        "maximum": 5.0,
+                    },
+                },
+                "required": ["target_id", "name", "relation", "strength"],
+            },
+            "hexaco": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "honesty_humility": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "emotionality": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "extraversion": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "agreeableness": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "conscientiousness": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "openness": {"type": "integer", "minimum": 0, "maximum": 100},
+                },
+                "required": [
+                    "honesty_humility",
+                    "emotionality",
+                    "extraversion",
+                    "agreeableness",
+                    "conscientiousness",
+                    "openness",
+                ],
+            },
+            "dark_triad": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "narcissism": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "machiavellianism": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "psychopathy": {"type": "integer", "minimum": 0, "maximum": 100},
+                },
+                "required": ["narcissism", "machiavellianism", "psychopathy"],
+            },
+            "personality": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "biography": {"type": "string", "maxLength": 800},
+                    "hexaco": {"$ref": "#/$defs/hexaco"},
+                    "dark_triad": {"$ref": "#/$defs/dark_triad"},
+                    "neutralization_techniques": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": techniques},
+                    },
+                },
+                "required": [
+                    "biography",
+                    "hexaco",
+                    "dark_triad",
+                    "neutralization_techniques",
+                ],
+            },
+            "resources": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "budget_limit": {"type": "number"},
+                    "staffing_slots": {"type": "integer"},
+                    "contract_capacity": {"type": "integer"},
+                },
+                "required": ["budget_limit", "staffing_slots", "contract_capacity"],
+            },
+            "agent": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string", "maxLength": 64},
+                    "name": {"type": "string", "maxLength": 128},
+                    "position": {"type": "string", "maxLength": 256},
+                    "capabilities": {
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/capability"},
+                    },
+                    "greed": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                    "fear": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                    "honesty": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                    "competence": {
+                        "anyOf": [
+                            {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                            {"type": "null"},
+                        ]
+                    },
+                    "immune": {"type": "boolean"},
+                    "connections": {
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/connection"},
+                    },
+                    "personality": {"$ref": "#/$defs/personality"},
+                    "initial_resources": {"$ref": "#/$defs/resources"},
+                },
+                "required": [
+                    "id",
+                    "name",
+                    "position",
+                    "capabilities",
+                    "greed",
+                    "fear",
+                    "honesty",
+                    "competence",
+                    "immune",
+                    "connections",
+                    "personality",
+                    "initial_resources",
+                ],
+            },
+        },
+    }
+
+    system = (
+        "Вы — генератор вторичных агент-профилей для симуляции MAGISTRY. "
+        "Верните ТОЛЬКО structured JSON по схеме."
+    )
+    user_prompt = (
+        f"Контекст организации:\n{base_cfg.narrative_context}\n\n"
+        f"Пожелания пользователя (среда/контекст):\n{payload.prompt}\n\n"
+        "Основные агенты (id, имя, должность):\n"
+        + "\n".join(
+            f"- {a['id']}: {a['name']} — {a['position']}" for a in primary_agents
+        )
+        + "\n\n"
+        f"Нужно добавить вторичных агентов. Новые id ДОЛЖНЫ быть строго такими:\n{', '.join(requested_ids)}\n\n"
+        "Правила:\n"
+        f"- connection.target_id только из: {', '.join(primary_ids)}\n"
+        "- capabilities оставьте пустым массивом []\n"
+        "- initial_resources заполните нулями\n"
+        "- у каждого агента минимум 1 connection к основному агенту\n"
+        "- biography 2–5 предложений, отражает мотивацию/давление среды\n"
+    )
+
+    provider = create_provider(mock=False, cache_path=".llm_cache.db")
+    try:
+        resp = provider.generate_structured(
+            system=system,
+            user=user_prompt,
+            schema=schema,
+            temperature=0.25,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
+
+    data = resp.data if isinstance(resp.data, dict) else {}
+    narrative_context = str(data.get("narrative_context", "") or "").strip()
+    if not narrative_context:
+        narrative_context = base_cfg.narrative_context
+
+    raw_agents = data.get("agents", [])
+    if not isinstance(raw_agents, list):
+        raise HTTPException(status_code=502, detail="LLM returned invalid agents")
+
+    returned_ids = []
+    validated: list[AgentProfile] = []
+    for item in raw_agents:
+        if not isinstance(item, dict):
+            continue
+        aid = str(item.get("id", "") or "")
+        returned_ids.append(aid)
+        if aid not in requested_ids:
+            continue
+        if aid in {a.id for a in base_cfg.agents}:
+            continue
+        # Ensure no connections to unknown ids (keeps UI deterministic).
+        conns = item.get("connections", [])
+        if isinstance(conns, list):
+            item["connections"] = [
+                c
+                for c in conns
+                if isinstance(c, dict)
+                and str(c.get("target_id", "") or "") in primary_ids
+            ]
+        try:
+            validated.append(AgentProfile.model_validate(item))
+        except Exception:
+            continue
+
+    if set(requested_ids) != {a.id for a in validated}:
+        missing = sorted(set(requested_ids) - {a.id for a in validated})
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM did not return all requested agents: {', '.join(missing)}",
+        )
+
+    by_id: dict[str, AgentProfile] = {a.id: a for a in base_cfg.agents}
+
+    def _add_backlink(target_id: str, source: AgentProfile, conn: Connection) -> None:
+        target = by_id.get(target_id)
+        if target is None:
+            return
+        if any(c.target_id == source.id for c in target.connections):
+            return
+        backlink = Connection(
+            target_id=source.id,
+            name=source.name,
+            relation=conn.relation,
+            strength=conn.strength,
+        )
+        by_id[target_id] = target.model_copy(
+            update={"connections": list(target.connections) + [backlink]}
+        )
+
+    for agent in validated:
+        by_id[agent.id] = agent
+        for conn in agent.connections:
+            _add_backlink(conn.target_id, agent, conn)
+
+    final_agents: list[AgentProfile] = []
+    seen: set[str] = set()
+    for a in base_cfg.agents:
+        updated = by_id.get(a.id)
+        if updated and updated.id not in seen:
+            final_agents.append(updated)
+            seen.add(updated.id)
+    for a in validated:
+        if a.id not in seen:
+            final_agents.append(by_id[a.id])
+            seen.add(a.id)
+
+    base_cfg = base_cfg.model_copy(
+        update={"agents": final_agents, "narrative_context": narrative_context}
+    )
+    return base_cfg.model_dump(mode="json")
+
+
 @app.get("/api/scenarios")
 async def list_scenarios(_user: User = Depends(require_viewer)) -> list[dict]:
     """Вернуть список сценариев.
@@ -1002,7 +1359,7 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
     try:
         governance = scenario.get("governance", "G1")
         seed = _resolve_seed(scenario.get("seed"))
-        runner_type = scenario.get("runner", "mock")
+        runner_type = "cognitive"
         rounds = _resolve_rounds(scenario.get("rounds"), default=10)
         sim_config = scenario.get("sim_config")
         if isinstance(sim_config, dict):
@@ -1049,7 +1406,7 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
     scenario = data.get("scenario", "S1")
     governance = data.get("governance", "G1")
     seed = _resolve_seed(data.get("seed"))
-    runner_type = data.get("runner", "mock")
+    runner_type = "cognitive"
     rounds = _resolve_rounds(data.get("rounds"), default=10)
     try:
         result = launch_simulation(

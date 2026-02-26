@@ -1,5 +1,6 @@
 """Тесты CLI."""
 
+import os
 import subprocess
 import sys
 
@@ -17,66 +18,24 @@ class TestCLI:
         assert "S0" in result.stdout
         assert "S1" in result.stdout
 
-    def test_run_s0_g0_mock(self):
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "magistry_sim.cli",
-                "--scenario", "S0",
-                "--governance", "G0",
-                "--mock",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "Результаты" in result.stdout
-
-    def test_run_s1_g3_mock(self):
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "magistry_sim.cli",
-                "--scenario", "S1",
-                "--governance", "G3",
-                "--mock",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-
-    def test_run_s0_runner_mock(self):
-        result = subprocess.run(
-            [
-                sys.executable, "-m", "magistry_sim.cli",
-                "--scenario", "S0",
-                "--governance", "G0",
-                "--runner", "mock",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0
-        assert "Результаты" in result.stdout
-
-    @pytest.mark.skip(
-        reason="CognitiveAgentRunner с MockLLMProvider зависает в подпроцессе"
-    )
-    def test_run_s0_runner_cognitive_mock(self):
-        """cognitive runner с mock-провайдерами (без API-ключей)."""
+    def test_run_requires_api_key(self):
+        env = dict(os.environ)
+        env["OPENAI_API_KEY"] = ""
         result = subprocess.run(
             [
                 sys.executable, "-m", "magistry_sim.cli",
                 "--scenario", "S0",
                 "--governance", "G0",
                 "--runner", "cognitive",
-                "--rounds", "2",
+                "--rounds", "1",
             ],
             capture_output=True,
             text=True,
-            timeout=110,
+            env=env,
         )
-        assert result.returncode == 0
-        assert "Результаты" in result.stdout
+        assert result.returncode != 0
+        out = (result.stdout or "") + "\n" + (result.stderr or "")
+        assert "OPENAI_API_KEY is not set" in out
 
     def test_unknown_scenario(self):
         result = subprocess.run(

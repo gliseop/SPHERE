@@ -7,7 +7,7 @@
   "governance": "G0",
   "rounds": 15,
   "seed": 1,
-  "runner": "mock",
+  "runner": "cognitive",
   "agents": [
     {
       "id": "off_1",

@@ -1,0 +1,11 @@
+{
+  "id": "official_procurement",
+  "name": "Чиновник (закупки)",
+  "description": "Открывает дела по закупкам и принимает решения по конкурсам.",
+  "id_prefix": "off",
+  "capabilities": [
+    { "action": "open_case", "case_types": ["procurement", "budget", "training", "hiring"] },
+    { "action": "resolve_case", "case_types": ["procurement", "budget", "training", "hiring"] }
+  ],
+  "resources": { "budget_limit": 1500000, "staffing_slots": 3, "contract_capacity": 6 }
+}

@@ -620,6 +620,11 @@ button:disabled { cursor: not-allowed !important; }
   justify-content: space-between;
 }
 
+/* Right panel collapse button overlaps header otherwise */
+.panel-right .activity-feed-header {
+  padding-left: 3rem;
+}
+
 .activity-feed-scroll {
   flex: 1;
   overflow-y: auto;

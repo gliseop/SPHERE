@@ -10,7 +10,6 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
-from .agents import MockAgentRunner
 from .enums import GovernanceMode, ScenarioId
 from .environment import Environment
 from .metrics import compute_metrics
@@ -128,27 +127,24 @@ def _create_runner(
 ) -> object:
     """Создать runner указанного типа.
 
-    Для runner-ов, требующих API-ключей (llm, crewai), загружает
-    переменные окружения через dotenv. Для cognitive при отсутствии
-    API-ключей использует mock-провайдеры.
+    Для runner-ов, требующих API-ключей (llm, crewai, cognitive),
+    загружает переменные окружения через dotenv.
 
     Args:
-        runner_type: Тип runner-а (mock, llm, crewai, cognitive).
+        runner_type: Тип runner-а (llm, crewai, cognitive).
         interview_path: Путь к библиотеке интервью (JSONL).
 
     Returns:
         Экземпляр runner-а.
     """
-    if runner_type == "mock":
-        console.print(
-            "[yellow][ТЕСТ] mock-runner: скриптованные действия, "
-            "поведение агентов не отражает реальную работу LLM.[/yellow]"
-        )
-        return MockAgentRunner()
-
     if runner_type in ("llm", "crewai"):
+        import os
+
         from dotenv import load_dotenv
         load_dotenv()
+
+        if not os.getenv("OPENAI_API_KEY"):
+            raise RuntimeError("OPENAI_API_KEY is not set")
 
         if runner_type == "crewai":
             from .agents import CrewAIAgentRunner
@@ -167,27 +163,16 @@ def _create_runner(
         load_dotenv()
 
         from .cognitive_runner import CognitiveAgentRunner
-        from .llm import (
-            MockEmbeddingProvider,
-            MockLLMProvider,
-            create_embedding_provider,
-            create_provider,
-        )
+        from .llm import create_embedding_provider, create_provider
 
-        has_api_key = bool(os.getenv("OPENAI_API_KEY"))
-        if has_api_key:
-            llm = create_provider(mock=False)
-            embed_mode = os.getenv("EMBEDDING_PROVIDER", "mock").lower()
-            if embed_mode == "local":
-                embedder = create_embedding_provider(mock=False)
-            elif embed_mode == "openai":
-                from .llm import OpenAIEmbeddingProvider
-                embedder = OpenAIEmbeddingProvider()
-            else:
-                embedder = MockEmbeddingProvider(dimensions=384)
-        else:
-            llm = MockLLMProvider()
-            embedder = MockEmbeddingProvider(dimensions=384)
+        if not os.getenv("OPENAI_API_KEY"):
+            raise RuntimeError("OPENAI_API_KEY is not set")
+
+        llm = create_provider(mock=False)
+        embed_mode = os.getenv("EMBEDDING_PROVIDER", "openai").lower()
+        if embed_mode not in ("local", "openai"):
+            embed_mode = "openai"
+        embedder = create_embedding_provider(mock=False, provider=embed_mode)
 
         lib_path = Path(interview_path) if interview_path else None
 
@@ -198,7 +183,7 @@ def _create_runner(
             interview_library_path=lib_path,
         )
 
-    return MockAgentRunner()
+    raise RuntimeError(f"Unknown runner type: {runner_type}")
 
 
 def _run_batch(args, scenario) -> None:
@@ -285,21 +270,9 @@ def main() -> None:
     parser.add_argument(
         "--runner",
         type=str,
-        default=None,
-        choices=["mock", "llm", "crewai", "cognitive"],
-        help="Тип runner-а: mock, llm, crewai, cognitive",
-    )
-    parser.add_argument(
-        "--mock",
-        action="store_true",
-        default=True,
-        help="Использовать mock-runner (устаревший, используйте --runner mock)",
-    )
-    parser.add_argument(
-        "--no-mock",
-        action="store_true",
-        default=False,
-        help="Использовать CrewAI-runner (устаревший, используйте --runner crewai)",
+        default="cognitive",
+        choices=["llm", "crewai", "cognitive"],
+        help="Тип runner-а: llm, crewai, cognitive",
     )
     parser.add_argument(
         "--list-scenarios",
@@ -399,11 +372,12 @@ def main() -> None:
             )
             sys.exit(1)
 
-    runner_type = args.runner
-    if runner_type is None:
-        runner_type = "crewai" if args.no_mock else "mock"
-
-    runner = _create_runner(runner_type, interview_path=args.interviews)
+    runner_type = args.runner or "cognitive"
+    try:
+        runner = _create_runner(runner_type, interview_path=args.interviews)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
 
     env = Environment(
         scenario=scenario,

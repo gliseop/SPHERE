@@ -1,0 +1,10 @@
+{
+  "id": "juror",
+  "name": "Присяжный",
+  "description": "Участвует в трибунале и голосует по делу.",
+  "id_prefix": "juror",
+  "capabilities": [
+    { "action": "vote", "case_types": [] }
+  ],
+  "resources": { "budget_limit": 0, "staffing_slots": 0, "contract_capacity": 0 }
+}

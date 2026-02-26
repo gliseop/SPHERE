@@ -29,24 +29,40 @@ interface Props {
   activeRuns: ActiveRun[]
 }
 
-const SCENARIO_OPTIONS = [
-  { value: 'S0', label: 'S0 — Чистая сделка' },
-  { value: 'S1', label: 'S1 — Прямой сговор' },
-  { value: 'S2', label: 'S2 — Кумовство при найме' },
+interface TemplateScenario {
+  id: string
+  title: string
+  description?: string
+}
+
+interface GovernanceModeItem {
+  id: string
+  label: string
+  description?: string
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+const FALLBACK_SCENARIOS: TemplateScenario[] = [
+  { id: 'S0', title: 'Чистая сделка' },
+  { id: 'S1', title: 'Прямой сговор' },
+  { id: 'S2', title: 'Кумовство при найме' },
 ]
 
-const GOVERNANCE_OPTIONS = [
-  { value: 'G0', label: 'G0 — Без контроля' },
-  { value: 'G1', label: 'G1 — Аудитор (рекомендательный)' },
-  { value: 'G2', label: 'G2 — Аудитор (санкции по репутации)' },
-  { value: 'G3', label: 'G3 — Полный контроль (трибунал)' },
+const FALLBACK_GOVERNANCE: GovernanceModeItem[] = [
+  { id: 'G0', label: 'G0 — Без контроля' },
+  { id: 'G1', label: 'G1 — Аудитор (рекомендательный)' },
+  { id: 'G2', label: 'G2 — Аудитор (санкции по репутации)' },
+  { id: 'G3', label: 'G3 — Полный контроль (трибунал)' },
 ]
-
-type FilterKey = 'all' | 'S0' | 'S1' | 'S2'
 
 export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: Props) {
   const [runs, setRuns] = useState<RunInfo[] | null>(null)
-  const [filter, setFilter] = useState<FilterKey>('all')
+  const [filter, setFilter] = useState<string>('all')
+  const [templateScenarios, setTemplateScenarios] = useState<TemplateScenario[] | null>(null)
+  const [governanceModes, setGovernanceModes] = useState<GovernanceModeItem[] | null>(null)
 
   // Launch form state
   const [launchSource, setLaunchSource] = useState<'template' | 'saved'>('template')
@@ -74,6 +90,56 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
   }, [refreshRuns])
 
   useEffect(() => {
+    apiClient.get('/api/templates/scenarios')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setTemplateScenarios(
+            data
+              .map((x): TemplateScenario | null => {
+                if (!isRecord(x)) return null
+                const idRaw = x.id
+                const id = typeof idRaw === 'string' ? idRaw : String(idRaw ?? '')
+                if (!id) return null
+                const titleRaw = x.title
+                const title = typeof titleRaw === 'string' ? titleRaw : id
+                const description = typeof x.description === 'string' ? x.description : undefined
+                return description ? { id, title, description } : { id, title }
+              })
+              .filter((x): x is TemplateScenario => x !== null),
+          )
+          return
+        }
+        setTemplateScenarios([])
+      })
+      .catch(() => setTemplateScenarios([]))
+
+    apiClient.get('/api/templates/governance')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setGovernanceModes(
+            data
+              .map((x): GovernanceModeItem | null => {
+                if (!isRecord(x)) return null
+                const idRaw = x.id
+                const id = typeof idRaw === 'string' ? idRaw : String(idRaw ?? '')
+                if (!id) return null
+                const labelRaw = x.label
+                const label = typeof labelRaw === 'string' ? labelRaw : id
+                const description = typeof x.description === 'string' ? x.description : undefined
+                return description ? { id, label, description } : { id, label }
+              })
+              .filter((x): x is GovernanceModeItem => x !== null),
+          )
+          return
+        }
+        setGovernanceModes([])
+      })
+      .catch(() => setGovernanceModes([]))
+  }, [])
+
+  useEffect(() => {
     if (user?.role !== 'admin') return
     apiClient.get('/api/scenarios')
       .then((r) => r.ok ? r.json() : [])
@@ -88,6 +154,9 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
   const filtered = filter === 'all'
     ? runList
     : runList.filter((r) => r.scenario === filter)
+  const scenarioOptions = templateScenarios ?? FALLBACK_SCENARIOS
+  const governanceOptions = governanceModes ?? FALLBACK_GOVERNANCE
+  const scenarioChips = ['all', ...scenarioOptions.map((s) => s.id)]
 
   async function handleLaunch() {
     setLaunching(true)
@@ -153,7 +222,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
       <div className="runs-header">
         <span>Прогоны ({runs === null ? '…' : runList.length})</span>
         <div className="runs-filter">
-          {(['all', 'S0', 'S1', 'S2'] as FilterKey[]).map((key) => (
+          {scenarioChips.map((key) => (
             <button
               key={key}
               className={`runs-filter-chip${filter === key ? ' active' : ''}`}
@@ -188,16 +257,18 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                 <div className="form-field">
                   <label>Сценарий</label>
                   <select className="hud-input" value={launchScenario} onChange={(e) => setLaunchScenario(e.target.value)}>
-                    {SCENARIO_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
+                    {scenarioOptions.map((o) => (
+                      <option key={o.id} value={o.id} title={o.description || ''}>
+                        {o.id} — {o.title}
+                      </option>
                     ))}
                   </select>
                 </div>
                 <div className="form-field">
                   <label>Управление</label>
                   <select className="hud-input" value={launchGovernance} onChange={(e) => setLaunchGovernance(e.target.value)}>
-                    {GOVERNANCE_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
+                    {governanceOptions.map((o) => (
+                      <option key={o.id} value={o.id} title={o.description || ''}>{o.label}</option>
                     ))}
                   </select>
                 </div>

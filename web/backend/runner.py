@@ -82,7 +82,7 @@ def launch_simulation_from_config(
     scenario_config: dict,
     governance: str,
     seed: int = 42,
-    runner_type: str = "mock",
+    runner_type: str = "cognitive",
     rounds: int = 10,
     variant: str | None = None,
 ) -> dict:
@@ -92,6 +92,11 @@ def launch_simulation_from_config(
         ch if ch.isalnum() or ch in ("_", "-") else "-"
         for ch in (variant or "custom")
     )
+    if runner_type == "mock":
+        raise RuntimeError("mock runner is not supported; use cognitive")
+    if runner_type in ("cognitive", "llm", "crewai") and not os.environ.get("OPENAI_API_KEY"):
+        raise RuntimeError("OPENAI_API_KEY is not set; LLM runner requires it")
+
     run_name = f"{scenario_id}_{governance}_seed{seed}_{safe_variant}_{runner_type}"
 
     with _active_lock:
@@ -174,7 +179,7 @@ def launch_simulation(
     scenario: str,
     governance: str,
     seed: int = 42,
-    runner_type: str = "mock",
+    runner_type: str = "cognitive",
     rounds: int = 10,
 ) -> dict:
     """Запустить симуляцию как subprocess.
@@ -192,6 +197,11 @@ def launch_simulation(
     Raises:
         RuntimeError: Если прогон с таким именем уже запущен.
     """
+    if runner_type == "mock":
+        raise RuntimeError("mock runner is not supported; use cognitive")
+    if runner_type in ("cognitive", "llm", "crewai") and not os.environ.get("OPENAI_API_KEY"):
+        raise RuntimeError("OPENAI_API_KEY is not set; LLM runner requires it")
+
     run_name = f"{scenario}_{governance}_seed{seed}_{runner_type}"
 
     with _active_lock:

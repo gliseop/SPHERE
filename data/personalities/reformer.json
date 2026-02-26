@@ -1,0 +1,20 @@
+{
+  "id": "reformer",
+  "name": "Идеалист-реформатор",
+  "description": "Высокая честность и дисциплина; пытается «починить систему» изнутри.",
+  "biography": "Вы пришли в госслужбу с мотивацией улучшать процессы и снижать потери. Дорожите профессиональной репутацией, избегаете серых схем и требуете прозрачности. В переговорах вежливы, но принципиальны.",
+  "hexaco": {
+    "honesty_humility": 88,
+    "emotionality": 55,
+    "extraversion": 48,
+    "agreeableness": 72,
+    "conscientiousness": 86,
+    "openness": 78
+  },
+  "dark_triad": {
+    "narcissism": 18,
+    "machiavellianism": 12,
+    "psychopathy": 8
+  },
+  "neutralization_techniques": []
+}
