@@ -321,6 +321,25 @@ def main() -> None:
         default=None,
         help="Директория для результатов пакетного запуска",
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="sync",
+        choices=["sync", "async"],
+        help="Режим симуляции: sync (раундовый) или async (непрерывное время)",
+    )
+    parser.add_argument(
+        "--start-time",
+        type=str,
+        default=None,
+        help="Время начала симуляции (ISO 8601), для async-режима",
+    )
+    parser.add_argument(
+        "--end-time",
+        type=str,
+        default=None,
+        help="Время окончания симуляции (ISO 8601), для async-режима",
+    )
 
     args = parser.parse_args()
 
@@ -379,6 +398,14 @@ def main() -> None:
         console.print(f"[red]{exc}[/red]")
         sys.exit(1)
 
+    if args.mode == "async":
+        _run_async(args, scenario, runner)
+    else:
+        _run_sync(args, scenario, runner, governance)
+
+
+def _run_sync(args, scenario, runner, governance) -> None:
+    """Запуск синхронной (раундовой) симуляции."""
     env = Environment(
         scenario=scenario,
         governance=governance,
@@ -387,7 +414,7 @@ def main() -> None:
     )
 
     console.print(
-        f"[bold]Запуск: {scenario.title} "
+        f"[bold]Запуск (sync): {scenario.title} "
         f"({governance or scenario.governance.mode})[/bold]"
     )
 
@@ -421,6 +448,125 @@ def main() -> None:
                 asdict(metrics), f, ensure_ascii=False, indent=2
             )
         console.print(f"Метрики сохранены: {args.summary_json}")
+
+
+def _run_async(args, scenario, runner) -> None:
+    """Запуск асинхронной (непрерывное время) симуляции."""
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    from .async_environment import AsyncEnvironment
+    from .narrator import WorldNarrator
+    from .world_generator import WorldGenerator
+
+    # Переопределение временных границ из CLI
+    if args.start_time:
+        try:
+            scenario = scenario.model_copy(
+                update={"start_time": datetime.fromisoformat(args.start_time)}
+            )
+        except ValueError:
+            console.print(f"[red]Неверный формат --start-time: {args.start_time}[/red]")
+            sys.exit(1)
+
+    if args.end_time:
+        try:
+            scenario = scenario.model_copy(
+                update={"end_time": datetime.fromisoformat(args.end_time)}
+            )
+        except ValueError:
+            console.print(f"[red]Неверный формат --end-time: {args.end_time}[/red]")
+            sys.exit(1)
+
+    if args.seed is not None:
+        scenario = scenario.model_copy(update={"seed": args.seed})
+
+    # Создание LLM-провайдера для нарратора и мирового генератора
+    llm = None
+    try:
+        from .llm import create_provider
+        llm = create_provider(mock=False)
+    except Exception:
+        pass
+
+    narrator = WorldNarrator() if llm is not None else None
+    world_gen = WorldGenerator(llm=llm) if llm is not None else None
+
+    env = AsyncEnvironment(
+        config=scenario,
+        runner=runner,
+        llm=llm or runner._llm if hasattr(runner, "_llm") else None,
+        narrator=narrator,
+        world_generator=world_gen,
+    )
+
+    console.print(
+        f"[bold]Запуск (async): {scenario.title}[/bold]"
+    )
+
+    stream_path: Path | None = None
+    if args.jsonl:
+        stream_path = Path(args.jsonl)
+        stream_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            stream_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        env.state.event_log.set_stream_path(stream_path)
+
+    try:
+        result = asyncio.run(env.run())
+    finally:
+        if stream_path is not None:
+            env.state.event_log.close_stream()
+
+    console.print()
+    console.rule("[bold]Результаты асинхронной симуляции[/bold]")
+
+    info_table = Table(show_header=False)
+    info_table.add_column("Параметр", style="bold")
+    info_table.add_column("Значение")
+    info_table.add_row("Сценарий", result.scenario_id)
+    info_table.add_row("Зерно", str(result.seed))
+    info_table.add_row("Начало", result.started_at)
+    info_table.add_row("Конец", result.ended_at)
+    info_table.add_row("Событий", str(result.events_count))
+    info_table.add_row("Дел", str(len(result.cases)))
+    console.print(info_table)
+
+    if result.final_reputation:
+        rep_table = Table(title="Итоговая репутация")
+        rep_table.add_column("Агент")
+        rep_table.add_column("Оценка", justify="right")
+        rep_table.add_column("Заморожен")
+        for aid, rep in result.final_reputation.items():
+            rep_table.add_row(
+                aid,
+                f"{rep['score']:.1f}",
+                "да" if rep["frozen"] else "нет",
+            )
+        console.print(rep_table)
+
+    if args.jsonl:
+        console.print(f"Журнал сохранён: {args.jsonl}")
+
+    if args.summary_json:
+        from dataclasses import asdict
+
+        summary_data = {
+            "scenario_id": result.scenario_id,
+            "seed": result.seed,
+            "started_at": result.started_at,
+            "ended_at": result.ended_at,
+            "events_count": result.events_count,
+            "cases": result.cases,
+            "final_reputation": result.final_reputation,
+            "round_summaries": result.round_summaries,
+            "agents": result.agents,
+        }
+        with open(args.summary_json, "w", encoding="utf-8") as f:
+            json.dump(summary_data, f, ensure_ascii=False, indent=2)
+        console.print(f"Результат сохранён: {args.summary_json}")
 
 
 if __name__ == "__main__":

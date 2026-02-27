@@ -403,6 +403,10 @@ class CognitiveAgentRunner:
                 neutralization_techniques=techniques or None,
             )
 
+        # Суммаризация старых воспоминаний при накоплении
+        if len(stream) > 100:
+            stream.summarize_old(self._llm)
+
         # Фаза 2: планирование
         if plan.needs_strategic_update(current_round):
             role = profile.position if profile else "участник"

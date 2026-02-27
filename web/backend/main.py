@@ -473,15 +473,21 @@ def _truncate_json_value(value: Any, *, max_chars: int) -> tuple[Any, bool]:
     return value, False
 
 
-def _event_for_ws(event: dict[str, Any]) -> dict[str, Any]:
+def _event_for_ws(
+    event: dict[str, Any],
+    names: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Shrink large text fields for WS transport (helps reverse-proxies).
 
     Для событий ``llm_call`` промпты заменяются на метаданные (длина строк),
     полные тексты доступны через REST ``GET /api/run/{name}/prompts``.
+
+    Если передан словарь names, добавляет agent_name и to_name
+    для удобства отображения на фронтенде.
     """
     if event.get("event_type") == "llm_call":
         payload = event.get("payload", {})
-        return {
+        out: dict[str, Any] = {
             **{k: v for k, v in event.items() if k != "payload"},
             "payload": {
                 "call_type": payload.get("call_type", ""),
@@ -490,14 +496,34 @@ def _event_for_ws(event: dict[str, Any]) -> dict[str, Any]:
                 "response_len": len(payload.get("response", "")),
             },
         }
+        if names:
+            aid = event.get("agent_id", "")
+            if aid and aid in names:
+                out["agent_name"] = names[aid]
+        return out
+
+    result = dict(event)
+
+    # Обогащение именами агентов
+    if names:
+        aid = result.get("agent_id", "")
+        if aid and aid in names:
+            result["agent_name"] = names[aid]
+        payload = result.get("payload")
+        if isinstance(payload, dict):
+            to_id = payload.get("to_id", "")
+            if to_id and to_id in names:
+                result.setdefault("payload", {})
+                result["payload"] = {**payload, "to_name": names[to_id]}
+
     if _WS_MAX_STR_CHARS <= 0:
-        return event
-    trimmed, truncated = _truncate_json_value(event, max_chars=_WS_MAX_STR_CHARS)
+        return result
+    trimmed, truncated = _truncate_json_value(result, max_chars=_WS_MAX_STR_CHARS)
     if isinstance(trimmed, dict):
         if truncated:
             trimmed["_truncated"] = True
         return trimmed
-    return event
+    return result
 
 
 async def _bootstrap_graph_from_file(
@@ -874,7 +900,7 @@ async def ws_playback(
     try:
         async for event in _stream_events_from_file(path, speed=speed):
             builder.ingest(event)
-            await websocket.send_json({"type": "event", "data": _event_for_ws(event)})
+            await websocket.send_json({"type": "event", "data": _event_for_ws(event, names)})
             graph_dirty = True
             now = time.monotonic()
             if now - last_graph_send >= _LIVE_GRAPH_THROTTLE_S:
@@ -1011,7 +1037,7 @@ async def ws_live(
                 last_graph_send = last_send
                 for ev in tail_events:
                     await websocket.send_json(
-                        {"type": "event", "data": _event_for_ws(ev)}
+                        {"type": "event", "data": _event_for_ws(ev, names)}
                     )
                     last_send = time.monotonic()
                 bootstrapped = True
@@ -1042,7 +1068,7 @@ async def ws_live(
                                     continue
                                 builder.ingest(event)
                                 await websocket.send_json(
-                                    {"type": "event", "data": _event_for_ws(event)}
+                                    {"type": "event", "data": _event_for_ws(event, names)}
                                 )
                                 last_send = time.monotonic()
                                 graph_dirty = True

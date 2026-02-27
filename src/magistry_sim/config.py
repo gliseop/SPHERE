@@ -73,6 +73,17 @@ class Need(BaseModel):
     urgency: str = "средняя"
 
 
+class WorkScheduleConfig(BaseModel):
+    """Конфигурация рабочего расписания."""
+
+    model_config = {"extra": "ignore"}
+
+    work_start_hour: int = Field(default=9, ge=0, le=23)
+    work_end_hour: int = Field(default=18, ge=0, le=23)
+    work_days: list[int] = Field(default_factory=lambda: [0, 1, 2, 3, 4])
+    holidays: list[str] = Field(default_factory=list)
+
+
 class GovernanceConfig(BaseModel):
     """Параметры режима управления."""
 
@@ -103,5 +114,6 @@ class ScenarioConfig(BaseModel):
     agents: list[AgentProfile] = Field(default_factory=list)
     needs: list[Need] = Field(default_factory=list)
     governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
+    schedule: WorkScheduleConfig = Field(default_factory=WorkScheduleConfig)
     corruption_level: float = Field(default=0.0, ge=0.0, le=1.0)
     narrative_context: str = ""

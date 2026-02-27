@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import math
 import uuid
-from typing import Literal
+from typing import Literal, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from .bm25 import BM25Like, build_bm25
 
+if TYPE_CHECKING:
+    from .llm import LLMProvider
 
-MemoryKind = Literal["observation", "reflection", "plan"]
+
+MemoryKind = Literal["observation", "reflection", "plan", "summary"]
 
 # Коэффициенты гибридной формулы (расширение Park et al., 2023)
 RECENCY_WEIGHT = 0.5
@@ -76,12 +79,14 @@ class MemoryStream:
         importance_since_reflection: Накопленная важность с последней рефлексии.
     """
 
-    def __init__(self, agent_id: str) -> None:
+    def __init__(self, agent_id: str, *, max_records: int = 500) -> None:
         self.agent_id = agent_id
         self.records: list[MemoryRecord] = []
         self.importance_since_reflection: float = 0.0
+        self.max_records = max_records
         self._bm25_corpus: list[list[str]] = []
         self._bm25: BM25Like | None = None
+        self._bm25_dirty: bool = False
 
     def __len__(self) -> int:
         return len(self.records)
@@ -120,9 +125,10 @@ class MemoryStream:
         self.records.append(record)
         tokens = content.lower().split()
         self._bm25_corpus.append(tokens)
-        self._bm25 = build_bm25(self._bm25_corpus)
+        self._bm25_dirty = True
         if kind == "observation":
             self.importance_since_reflection += importance
+        self._enforce_cap()
         return record
 
     def get_recent(self, n: int = 20) -> list[MemoryRecord]:
@@ -158,6 +164,12 @@ class MemoryStream:
         """
         return [r for r in self.records if r.created_at == round_num]
 
+    def _rebuild_bm25_if_dirty(self) -> None:
+        """Перестроить BM25-индекс при наличии грязного флага."""
+        if self._bm25_dirty and self._bm25_corpus:
+            self._bm25 = build_bm25(self._bm25_corpus)
+            self._bm25_dirty = False
+
     def bm25_scores(self, query: str) -> list[float]:
         """Вычисляет BM25-скоры для всех записей по запросу.
 
@@ -167,6 +179,7 @@ class MemoryStream:
         Returns:
             Список скоров, соответствующих порядку self.records.
         """
+        self._rebuild_bm25_if_dirty()
         if self._bm25 is None or not self._bm25_corpus:
             return []
         tokens = query.lower().split()
@@ -193,6 +206,8 @@ class MemoryStream:
         Returns:
             Список записей, отсортированных по убыванию оценки.
         """
+        self._rebuild_bm25_if_dirty()
+
         candidates = [r for r in self.records if r.embedding]
         if not candidates:
             return []
@@ -240,3 +255,106 @@ class MemoryStream:
     def reset_importance_accumulator(self) -> None:
         """Сбрасывает счётчик важности после рефлексии."""
         self.importance_since_reflection = 0.0
+
+    def _enforce_cap(self) -> None:
+        """Вытеснить самые старые observation-записи при превышении лимита.
+
+        Удаляет по одной observation-записи (самая старая), пока количество
+        записей не станет <= max_records.
+        """
+        while len(self.records) > self.max_records:
+            idx_to_remove: int | None = None
+            for i, rec in enumerate(self.records):
+                if rec.kind == "observation":
+                    idx_to_remove = i
+                    break
+            if idx_to_remove is None:
+                # Нет observation — удаляем самую старую запись любого типа.
+                idx_to_remove = 0
+            self.records.pop(idx_to_remove)
+            self._bm25_corpus.pop(idx_to_remove)
+            self._bm25_dirty = True
+
+    def summarize_old(
+        self,
+        llm: "LLMProvider",
+        *,
+        threshold: int = 100,
+        batch_size: int = 50,
+    ) -> int:
+        """Суммаризировать старые записи через LLM.
+
+        Если количество записей превышает threshold, берёт batch_size
+        самых старых observation-записей, сжимает их в 3-5 ключевых
+        фактов через LLM и заменяет оригиналы summary-записями.
+
+        Args:
+            llm: Провайдер языковой модели.
+            threshold: Минимальное количество записей для запуска суммаризации.
+            batch_size: Количество старых записей для сжатия за один вызов.
+
+        Returns:
+            Количество удалённых записей (0 если суммаризация не нужна).
+        """
+        if len(self.records) < threshold:
+            return 0
+
+        # Собираем самые старые observation-записи
+        obs_indices: list[int] = []
+        for i, rec in enumerate(self.records):
+            if rec.kind == "observation":
+                obs_indices.append(i)
+                if len(obs_indices) >= batch_size:
+                    break
+
+        if len(obs_indices) < 5:
+            return 0
+
+        # Формируем текст для суммаризации
+        texts = [self.records[i].content for i in obs_indices]
+        combined = "\n".join(f"- {t}" for t in texts)
+
+        prompt = (
+            f"Сожми следующие {len(texts)} воспоминаний в 3-5 ключевых фактов. "
+            f"Каждый факт — одно предложение. Верни только список фактов, "
+            f"каждый факт на отдельной строке.\n\n{combined}"
+        )
+
+        try:
+            response = llm.generate(system="", user=prompt)
+            summary_text = response.text.strip()
+        except Exception:
+            return 0
+
+        if not summary_text:
+            return 0
+
+        # Определяем round_num для summary-записей (от самой старой)
+        round_num = self.records[obs_indices[0]].created_at
+
+        # Парсим факты (каждая непустая строка — отдельный факт)
+        facts = [
+            line.lstrip("- ").strip()
+            for line in summary_text.split("\n")
+            if line.strip()
+        ]
+
+        # Удаляем оригиналы (в обратном порядке чтобы индексы не сдвигались)
+        removed = 0
+        for i in reversed(obs_indices):
+            self.records.pop(i)
+            self._bm25_corpus.pop(i)
+            removed += 1
+
+        self._bm25_dirty = True
+
+        # Добавляем summary-записи
+        for fact in facts[:5]:
+            self.add(
+                content=fact,
+                importance=7.0,
+                kind="summary",
+                round_num=round_num,
+            )
+
+        return removed

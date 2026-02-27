@@ -189,7 +189,7 @@ class TestMemoryRetrieval:
 
 class TestBM25Index:
     def test_bm25_index_built_on_add(self):
-        """BM25-индекс пересоздаётся при каждом add()."""
+        """BM25-индекс строится лениво при первом запросе."""
         stream = MemoryStream(agent_id="off_1")
         assert stream._bm25 is None
         stream.add(
@@ -198,7 +198,12 @@ class TestBM25Index:
             kind="observation",
             round_num=0,
         )
+        # После add() индекс помечен как dirty, но ещё не построен
+        assert stream._bm25_dirty is True
+        # Построится при первом запросе
+        stream.bm25_scores("закупка")
         assert stream._bm25 is not None
+        assert stream._bm25_dirty is False
 
     def test_bm25_scores_lexical_match(self):
         """BM25 даёт ненулевой скор при лексическом совпадении."""
@@ -312,3 +317,119 @@ class TestHybridRetrieval:
         )
         # BM25-бонус должен поднять первую запись
         assert results[0].content == "закупка оборудования"
+
+
+class TestMemoryHardCap:
+    def test_cap_evicts_oldest_observations(self):
+        """При превышении лимита вытесняются старые observation-записи."""
+        stream = MemoryStream(agent_id="off_1", max_records=5)
+        for i in range(7):
+            stream.add(
+                content=f"observation {i}",
+                importance=5.0,
+                kind="observation",
+                round_num=i,
+            )
+        assert len(stream) == 5
+        # Самые старые (0, 1) вытеснены
+        contents = [r.content for r in stream.records]
+        assert "observation 0" not in contents
+        assert "observation 1" not in contents
+        assert "observation 6" in contents
+
+    def test_cap_preserves_non_observation_records(self):
+        """Reflection/plan записи не вытесняются первыми."""
+        stream = MemoryStream(agent_id="off_1", max_records=3)
+        stream.add(content="plan A", importance=5.0, kind="plan", round_num=0)
+        stream.add(content="obs 1", importance=5.0, kind="observation", round_num=1)
+        stream.add(content="obs 2", importance=5.0, kind="observation", round_num=2)
+        stream.add(content="obs 3", importance=5.0, kind="observation", round_num=3)
+        assert len(stream) == 3
+        kinds = [r.kind for r in stream.records]
+        assert "plan" in kinds
+
+
+class TestMemorySummarization:
+    def test_summarize_old_below_threshold_noop(self):
+        """Ниже порога суммаризация не запускается."""
+        from unittest.mock import MagicMock
+        stream = MemoryStream(agent_id="off_1")
+        for i in range(50):
+            stream.add(
+                content=f"event {i}",
+                importance=5.0,
+                kind="observation",
+                round_num=i,
+            )
+        mock_llm = MagicMock()
+        removed = stream.summarize_old(mock_llm, threshold=100)
+        assert removed == 0
+        mock_llm.generate.assert_not_called()
+
+    def test_summarize_old_compresses_records(self):
+        """Суммаризация сжимает старые записи в summary-записи."""
+        from unittest.mock import MagicMock
+        stream = MemoryStream(agent_id="off_1")
+        for i in range(120):
+            stream.add(
+                content=f"observation about topic {i}",
+                importance=5.0,
+                kind="observation",
+                round_num=i,
+            )
+        initial_count = len(stream)
+
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = MagicMock(
+            text="Факт 1: обсуждались темы 0-49\nФакт 2: были наблюдения\nФакт 3: итоги"
+        )
+        removed = stream.summarize_old(mock_llm, threshold=100, batch_size=50)
+        assert removed == 50
+        assert len(stream) == initial_count - 50 + 3  # удалено 50, добавлено 3 summary
+        summary_records = [r for r in stream.records if r.kind == "summary"]
+        assert len(summary_records) == 3
+
+    def test_summary_kind_accepted(self):
+        """Тип 'summary' принимается в MemoryKind."""
+        stream = MemoryStream(agent_id="off_1")
+        record = stream.add(
+            content="summary fact",
+            importance=7.0,
+            kind="summary",
+            round_num=0,
+        )
+        assert record.kind == "summary"
+
+
+class TestLazyBM25:
+    def test_lazy_rebuild_flag(self):
+        """BM25 не перестраивается при каждом add(), а только при запросе."""
+        stream = MemoryStream(agent_id="off_1")
+        stream.add(content="text one", importance=5.0, kind="observation", round_num=0)
+        stream.add(content="text two", importance=5.0, kind="observation", round_num=1)
+        assert stream._bm25_dirty is True
+        assert stream._bm25 is None
+
+        # Запрос BM25 скоров перестраивает индекс
+        scores = stream.bm25_scores("text")
+        assert stream._bm25_dirty is False
+        assert stream._bm25 is not None
+        assert len(scores) == 2
+
+    def test_retrieve_rebuilds_bm25(self):
+        """retrieve() также перестраивает BM25 при dirty."""
+        stream = MemoryStream(agent_id="off_1")
+        stream.add(
+            content="закупка",
+            importance=5.0,
+            kind="observation",
+            round_num=0,
+            embedding=[1.0, 0.0],
+        )
+        assert stream._bm25_dirty is True
+        stream.retrieve(
+            query_embedding=[1.0, 0.0],
+            current_round=0,
+            query_text="закупка",
+        )
+        assert stream._bm25_dirty is False
