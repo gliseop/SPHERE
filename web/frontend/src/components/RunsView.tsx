@@ -381,6 +381,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
             <tr>
               {hasRunning && <th></th>}
               <th>Имя</th>
+              <th>Дата</th>
               <th>Сценарий</th>
               <th>Управление</th>
               <th>Seed</th>
@@ -399,6 +400,11 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                     </td>
                   )}
                   <td className="runs-name-cell">{r.name}</td>
+                  <td className="runs-date-cell">
+                    {r.created_at
+                      ? new Date(r.created_at * 1000).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+                      : '—'}
+                  </td>
                   <td><span className="badge small accent">{r.scenario || '—'}</span></td>
                   <td><span className="badge small info">{r.governance || '—'}</span></td>
                   <td className="runs-seed-cell">{r.seed ?? '—'}</td>

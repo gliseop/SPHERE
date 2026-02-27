@@ -576,10 +576,12 @@ async def list_runs(_user: User = Depends(require_viewer)) -> list[dict]:
         reverse=True,
     )
     for p in paths:
+        stat = p.stat()
         meta = _parse_run_name(p.name)
         meta["name"] = p.stem.replace("_events", "")
         meta["filename"] = p.name
-        meta["size_kb"] = round(p.stat().st_size / 1024, 1)
+        meta["size_kb"] = round(stat.st_size / 1024, 1)
+        meta["created_at"] = stat.st_mtime
         runs.append(meta)
     return runs
 

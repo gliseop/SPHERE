@@ -54,4 +54,5 @@ export interface RunInfo {
   seed: number | null
   variant?: string | null
   size_kb: number
+  created_at?: number
 }
