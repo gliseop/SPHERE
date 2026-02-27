@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,15 @@ _EXTERNAL_ALIVE_THRESHOLD = 60
 
 class TooManyRunsError(RuntimeError):
     """Exceeded the max number of concurrent runs."""
+
+
+def _resolve_time_window(days: int) -> tuple[str, str]:
+    """Преобразовать длительность (в днях) в start/end ISO-время для async-симуляции."""
+    safe_days = max(1, int(days))
+    now = datetime.now(timezone.utc)
+    start = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=safe_days)
+    return start.isoformat(), end.isoformat()
 
 
 def _write_names_json(run_name: str, scenario_id: str, governance: str) -> None:
@@ -102,7 +112,7 @@ def launch_simulation_from_config(
     if runner_type in ("cognitive", "llm", "crewai") and not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY is not set; LLM runner requires it")
 
-    run_name = f"{scenario_id}_{governance}_seed{seed}_{safe_variant}_{runner_type}"
+    run_name = f"{scenario_id}_{governance}_seed{seed}_{safe_variant}_d{int(rounds)}_{runner_type}"
 
     with _active_lock:
         running_count = 0
@@ -132,15 +142,20 @@ def launch_simulation_from_config(
         stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
         scenario_path = _RESULTS_DIR / f"{run_name}_scenario.json"
 
+        start_iso, end_iso = _resolve_time_window(rounds)
+        scenario_config_with_time = dict(scenario_config)
+        scenario_config_with_time["start_time"] = start_iso
+        scenario_config_with_time["end_time"] = end_iso
+
         try:
             scenario_path.write_text(
-                json.dumps(scenario_config, ensure_ascii=False, indent=2),
+                json.dumps(scenario_config_with_time, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
         except OSError:
             _logger.exception("Failed to write scenario JSON for run %s", run_name)
 
-        _write_names_json_from_config(run_name, scenario_config, governance)
+        _write_names_json_from_config(run_name, scenario_config_with_time, governance)
 
         cmd = [
             sys.executable,
@@ -154,8 +169,12 @@ def launch_simulation_from_config(
             str(seed),
             "--runner",
             runner_type,
-            "--rounds",
-            str(rounds),
+            "--mode",
+            "async",
+            "--start-time",
+            start_iso,
+            "--end-time",
+            end_iso,
             "--jsonl",
             str(jsonl_path),
             "--summary-json",
@@ -207,7 +226,7 @@ def launch_simulation(
     if runner_type in ("cognitive", "llm", "crewai") and not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY is not set; LLM runner requires it")
 
-    run_name = f"{scenario}_{governance}_seed{seed}_{runner_type}"
+    run_name = f"{scenario}_{governance}_seed{seed}_d{int(rounds)}_{runner_type}"
 
     with _active_lock:
         running_count = 0
@@ -239,6 +258,7 @@ def launch_simulation(
 
         _write_names_json(run_name, scenario, governance)
 
+        start_iso, end_iso = _resolve_time_window(rounds)
         cmd = [
             sys.executable,
             "-m",
@@ -251,8 +271,12 @@ def launch_simulation(
             str(seed),
             "--runner",
             runner_type,
-            "--rounds",
-            str(rounds),
+            "--mode",
+            "async",
+            "--start-time",
+            start_iso,
+            "--end-time",
+            end_iso,
             "--jsonl",
             str(jsonl_path),
             "--summary-json",

@@ -458,6 +458,7 @@ def _run_async(args, scenario, runner) -> None:
     from .async_environment import AsyncEnvironment
     from .narrator import WorldNarrator
     from .world_generator import WorldGenerator
+    from .scenarios import add_governance_agents
 
     # Переопределение временных границ из CLI
     if args.start_time:
@@ -480,6 +481,14 @@ def _run_async(args, scenario, runner) -> None:
 
     if args.seed is not None:
         scenario = scenario.model_copy(update={"seed": args.seed})
+
+    # Режим управления и governance-агенты (как в sync).
+    try:
+        gov = GovernanceMode(args.governance) if args.governance else scenario.governance.mode
+    except ValueError:
+        console.print(f"[red]Неизвестный режим: {args.governance}[/red]")
+        sys.exit(1)
+    scenario = add_governance_agents(scenario, gov)
 
     # Создание LLM-провайдера для нарратора и мирового генератора
     llm = None

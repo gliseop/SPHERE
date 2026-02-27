@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient } from '../utils/apiClient'
 import type { AuthUser } from '../hooks/useAuth'
 
@@ -22,6 +22,21 @@ const TECHNIQUES: Array<{ value: TechniqueValue; label: string }> = [
   { value: 'claim_of_entitlement', label: 'Претензия на право' },
   { value: 'defense_of_necessity', label: 'Защита необходимостью' },
 ]
+
+const ACTIVE_PERSONALITY_STORAGE_KEY = 'magistry-active-personality-id'
+
+const DEFAULT_GENERATE_PERSONALITY_SYSTEM_PROMPT = (
+  'Ты — эксперт по организационной психологии и криминологии. '
+  + 'Пользователь описывает желаемый типаж персонажа для симуляции коррупции в госорганах. '
+  + 'Сгенерируй полный психологический профиль: биографию, параметры HEXACO (0-100), '
+  + 'тёмную триаду (0-100) и подходящие техники нейтрализации. '
+  + 'Биография должна быть на русском языке, 3-5 абзацев. '
+  + 'Параметры должны быть логически согласованы с описанием и биографией.'
+)
+
+function defaultGeneratePersonalityUserPrompt(description: string): string {
+  return `Описание персонажа:\n${description}`.trim()
+}
 
 interface Hexaco {
   honesty_humility: number
@@ -113,6 +128,19 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [activePersonalityId, setActivePersonalityId] = useState<string>(() => {
+    try {
+      return localStorage.getItem(ACTIVE_PERSONALITY_STORAGE_KEY) ?? ''
+    } catch {
+      return ''
+    }
+  })
+  const [genSystemPrompt, setGenSystemPrompt] = useState(DEFAULT_GENERATE_PERSONALITY_SYSTEM_PROMPT)
+  const [genUserPrompt, setGenUserPrompt] = useState(defaultGeneratePersonalityUserPrompt(''))
+  const [genSystemDirty, setGenSystemDirty] = useState(false)
+  const [genUserDirty, setGenUserDirty] = useState(false)
+  const prevEditingIdRef = useRef<string | null>(null)
+  const editingKey = editing ? (editing.id ?? '__new__') : null
 
   useEffect(() => {
     apiClient.get('/api/personalities')
@@ -120,6 +148,31 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
       .then((data) => setItems(Array.isArray(data) ? data : []))
       .catch(() => setItems([]))
   }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_PERSONALITY_STORAGE_KEY, activePersonalityId)
+    } catch {
+      // ignore
+    }
+  }, [activePersonalityId])
+
+  useEffect(() => {
+    const curId = editing ? (editing.id ?? '__new__') : null
+    if (editing && prevEditingIdRef.current !== curId) {
+      setGenSystemPrompt(DEFAULT_GENERATE_PERSONALITY_SYSTEM_PROMPT)
+      setGenUserPrompt(defaultGeneratePersonalityUserPrompt(editing.description ?? ''))
+      setGenSystemDirty(false)
+      setGenUserDirty(false)
+    }
+    prevEditingIdRef.current = curId
+  }, [editing])
+
+  useEffect(() => {
+    if (!editingKey) return
+    if (genUserDirty) return
+    setGenUserPrompt(defaultGeneratePersonalityUserPrompt(editing?.description ?? ''))
+  }, [editingKey, editing?.description, genUserDirty])
 
   const archetype = useMemo(() => (editing ? classifyArchetype(editing) : null), [editing])
 
@@ -173,6 +226,8 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
     try {
       const res = await apiClient.post('/api/ai/generate-personality', {
         description: editing.description.trim(),
+        system_prompt: genSystemPrompt.trim(),
+        user_prompt: genUserPrompt.trim(),
       })
       if (!res.ok) {
         const text = await res.text().catch(() => '')
@@ -258,6 +313,57 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
               onChange={(e) => setEditing({ ...editing, description: e.target.value })}
               placeholder="Опишите типаж: роль, поведение, мотивация (минимум 5 символов для генерации)"
             />
+            {user?.role === 'admin' && (
+              <details className="md-details">
+                <summary className="md-summary">Промпт генерации (system/user) — можно подправить перед запуском</summary>
+                <div className="hud-panel compact" style={{ padding: '0.75rem' }}>
+                  <div className="form-field" style={{ margin: 0 }}>
+                    <div className="form-field-header">
+                      <label>System prompt</label>
+                      <button
+                        className="btn-clipped small"
+                        onClick={() => {
+                          setGenSystemPrompt(DEFAULT_GENERATE_PERSONALITY_SYSTEM_PROMPT)
+                          setGenUserPrompt(defaultGeneratePersonalityUserPrompt(editing.description ?? ''))
+                          setGenSystemDirty(false)
+                          setGenUserDirty(false)
+                        }}
+                        type="button"
+                        title="Сбросить промпт к значениям по умолчанию"
+                      >
+                        ↺ Сбросить
+                      </button>
+                    </div>
+                    <textarea
+                      className="hud-input"
+                      rows={5}
+                      value={genSystemPrompt}
+                      onChange={(e) => {
+                        setGenSystemPrompt(e.target.value)
+                        if (!genSystemDirty) setGenSystemDirty(true)
+                      }}
+                      placeholder="system prompt"
+                    />
+                  </div>
+                  <div className="form-field" style={{ marginTop: '0.5rem' }}>
+                    <label>User prompt</label>
+                    <textarea
+                      className="hud-input"
+                      rows={4}
+                      value={genUserPrompt}
+                      onChange={(e) => {
+                        setGenUserPrompt(e.target.value)
+                        if (!genUserDirty) setGenUserDirty(true)
+                      }}
+                      placeholder="user prompt"
+                    />
+                  </div>
+                  <div className="text-muted" style={{ fontSize: '0.65rem', marginTop: '0.35rem' }}>
+                    В генерацию уйдут именно эти system/user промпты.
+                  </div>
+                </div>
+              </details>
+            )}
           </div>
 
           <div className="form-field">
@@ -432,6 +538,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
       <div className="library-list">
         {list.map((p) => {
           const a = classifyArchetype(p)
+          const isActive = Boolean(p.id) && p.id === activePersonalityId
           return (
             <div key={p.id ?? p.name} className="library-card hud-panel">
               <div className="corner tl" /><div className="corner tr" />
@@ -442,9 +549,18 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
                 <div className="scenario-card-meta">
                   <span className={`badge small ${archetypeBadgeClass(a)}`}>{archetypeLabel(a)}</span>
                   <span className="badge small">{p.neutralization_techniques?.length ?? 0} техн.</span>
+                  {isActive && <span className="badge small accent">выбрана</span>}
                 </div>
               </div>
               <div className="scenario-card-actions">
+                <button
+                  className={`btn-clipped ${isActive ? 'success' : ''} small`}
+                  onClick={() => setActivePersonalityId(isActive ? '' : (p.id ?? ''))}
+                  disabled={!p.id}
+                  title={isActive ? 'Личность выбрана для генерации (нажмите, чтобы снять)' : 'Выбрать личность для генерации'}
+                >
+                  {isActive ? '✓' : '○'}
+                </button>
                 {user?.role === 'admin' && (
                   <>
                     <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_PERSONALITY, ...p })} title="Редактировать">✎</button>

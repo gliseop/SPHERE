@@ -1,42 +1,74 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient } from '../utils/apiClient'
 import type { AuthUser } from '../hooks/useAuth'
 
-interface Capability {
-  action: string
-  case_types: string[]
-}
-
-interface ResourceDefaults {
-  budget_limit?: number
-  staffing_slots?: number
-  contract_capacity?: number
-}
+const ACTIVE_PERSONALITY_STORAGE_KEY = 'magistry-active-personality-id'
 
 interface AgentType {
   id?: string
   name: string
   description?: string
   id_prefix?: string
-  capabilities: Capability[]
-  resources?: ResourceDefaults
+  personality_archetype?: string
+}
+
+interface PersonalityOption {
+  id: string
+  name: string
+  description?: string
+  biography?: string
+  hexaco?: Record<string, number>
+  dark_triad?: Record<string, number>
+  neutralization_techniques?: string[]
 }
 
 const EMPTY_AGENT_TYPE: AgentType = {
   name: '',
   description: '',
   id_prefix: '',
-  capabilities: [],
-  resources: { budget_limit: 0, staffing_slots: 0, contract_capacity: 0 },
+  personality_archetype: '',
 }
 
-function normalizeCapability(raw: Capability): Capability | null {
-  const action = (raw.action || '').trim()
-  if (!action) return null
-  const caseTypes = (raw.case_types || [])
-    .map((s) => String(s).trim())
-    .filter(Boolean)
-  return { action, case_types: caseTypes }
+const DEFAULT_GENERATE_AGENT_TYPE_SYSTEM_PROMPT = (
+  'Ты — сценарист и организационный психолог. '
+  + 'Нужно описать тип агента для симуляции MAGISTRY. '
+  + 'На входе: выбранная личность (HEXACO + тёмная триада + биография + техники) и описание роли/контекста. '
+  + 'На выходе: JSON с полями name, description, id_prefix. '
+  + 'Важно: НЕ добавляй бюджет/персонал/полномочия/контракты — это генерирует движок мира.'
+)
+
+function safeJson(value: unknown, maxLen: number = 4000): string {
+  try {
+    const text = JSON.stringify(value, null, 2)
+    return text.length > maxLen ? text.slice(0, maxLen) + '\n…' : text
+  } catch {
+    const text = String(value ?? '')
+    return text.length > maxLen ? text.slice(0, maxLen) + '…' : text
+  }
+}
+
+function defaultGenerateAgentTypeUserPrompt(personality: PersonalityOption | null, description: string): string {
+  const personalityBlock = personality
+    ? safeJson({
+        id: personality.id,
+        name: personality.name,
+        description: personality.description ?? '',
+        biography: personality.biography ?? '',
+        hexaco: personality.hexaco ?? {},
+        dark_triad: personality.dark_triad ?? {},
+        neutralization_techniques: personality.neutralization_techniques ?? [],
+      })
+    : '(личность не выбрана)'
+
+  return (
+    '## Выбранная личность\n'
+    + `${personalityBlock}\n\n`
+    + '## Описание типа/роли (пожелание пользователя)\n'
+    + `${description}\n\n`
+    + 'Сгенерируй тип агента. description — на русском, 3–7 предложений, '
+    + 'включи мотивацию/риски/поведенческие паттерны. '
+    + 'id_prefix — короткий латинский префикс (например off/biz/aud/hr).'
+  ).trim()
 }
 
 export function AgentTypesView({ user }: { user: AuthUser | null }) {
@@ -44,6 +76,22 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
   const [editing, setEditing] = useState<AgentType | null>(null)
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [generating, setGenerating] = useState(false)
+
+  const [personalities, setPersonalities] = useState<PersonalityOption[] | null>(null)
+  const [activePersonalityId, setActivePersonalityId] = useState<string>(() => {
+    try {
+      return localStorage.getItem(ACTIVE_PERSONALITY_STORAGE_KEY) ?? ''
+    } catch {
+      return ''
+    }
+  })
+
+  const [genSystemPrompt, setGenSystemPrompt] = useState(DEFAULT_GENERATE_AGENT_TYPE_SYSTEM_PROMPT)
+  const [genUserPrompt, setGenUserPrompt] = useState(defaultGenerateAgentTypeUserPrompt(null, ''))
+  const [genSystemDirty, setGenSystemDirty] = useState(false)
+  const [genUserDirty, setGenUserDirty] = useState(false)
+  const prevEditingKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
     apiClient.get('/api/agent-types')
@@ -52,17 +100,55 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
       .catch(() => setTypes([]))
   }, [])
 
+  useEffect(() => {
+    apiClient.get('/api/personalities')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => setPersonalities(Array.isArray(data) ? data : []))
+      .catch(() => setPersonalities([]))
+  }, [])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_PERSONALITY_STORAGE_KEY, activePersonalityId)
+    } catch {
+      // ignore
+    }
+  }, [activePersonalityId])
+
+  const effectivePersonalityId = (editing?.personality_archetype || activePersonalityId || '').trim()
+  const effectivePersonality = useMemo(() => {
+    if (!effectivePersonalityId) return null
+    return (personalities ?? []).find((p) => p && p.id === effectivePersonalityId) ?? null
+  }, [personalities, effectivePersonalityId])
+
+  const editingKey = editing ? (editing.id ?? '__new__') : null
+  useEffect(() => {
+    if (!editing || !editingKey) {
+      prevEditingKeyRef.current = null
+      return
+    }
+    if (prevEditingKeyRef.current === editingKey) return
+    setGenSystemPrompt(DEFAULT_GENERATE_AGENT_TYPE_SYSTEM_PROMPT)
+    setGenUserPrompt(defaultGenerateAgentTypeUserPrompt(effectivePersonality, editing.description ?? ''))
+    setGenSystemDirty(false)
+    setGenUserDirty(false)
+    prevEditingKeyRef.current = editingKey
+  }, [editing, editingKey, effectivePersonality])
+
+  useEffect(() => {
+    if (!editingKey) return
+    if (genUserDirty) return
+    setGenUserPrompt(defaultGenerateAgentTypeUserPrompt(effectivePersonality, editing?.description ?? ''))
+  }, [editingKey, editing?.description, genUserDirty, effectivePersonality])
+
   async function handleSave() {
     if (!editing) return
     const payload: AgentType = {
-      ...editing,
+      ...(editing.id ? { id: editing.id } : {}),
       name: editing.name.trim(),
       description: (editing.description || '').trim(),
       id_prefix: (editing.id_prefix || '').trim(),
-      capabilities: (editing.capabilities || [])
-        .map(normalizeCapability)
-        .filter(Boolean) as Capability[],
-      resources: editing.resources ?? {},
+      personality_archetype: (editing.personality_archetype || '').trim() || undefined,
     }
     if (!payload.name) return
 
@@ -93,23 +179,46 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
     setTypes((prev) => (Array.isArray(prev) ? prev.filter((t) => t.id !== typeId) : []))
   }
 
-  function addCapability() {
+  async function handleGenerate() {
     if (!editing) return
-    setEditing({
-      ...editing,
-      capabilities: [...editing.capabilities, { action: '', case_types: [] }],
-    })
-  }
+    if (!effectivePersonalityId) {
+      window.alert('Выберите личность (вкладка «Личности») или укажите её здесь.')
+      return
+    }
+    if (!editing.description?.trim()) return
 
-  function updateCapability(i: number, patch: Partial<Capability>) {
-    if (!editing) return
-    const capabilities = editing.capabilities.map((c, idx) => (idx === i ? { ...c, ...patch } : c))
-    setEditing({ ...editing, capabilities })
-  }
+    setGenerating(true)
+    try {
+      const res = await apiClient.post('/api/ai/generate-agent-type', {
+        personality_id: effectivePersonalityId,
+        description: editing.description.trim(),
+        system_prompt: genSystemPrompt.trim(),
+        user_prompt: genUserPrompt.trim(),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        window.alert(text || 'Не удалось сгенерировать тип')
+        return
+      }
+      const data = await res.json().catch(() => null) as Record<string, unknown> | null
+      if (!data || typeof data !== 'object') return
 
-  function removeCapability(i: number) {
-    if (!editing) return
-    setEditing({ ...editing, capabilities: editing.capabilities.filter((_, idx) => idx !== i) })
+      setEditing((prev) => {
+        if (!prev) return prev
+        const name = typeof data.name === 'string' ? data.name : ''
+        const description = typeof data.description === 'string' ? data.description : ''
+        const id_prefix = typeof data.id_prefix === 'string' ? data.id_prefix : ''
+        return {
+          ...prev,
+          name: prev.name?.trim() ? prev.name : (name || prev.name),
+          description: description || prev.description,
+          id_prefix: prev.id_prefix?.trim() ? prev.id_prefix : (id_prefix || prev.id_prefix),
+          personality_archetype: effectivePersonalityId,
+        }
+      })
+    } finally {
+      setGenerating(false)
+    }
   }
 
   const list = types ?? []
@@ -134,14 +243,78 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
           </div>
 
           <div className="form-field">
-            <label>Описание</label>
+            <div className="form-field-header">
+              <label>Описание</label>
+              {user?.role === 'admin' && (
+                <button
+                  className="btn-clipped primary small"
+                  onClick={handleGenerate}
+                  disabled={generating || !editing.description?.trim() || !effectivePersonalityId}
+                  title="Сгенерировать тип по личности + описанию (LLM). Полномочия/ресурсы генерирует движок мира."
+                  type="button"
+                >
+                  {generating ? '…' : 'Сгенерировать'}
+                </button>
+              )}
+            </div>
             <textarea
               className="hud-input"
               rows={2}
               value={editing.description ?? ''}
               onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-              placeholder="Коротко: чем отличается этот тип"
+              placeholder="Опишите роль/контекст — генератор развернёт это в тип агента"
             />
+            {user?.role === 'admin' && (
+              <details className="md-details">
+                <summary className="md-summary">Промпт генерации типа (system/user) — можно подправить</summary>
+                <div className="hud-panel compact" style={{ padding: '0.75rem' }}>
+                  <div className="form-field" style={{ margin: 0 }}>
+                    <div className="form-field-header">
+                      <label>System prompt</label>
+                      <button
+                        className="btn-clipped small"
+                        onClick={() => {
+                          setGenSystemPrompt(DEFAULT_GENERATE_AGENT_TYPE_SYSTEM_PROMPT)
+                          setGenUserPrompt(defaultGenerateAgentTypeUserPrompt(effectivePersonality, editing.description ?? ''))
+                          setGenSystemDirty(false)
+                          setGenUserDirty(false)
+                        }}
+                        type="button"
+                        title="Сбросить промпт к значениям по умолчанию"
+                      >
+                        ↺ Сбросить
+                      </button>
+                    </div>
+                    <textarea
+                      className="hud-input"
+                      rows={5}
+                      value={genSystemPrompt}
+                      onChange={(e) => {
+                        setGenSystemPrompt(e.target.value)
+                        if (!genSystemDirty) setGenSystemDirty(true)
+                      }}
+                      placeholder="system prompt"
+                    />
+                  </div>
+                  <div className="form-field" style={{ marginTop: '0.5rem' }}>
+                    <label>User prompt</label>
+                    <textarea
+                      className="hud-input"
+                      rows={6}
+                      value={genUserPrompt}
+                      onChange={(e) => {
+                        setGenUserPrompt(e.target.value)
+                        if (!genUserDirty) setGenUserDirty(true)
+                      }}
+                      placeholder="user prompt"
+                    />
+                  </div>
+                  <div className="text-muted" style={{ fontSize: '0.65rem', marginTop: '0.35rem' }}>
+                    В генерацию уйдут именно эти system/user промпты.
+                  </div>
+                </div>
+              </details>
+            )}
           </div>
 
           <div className="form-row">
@@ -155,82 +328,24 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
               />
             </div>
             <div className="form-field">
-              <label>Ресурсы (по умолчанию)</label>
-              <div className="text-muted" style={{ fontSize: '0.7rem' }}>
-                budget / staff / contracts
+              <label>Личность (архетип)</label>
+              <select
+                className="hud-input"
+                value={editing.personality_archetype ?? ''}
+                onChange={(e) => {
+                  const next = e.target.value
+                  setEditing({ ...editing, personality_archetype: next })
+                  setActivePersonalityId(next)
+                }}
+              >
+                <option value="">— не выбрано —</option>
+                {(personalities ?? []).map((p) => (
+                  <option key={p.id} value={p.id} title={p.description || ''}>{p.name}</option>
+                ))}
+              </select>
+              <div className="text-muted" style={{ fontSize: '0.7rem', marginTop: '0.25rem' }}>
+                Полномочия и ресурсы генерируются движком мира при запуске прогона.
               </div>
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-field">
-              <label>Budget limit</label>
-              <input
-                className="hud-input"
-                type="number"
-                value={editing.resources?.budget_limit ?? 0}
-                onChange={(e) => setEditing({
-                  ...editing,
-                  resources: { ...(editing.resources ?? {}), budget_limit: Number(e.target.value) },
-                })}
-              />
-            </div>
-            <div className="form-field">
-              <label>Staffing slots</label>
-              <input
-                className="hud-input"
-                type="number"
-                value={editing.resources?.staffing_slots ?? 0}
-                onChange={(e) => setEditing({
-                  ...editing,
-                  resources: { ...(editing.resources ?? {}), staffing_slots: Number(e.target.value) },
-                })}
-              />
-            </div>
-            <div className="form-field">
-              <label>Contract capacity</label>
-              <input
-                className="hud-input"
-                type="number"
-                value={editing.resources?.contract_capacity ?? 0}
-                onChange={(e) => setEditing({
-                  ...editing,
-                  resources: { ...(editing.resources ?? {}), contract_capacity: Number(e.target.value) },
-                })}
-              />
-            </div>
-          </div>
-
-          <div className="form-field">
-            <div className="form-field-header">
-              <label>Полномочия ({editing.capabilities.length})</label>
-              <button className="btn-clipped success small" onClick={addCapability}>+ Добавить</button>
-            </div>
-            <div className="agents-table">
-              {editing.capabilities.map((cap, i) => (
-                <div key={i} className="agent-row">
-                  <input
-                    className="hud-input"
-                    placeholder="action (open_case, submit_proposal, audit...)"
-                    value={cap.action}
-                    onChange={(e) => updateCapability(i, { action: e.target.value })}
-                  />
-                  <input
-                    className="hud-input"
-                    placeholder="case_types (через запятую)"
-                    value={(cap.case_types ?? []).join(', ')}
-                    onChange={(e) => updateCapability(i, {
-                      case_types: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
-                    })}
-                  />
-                  <button className="btn-clipped danger small" onClick={() => removeCapability(i)}>✕</button>
-                </div>
-              ))}
-              {editing.capabilities.length === 0 && (
-                <div style={{ padding: '0.75rem', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                  Нет полномочий — нажмите «+ Добавить»
-                </div>
-              )}
             </div>
           </div>
 
@@ -239,11 +354,12 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
               className="btn-clipped small"
               onClick={() => setShowJson(!showJson)}
               style={{ marginBottom: '0.5rem', width: 'fit-content' }}
+              type="button"
             >
               {showJson ? '▲ Скрыть JSON' : '▼ JSON-превью'}
             </button>
             {showJson && (
-              <pre className="json-preview">{JSON.stringify(editing, null, 2)}</pre>
+              <pre className="json-preview">{safeJson(editing, 20_000)}</pre>
             )}
           </div>
         </div>
@@ -266,7 +382,10 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
       <div className="library-header">
         <span>Типы агентов ({types === null ? '…' : list.length})</span>
         {user?.role === 'admin' && (
-          <button className="btn-clipped primary" onClick={() => setEditing({ ...EMPTY_AGENT_TYPE })}>
+          <button
+            className="btn-clipped primary"
+            onClick={() => setEditing({ ...EMPTY_AGENT_TYPE, personality_archetype: activePersonalityId || '' })}
+          >
             + Создать тип
           </button>
         )}
@@ -276,38 +395,59 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
         <div className="scenarios-empty">
           <div className="text-muted">{types === null ? 'Загрузка…' : 'Нет типов агентов'}</div>
           <div style={{ fontSize: '0.7rem', marginTop: '0.5rem', color: 'var(--text-muted)' }}>
-            Типы агентов нужны для сборки сценариев из модулей (роль → полномочия → ресурсы).
+            Типы агентов задают роль и базовую личность. Полномочия и ресурсы генерируются движком мира.
           </div>
         </div>
       )}
 
       <div className="library-list">
-        {list.map((t) => (
-          <div key={t.id ?? t.name} className="library-card hud-panel">
-            <div className="corner tl" /><div className="corner tr" />
-            <div className="corner bl" /><div className="corner br" />
-            <div className="scenario-card-body">
-              <div className="scenario-card-title">{t.name}</div>
-              {t.description && <div className="scenario-card-desc">{t.description}</div>}
-              <div className="scenario-card-meta">
-                <span className="badge small">{(t.capabilities?.length ?? 0)} cap.</span>
-                {t.id_prefix && <span className="badge small info">{t.id_prefix}</span>}
+        {list.map((t) => {
+          const raw = t as unknown as Record<string, unknown>
+          const personalityId = typeof raw.personality_archetype === 'string' ? raw.personality_archetype : ''
+          const pname = personalityId
+            ? (personalities ?? []).find((p) => p.id === personalityId)?.name ?? personalityId
+            : ''
+
+          return (
+            <div key={t.id ?? t.name} className="library-card hud-panel">
+              <div className="corner tl" /><div className="corner tr" />
+              <div className="corner bl" /><div className="corner br" />
+              <div className="scenario-card-body">
+                <div className="scenario-card-title">{t.name}</div>
+                {t.description && <div className="scenario-card-desc">{t.description}</div>}
+                <div className="scenario-card-meta">
+                  {t.id_prefix && <span className="badge small info">{t.id_prefix}</span>}
+                  {pname && <span className="badge small accent" title="Привязанная личность">{pname}</span>}
+                </div>
+              </div>
+              <div className="scenario-card-actions">
+                {user?.role === 'admin' && (
+                  <>
+                    <button
+                      className="btn-clipped small"
+                      onClick={() => setEditing({
+                        ...EMPTY_AGENT_TYPE,
+                        id: typeof raw.id === 'string' ? raw.id : undefined,
+                        name: typeof raw.name === 'string' ? raw.name : '',
+                        description: typeof raw.description === 'string' ? raw.description : '',
+                        id_prefix: typeof raw.id_prefix === 'string' ? raw.id_prefix : '',
+                        personality_archetype: personalityId || activePersonalityId || '',
+                      })}
+                      title="Редактировать"
+                      type="button"
+                    >
+                      ✎
+                    </button>
+                    {t.id && (
+                      <button className="btn-clipped danger small" onClick={() => handleDelete(t.id!)} title="Удалить" type="button">✕</button>
+                    )}
+                  </>
+                )}
               </div>
             </div>
-            <div className="scenario-card-actions">
-              {user?.role === 'admin' && (
-                <>
-                  <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_AGENT_TYPE, ...t })} title="Редактировать">✎</button>
-                  {t.id && (
-                    <button className="btn-clipped danger small" onClick={() => handleDelete(t.id!)} title="Удалить">✕</button>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
 }
-

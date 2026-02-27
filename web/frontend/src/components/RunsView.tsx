@@ -299,7 +299,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                   <input className="hud-input" type="number" value={launchSeed} onChange={(e) => setLaunchSeed(e.target.value)} placeholder="42" />
                 </div>
                 <div className="form-field">
-                  <label title="Количество шагов симуляции (раундов)">Шагов</label>
+                  <label title="Длительность симуляции в днях (временная модель)">Дней</label>
                   <input className="hud-input" type="number" value={launchRounds} onChange={(e) => setLaunchRounds(e.target.value)} placeholder="25" />
                 </div>
               </>
@@ -320,7 +320,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                   <label>Параметры</label>
                   <div className="text-muted" style={{ fontSize: '0.7rem' }}>
                     {selectedSaved
-                      ? `${selectedSaved.scenario} / ${selectedSaved.governance} / шагов: ${selectedSaved.rounds}`
+                      ? `${selectedSaved.scenario} / ${selectedSaved.governance} / дней: ${selectedSaved.rounds}`
                         + (selectedSaved.seed !== null ? ` / seed ${selectedSaved.seed}` : '')
                         + (selectedSaved.sim_config ? ' / custom' : '')
                       : 'Выберите сценарий из библиотеки'}

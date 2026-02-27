@@ -370,7 +370,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
 
           <div className="form-row">
             <div className="form-field">
-              <label title="Количество шагов симуляции (раундов)">Шагов</label>
+              <label title="Длительность симуляции в днях (временная модель)">Дней</label>
               <input
                 className="hud-input"
                 type="number"
@@ -726,7 +726,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                 {s.governance && <span className="badge small info">{s.governance}</span>}
                 {s.sim_config && <span className="badge small warning" title="Есть кастомный сим-конфиг">custom</span>}
                 <span className="badge small">{s.agents?.length ?? 0} аг.</span>
-                <span className="badge small" title="Количество шагов симуляции (раундов)">{s.rounds} шагов</span>
+                <span className="badge small" title="Длительность симуляции (в днях)">{s.rounds} дн.</span>
                 {s.seed !== null && <span className="badge small">seed {s.seed}</span>}
               </div>
             </div>

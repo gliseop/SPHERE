@@ -148,6 +148,14 @@ export default function App() {
     return new Date(ms).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
   }, [state.events])
 
+  const lastTimeLabel = useMemo(() => {
+    const last = state.events[state.events.length - 1]
+    if (!last?.timestamp) return '---'
+    const ms = Date.parse(last.timestamp)
+    if (!Number.isFinite(ms)) return '---'
+    return new Date(ms).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  }, [state.events])
+
   const lastTimestampTitle = useMemo(() => {
     const last = state.events[state.events.length - 1]
     if (!last?.timestamp) return ''
@@ -232,9 +240,13 @@ export default function App() {
           {view === 'monitor' && (
             <>
               <div className="hud-header-stat">
-                <span className="hud-header-stat-label" title="Шаг симуляции (раунд). Это не обязательно календарный день.">Шаг</span>
+                {typeof state.currentRound === 'number' ? (
+                  <span className="hud-header-stat-label" title="Шаг симуляции (раунд). Это не обязательно календарный день.">Шаг</span>
+                ) : (
+                  <span className="hud-header-stat-label" title="Текущее время симуляции (по последнему событию).">Время</span>
+                )}
                 <span className="hud-header-stat-value accent">
-                  {typeof state.currentRound === 'number' ? state.currentRound : '—'}
+                  {typeof state.currentRound === 'number' ? state.currentRound : lastTimeLabel}
                 </span>
               </div>
               <div className="hud-header-stat">

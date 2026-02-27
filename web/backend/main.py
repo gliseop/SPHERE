@@ -1201,6 +1201,8 @@ class GeneratePersonalityPayload(BaseModel):
 
     model_config = ConfigDict(strict=False)
     description: str = Field(..., min_length=5, max_length=2000)
+    system_prompt: str | None = Field(default=None, max_length=10_000)
+    user_prompt: str | None = Field(default=None, max_length=10_000)
 
 
 @app.post("/api/ai/generate-personality")
@@ -1218,9 +1220,6 @@ async def generate_personality(
         Словарь с полями biography, hexaco, dark_triad, neutralization_techniques.
     """
     from fastapi import HTTPException
-
-    if not _os.environ.get("OPENAI_API_KEY"):
-        raise HTTPException(status_code=409, detail="OPENAI_API_KEY is not set")
 
     if not _os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(status_code=409, detail="OPENAI_API_KEY is not set")
@@ -1285,7 +1284,8 @@ async def generate_personality(
         "Биография должна быть на русском языке, 3-5 абзацев. "
         "Параметры должны быть логически согласованы с описанием и биографией."
     )
-    user_prompt = f"Описание персонажа:\n{payload.description}"
+    system_prompt = (payload.system_prompt or system_prompt).strip()
+    user_prompt = (payload.user_prompt or f"Описание персонажа:\n{payload.description}").strip()
 
     llm = create_provider(mock=False, cache_path=".llm_cache.db")
     try:
@@ -1294,6 +1294,94 @@ async def generate_personality(
             user=user_prompt,
             schema=schema,
             temperature=0.25,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
+
+    return response.data if isinstance(response.data, dict) else {}
+
+
+class GenerateAgentTypePayload(BaseModel):
+    """Запрос на генерацию типа агента через LLM (по личности + описанию)."""
+
+    model_config = ConfigDict(strict=False)
+    personality_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
+    description: str = Field(..., min_length=5, max_length=2000)
+    system_prompt: str | None = Field(default=None, max_length=10_000)
+    user_prompt: str | None = Field(default=None, max_length=10_000)
+
+
+@app.post("/api/ai/generate-agent-type")
+async def generate_agent_type(
+    payload: GenerateAgentTypePayload,
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Сгенерировать тип агента (name/description/id_prefix) по выбранной личности и описанию."""
+    from fastapi import HTTPException
+
+    if not _os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(status_code=409, detail="OPENAI_API_KEY is not set")
+
+    _validate_library_id(payload.personality_id, PERSONALITIES_DIR, kind="personality")
+    p_path = PERSONALITIES_DIR / f"{payload.personality_id}.json"
+    if not p_path.exists():
+        raise HTTPException(status_code=404, detail="Personality not found")
+
+    try:
+        personality = json.loads(p_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read personality: {exc}") from exc
+    if not isinstance(personality, dict):
+        raise HTTPException(status_code=500, detail="Invalid personality JSON")
+
+    from magistry_sim.llm import create_provider
+
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "name": {"type": "string", "minLength": 2, "maxLength": 128},
+            "description": {"type": "string", "minLength": 50, "maxLength": 2000},
+            "id_prefix": {"type": "string", "maxLength": 16},
+        },
+        "required": ["name", "description", "id_prefix"],
+    }
+
+    system_prompt_default = (
+        "Ты — сценарист и организационный психолог. "
+        "Нужно описать тип агента для симуляции MAGISTRY. "
+        "На входе: выбранная личность (HEXACO + тёмная триада + биография + техники) и описание роли/контекста. "
+        "На выходе: JSON с полями name, description, id_prefix. "
+        "Важно: НЕ добавляй бюджет/персонал/полномочия/контракты — это генерирует движок мира."
+    )
+
+    def _safe_json(value: object, max_len: int = 4000) -> str:
+        try:
+            text = json.dumps(value, ensure_ascii=False, indent=2)
+        except Exception:
+            text = str(value)
+        return text[:max_len]
+
+    user_prompt_default = (
+        "## Выбранная личность\n"
+        f"{_safe_json(personality)}\n\n"
+        "## Описание типа/роли (пожелание пользователя)\n"
+        f"{payload.description}\n\n"
+        "Сгенерируй тип агента. description — на русском, 3–7 предложений, "
+        "включи мотивацию/риски/поведенческие паттерны. "
+        "id_prefix — короткий латинский префикс (например off/biz/aud/hr)."
+    )
+
+    system_prompt = (payload.system_prompt or system_prompt_default).strip()
+    user_prompt = (payload.user_prompt or user_prompt_default).strip()
+
+    llm = create_provider(mock=False, cache_path=".llm_cache.db")
+    try:
+        response = llm.generate_structured(
+            system=system_prompt,
+            user=user_prompt,
+            schema=schema,
+            temperature=0.35,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
