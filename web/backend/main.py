@@ -690,6 +690,67 @@ async def get_artifact(doc_id: str, _user: User = Depends(require_viewer)) -> di
     raise HTTPException(status_code=404, detail="Artifact not found")
 
 
+@app.get("/api/run/{name}/export")
+async def export_run(name: str, _user: User = Depends(require_viewer)) -> JSONResponse:
+    """Выгрузить полный прогон в виде единого JSON-файла.
+
+    Собирает события, конфигурацию сценария, маппинг имён и итоговую
+    статистику в один объект, пригодный для архивирования или анализа.
+
+    Args:
+        name: Имя прогона.
+        _user: Аутентифицированный пользователь (любая роль).
+
+    Returns:
+        JSON с полями events, scenario, names, summary и meta.
+    """
+    from fastapi import HTTPException
+
+    _validate_run_name(name)
+    events_path = RESULTS_DIR / f"{name}_events.jsonl"
+    if not events_path.exists():
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    events: list[dict] = []
+    try:
+        async with aiofiles.open(events_path, encoding="utf-8") as f:
+            async for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        raise HTTPException(status_code=404, detail="Run file not found")
+
+    def _read_json(suffix: str) -> dict | None:
+        p = RESULTS_DIR / f"{name}{suffix}"
+        if p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                return None
+        return None
+
+    result = {
+        "name": name,
+        "meta": _parse_run_name(f"{name}_events.jsonl"),
+        "events": events,
+        "scenario": _read_json("_scenario.json"),
+        "names": _read_json("_names.json"),
+        "summary": _read_json("_summary.json"),
+    }
+
+    return JSONResponse(
+        content=result,
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}.json"',
+        },
+    )
+
+
 @app.get("/api/run/{name}/scenario")
 async def get_run_scenario(name: str, _user: User = Depends(require_viewer)) -> dict:
     """Получить конфигурацию сценария для указанного прогона.

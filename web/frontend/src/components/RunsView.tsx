@@ -195,6 +195,28 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
     }
   }
 
+  async function handleExport(runName: string) {
+    try {
+      const res = await apiClient.get(`/api/run/${encodeURIComponent(runName)}/export`)
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        window.alert(text || 'Не удалось выгрузить прогон')
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${runName}.json`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      window.alert('Ошибка при выгрузке прогона')
+    }
+  }
+
   async function handleDelete(runName: string) {
     if (!window.confirm(`Удалить прогон ${runName}? Это действие необратимо.`)) return
     setDeleting(runName)
@@ -389,6 +411,13 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                       title="Воспроизвести"
                     >
                       ▶
+                    </button>
+                    <button
+                      className="btn-clipped small"
+                      onClick={() => handleExport(r.name)}
+                      title="Выгрузить JSON"
+                    >
+                      ↓
                     </button>
                     {isActive && (
                       <button
