@@ -234,17 +234,22 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
             <div className="form-field-header">
               <label>HEXACO (0–100)</label>
               <span className="text-muted" style={{ fontSize: '0.7rem' }}>
-                personality model
+                модель личности
               </span>
+            </div>
+            <div className="text-muted" style={{ fontSize: '0.7rem', lineHeight: 1.45, marginTop: '0.25rem' }}>
+              HEXACO — шестифакторная модель личности (0–100). В MAGISTRY эти значения используются для
+              классификации архетипа (бейдж) и для генерации нарративных материалов (биография/интервью),
+              которые затем попадают в промпт LLM-агента.
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
               {([
-                ['honesty_humility', 'Honesty-Humility'],
-                ['emotionality', 'Emotionality'],
-                ['extraversion', 'Extraversion'],
-                ['agreeableness', 'Agreeableness'],
-                ['conscientiousness', 'Conscientiousness'],
-                ['openness', 'Openness'],
+                ['honesty_humility', 'Честность-скромность'],
+                ['emotionality', 'Эмоциональность'],
+                ['extraversion', 'Экстраверсия'],
+                ['agreeableness', 'Доброжелательность'],
+                ['conscientiousness', 'Добросовестность'],
+                ['openness', 'Открытость опыту'],
               ] as Array<[keyof Hexaco, string]>).map(([key, label]) => (
                 <div key={key} className="form-field">
                   <label>{label}</label>
@@ -266,11 +271,15 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
 
           <div className="form-field">
             <label>Тёмная триада (0–100)</label>
+            <div className="text-muted" style={{ fontSize: '0.7rem', lineHeight: 1.45, marginTop: '0.25rem' }}>
+              «Тёмная триада» — нарциссизм, макиавеллизм и психопатия (0–100). В проекте это часть профиля,
+              которая усиливает/ослабляет склонность к манипуляциям и нарушению норм при генерации биографии/интервью.
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
               {([
-                ['narcissism', 'Narcissism'],
-                ['machiavellianism', 'Machiavellianism'],
-                ['psychopathy', 'Psychopathy'],
+                ['narcissism', 'Нарциссизм'],
+                ['machiavellianism', 'Макиавеллизм'],
+                ['psychopathy', 'Психопатия'],
               ] as Array<[keyof DarkTriad, string]>).map(([key, label]) => (
                 <div key={key} className="form-field">
                   <label>{label}</label>
@@ -292,6 +301,22 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
 
           <div className="form-field">
             <label>Техники нейтрализации</label>
+            <div className="text-muted" style={{ fontSize: '0.7rem', lineHeight: 1.45, marginTop: '0.25rem' }}>
+              Техники нейтрализации (Sykes &amp; Matza) — типовые «оправдания» нарушений норм. MAGISTRY передаёт
+              выбранные техники в промпт и в модуль рефлексии: в рефлексиях может появляться пометка
+              <span style={{
+                fontFamily: "'JetBrains Mono', monospace",
+                fontSize: '0.64rem',
+                background: 'var(--surface-2)',
+                border: '1px solid var(--border)',
+                padding: '0.05rem 0.25rem',
+                borderRadius: '4px',
+              }}
+              >
+                [technique: …]
+              </span>
+              , которую затем считают метрики.
+            </div>
             <div className="hud-panel compact" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
               {TECHNIQUES.map((t) => {
                 const checked = editing.neutralization_techniques.includes(t.value)
@@ -351,7 +376,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
         <div className="scenarios-empty">
           <div className="text-muted">{items === null ? 'Загрузка…' : 'Нет личностей'}</div>
           <div style={{ fontSize: '0.7rem', marginTop: '0.5rem', color: 'var(--text-muted)' }}>
-            Личность — это прозрачный набор черт (HEXACO + Тёмная триада) + биография для промпта.
+            Личность — это набор черт (HEXACO + Тёмная триада) + биография и техники рационализации для промпта.
           </div>
         </div>
       )}
@@ -388,4 +413,3 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
     </div>
   )
 }
-
