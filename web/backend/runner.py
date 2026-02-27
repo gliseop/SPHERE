@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +25,10 @@ try:
     _MAX_RUNNING = max(1, int(os.environ.get("MAGISTRY_MAX_RUNNING", "5")))
 except ValueError:
     _MAX_RUNNING = 5
+
+# Порог «живости» для внешних прогонов (секунды).
+# Если events-файл не обновлялся дольше этого интервала — считаем прогон завершённым.
+_EXTERNAL_ALIVE_THRESHOLD = 60
 
 
 class TooManyRunsError(RuntimeError):
@@ -273,8 +278,64 @@ def launch_simulation(
     }
 
 
+def _discover_external_runs() -> list[dict]:
+    """Обнаружить внешние (CLI-запущенные) прогоны по файловой системе.
+
+    Сканирует ``_RESULTS_DIR`` на предмет JSONL-файлов событий, для которых
+    отсутствует summary-файл и которые были обновлены недавно. Такие прогоны
+    считаются «живыми», но не управляются бэкендом (нет Popen-объекта).
+
+    Returns:
+        Список словарей с информацией о внешних прогонах.
+    """
+    if not _RESULTS_DIR.is_dir():
+        return []
+
+    now = time.time()
+    active_names: set[str] = set(_active)
+    external: list[dict] = []
+
+    for events_path in _RESULTS_DIR.glob("*_events.jsonl"):
+        stem = events_path.name  # e.g. "S2_G1_seed1_cognitive_events.jsonl"
+        if not stem.endswith("_events.jsonl"):
+            continue
+        run_name = stem[: -len("_events.jsonl")]
+
+        # Не дублировать API-запущенные прогоны
+        if run_name in active_names:
+            continue
+
+        # Если summary уже есть — прогон завершён
+        summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
+        if summary_path.exists():
+            continue
+
+        # Проверить свежесть файла
+        try:
+            mtime = events_path.stat().st_mtime
+        except OSError:
+            continue
+
+        if (now - mtime) > _EXTERNAL_ALIVE_THRESHOLD:
+            continue
+
+        external.append(
+            {
+                "run_name": run_name,
+                "pid": 0,
+                "status": "running",
+                "external": True,
+            }
+        )
+
+    return external
+
+
 def list_active() -> list[dict]:
     """Вернуть список активных прогонов.
+
+    Включает как прогоны, запущенные через API (хранятся в ``_active``),
+    так и внешние прогоны, обнаруженные по файловой системе.
 
     Returns:
         Список словарей с именем прогона, PID и статусом.
@@ -309,7 +370,26 @@ def list_active() -> list[dict]:
         # Очистить завершённые
         for name in finished:
             del _active[name]
+
+        # Обнаружить внешние (CLI-запущенные) прогоны
+        result.extend(_discover_external_runs())
+
         return result
+
+
+def is_external_run(run_name: str) -> bool:
+    """Проверить, является ли прогон внешним (CLI-запущенным).
+
+    Args:
+        run_name: Имя прогона.
+
+    Returns:
+        True если прогон обнаружен как внешний и активный.
+    """
+    for run in _discover_external_runs():
+        if run["run_name"] == run_name:
+            return True
+    return False
 
 
 def stop_simulation(run_name: str) -> Optional[dict]:
@@ -320,10 +400,18 @@ def stop_simulation(run_name: str) -> Optional[dict]:
 
     Returns:
         Словарь со статусом или None если прогон не найден.
+
+    Raises:
+        RuntimeError: Если прогон является внешним (нет Popen-объекта).
     """
     with _active_lock:
         proc = _active.get(run_name)
     if proc is None:
+        if is_external_run(run_name):
+            raise RuntimeError(
+                f"Невозможно остановить внешний прогон «{run_name}»: "
+                "процесс запущен вне API, Popen-объект отсутствует"
+            )
         return None
     proc.terminate()
     try:

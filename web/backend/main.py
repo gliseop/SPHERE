@@ -2139,7 +2139,10 @@ async def stop_run(run_name: str, _user: User = Depends(require_admin)) -> dict:
     from web.backend.runner import stop_simulation
 
     _validate_run_name(run_name)
-    result = stop_simulation(run_name)
+    try:
+        result = stop_simulation(run_name)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     if result is None:
         raise HTTPException(status_code=404, detail="Run not found or not running")
     return result
