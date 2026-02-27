@@ -73,6 +73,10 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, ac
                 {r.seed !== null ? `/s${r.seed}` : ''}
               </div>
               <div className="run-item-meta">
+                {r.created_at
+                  ? new Date(r.created_at * 1000).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                  : ''}
+                {r.created_at ? ' · ' : ''}
                 {r.size_kb} KB
               </div>
             </div>

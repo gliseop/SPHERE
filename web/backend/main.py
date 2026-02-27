@@ -12,7 +12,7 @@ import secrets
 import time
 import uuid
 from pathlib import Path
-from typing import Any, AsyncIterator, Literal
+from typing import Any, AsyncIterator
 
 import aiofiles
 from dotenv import load_dotenv
@@ -271,7 +271,7 @@ class ScenarioAgentPayload(BaseModel):
 
     id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
     name: str = Field(min_length=1, max_length=128)
-    role: Literal["official", "business", "auditor"]
+    role: str = Field(min_length=1, max_length=256)
     initial_reputation: float = Field(ge=0.0, le=100.0)
 
 

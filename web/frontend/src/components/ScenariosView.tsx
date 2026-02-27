@@ -2,10 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { apiClient } from '../utils/apiClient'
 import type { AuthUser } from '../hooks/useAuth'
 
+interface AgentTypeOption {
+  id: string
+  name: string
+  id_prefix?: string
+}
+
 interface Agent {
   id: string
   name: string
-  role: 'official' | 'business' | 'auditor'
+  role: string
   initial_reputation: number
 }
 
@@ -49,10 +55,10 @@ const EMPTY_SCENARIO: Scenario = {
   runner: 'cognitive',
 }
 
-const ROLE_OPTIONS = [
-  { value: 'official', label: 'Чиновник' },
-  { value: 'business', label: 'Подрядчик' },
-  { value: 'auditor',  label: 'Аудитор' },
+const BUILTIN_ROLES: AgentTypeOption[] = [
+  { id: 'official', name: 'Чиновник', id_prefix: 'off' },
+  { id: 'business', name: 'Подрядчик', id_prefix: 'biz' },
+  { id: 'auditor',  name: 'Аудитор', id_prefix: 'aud' },
 ]
 
 const FALLBACK_SCENARIOS: TemplateScenario[] = [
@@ -76,6 +82,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
   const [scenarios, setScenarios] = useState<Scenario[] | null>(null)
   const [templateScenarios, setTemplateScenarios] = useState<TemplateScenario[] | null>(null)
   const [governanceModes, setGovernanceModes] = useState<GovernanceModeItem[] | null>(null)
+  const [agentTypes, setAgentTypes] = useState<AgentTypeOption[]>(BUILTIN_ROLES)
   const [editing, setEditing] = useState<Scenario | null>(null)
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -140,6 +147,22 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
         setTemplateScenarios([])
       })
       .catch(() => setTemplateScenarios([]))
+
+    apiClient.get('/api/agent-types')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => {
+        if (Array.isArray(data) && data.length > 0) {
+          const types: AgentTypeOption[] = data
+            .filter((x): x is Record<string, unknown> => isRecord(x) && typeof x.name === 'string')
+            .map((x) => ({
+              id: String(x.id ?? x.name),
+              name: String(x.name),
+              id_prefix: typeof x.id_prefix === 'string' ? x.id_prefix : undefined,
+            }))
+          if (types.length > 0) setAgentTypes(types)
+        }
+      })
+      .catch(() => {})
 
     apiClient.get('/api/templates/governance')
       .then((r) => r.ok ? r.json() : [])
@@ -233,15 +256,31 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
     }
   }
 
+  /** Найти тип агента по role — ищем совпадение по id, id_prefix или вхождению подстроки. */
+  function _findAgentType(role: string): AgentTypeOption | undefined {
+    if (!role) return undefined
+    const r = role.toLowerCase()
+    return agentTypes.find((t) => t.id === role)
+      ?? agentTypes.find((t) => t.id_prefix === role)
+      ?? agentTypes.find((t) => t.id.toLowerCase().startsWith(r) || r.startsWith(t.id.toLowerCase()))
+  }
+
+  function _prefixForRole(role: string): string {
+    const match = _findAgentType(role)
+    if (match?.id_prefix) return match.id_prefix
+    return role.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 4) || 'ag'
+  }
+
   function addAgent() {
     if (!editing) return
     const idx = editing.agents.length + 1
+    const defaultType = agentTypes[0] ?? BUILTIN_ROLES[0]
     setEditing({
       ...editing,
       agents: [...editing.agents, {
-        id: `agent_${idx}`,
+        id: `${_prefixForRole(defaultType.id)}_${idx}`,
         name: `Агент ${idx}`,
-        role: 'official',
+        role: defaultType.id,
         initial_reputation: 7.0,
       }],
     })
@@ -253,16 +292,12 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
       idx === i ? { ...a, [field]: value } : a
     )
     if (field === 'name') {
-      const prefix = editing.agents[i].role === 'official' ? 'off' :
-                     editing.agents[i].role === 'business' ? 'biz' : 'aud'
+      const prefix = _prefixForRole(agents[i].role)
       agents[i].id = `${prefix}_${String(value).toLowerCase().replace(/\s+/g, '_').slice(0, 12)}`
     }
     if (field === 'role') {
-      const prefix = value === 'official' ? 'off' : value === 'business' ? 'biz' : 'aud'
-      agents[i].id = `${prefix}_${editing.agents[i].name.toLowerCase().replace(/\s+/g, '_').slice(0, 12)}`
-      if (value === 'auditor') {
-        agents[i].initial_reputation = 0
-      }
+      const prefix = _prefixForRole(String(value))
+      agents[i].id = `${prefix}_${agents[i].name.toLowerCase().replace(/\s+/g, '_').slice(0, 12)}`
     }
     setEditing({ ...editing, agents })
   }
@@ -557,36 +592,59 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
               <button className="btn-clipped success small" onClick={addAgent}>+ Добавить</button>
             </div>
             <div className="agents-table">
-              {editing.agents.map((agent, i) => (
-                <div key={i} className="agent-row">
-                  <input
-                    className="hud-input"
-                    placeholder="Имя"
-                    value={agent.name}
-                    onChange={(e) => updateAgent(i, 'name', e.target.value)}
-                  />
-                  <select
-                    className="hud-input"
-                    value={agent.role}
-                    onChange={(e) => updateAgent(i, 'role', e.target.value)}
-                  >
-                    {ROLE_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
-                  <input
-                    className="hud-input"
-                    type="number"
-                    min={0} max={10} step={0.5}
-                    value={agent.initial_reputation}
-                    onChange={(e) => updateAgent(i, 'initial_reputation', Number(e.target.value))}
-                    style={{ width: '70px' }}
-                    disabled={agent.role === 'auditor'}
-                    title={agent.role === 'auditor' ? 'У ИИ-аудитора нет репутации' : 'Начальная репутация'}
-                  />
-                  <button className="btn-clipped danger small" onClick={() => removeAgent(i)}>✕</button>
-                </div>
-              ))}
+              {editing.agents.map((agent, i) => {
+                const matchedType = _findAgentType(agent.role)
+                const selectValue = matchedType ? matchedType.id : '__custom__'
+                return (
+                  <div key={i} className="agent-row" style={{ flexWrap: 'wrap', gap: '0.35rem' }}>
+                    <input
+                      className="hud-input"
+                      placeholder="Имя"
+                      value={agent.name}
+                      onChange={(e) => updateAgent(i, 'name', e.target.value)}
+                      style={{ flex: '1 1 120px', minWidth: '100px' }}
+                    />
+                    <select
+                      className="hud-input"
+                      value={selectValue}
+                      onChange={(e) => {
+                        if (e.target.value === '__custom__') {
+                          updateAgent(i, 'role', '')
+                        } else {
+                          updateAgent(i, 'role', e.target.value)
+                        }
+                      }}
+                      style={{ flex: '0 0 130px' }}
+                      title="Тип агента (из библиотеки или свой)"
+                    >
+                      {agentTypes.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                      <option value="__custom__">Свой тип…</option>
+                    </select>
+                    {!matchedType && (
+                      <input
+                        className="hud-input"
+                        placeholder="Роль / промпт агента (напр. «заместитель мэра по ЖКХ»)"
+                        value={agent.role}
+                        onChange={(e) => updateAgent(i, 'role', e.target.value)}
+                        style={{ flex: '1 1 200px', minWidth: '180px' }}
+                        title="Свободное описание роли — станет промптом агента в симуляции"
+                      />
+                    )}
+                    <input
+                      className="hud-input"
+                      type="number"
+                      min={0} max={10} step={0.5}
+                      value={agent.initial_reputation}
+                      onChange={(e) => updateAgent(i, 'initial_reputation', Number(e.target.value))}
+                      style={{ width: '70px' }}
+                      title="Начальная репутация"
+                    />
+                    <button className="btn-clipped danger small" onClick={() => removeAgent(i)}>✕</button>
+                  </div>
+                )
+              })}
               {editing.agents.length === 0 && (
                 <div style={{ padding: '0.75rem', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                   Нет агентов — нажмите «+ Добавить»
