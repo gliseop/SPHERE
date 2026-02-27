@@ -326,6 +326,8 @@ function PromptModal({
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    setLoading(true)
+    setData(null)
     const params = new URLSearchParams()
     if (agentId) params.set('agent_id', agentId)
     if (round !== null) params.set('round', String(round))
@@ -344,7 +346,7 @@ function PromptModal({
         }
       })
       .finally(() => setLoading(false))
-  }, [runName, agentId, round])
+  }, [runName, agentId, round, timestamp])
 
   return (
     <div className="prompt-modal-overlay" onClick={onClose}>

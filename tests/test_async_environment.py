@@ -150,3 +150,43 @@ def test_async_dispatch_open_case_updates_state_and_timestamp():
         if e.event_type == "case_opened"
     )
     assert ev.timestamp == ts_before
+
+
+def test_async_reputation_tick_counts_resolutions_once():
+    config = ScenarioConfig(
+        id="S0",
+        title="Test",
+        description="Test",
+        start_time=START,
+        end_time=START + timedelta(days=3),
+        seed=42,
+        agents=[
+            AgentProfile(
+                id="off_1",
+                name="Игорь",
+                position="Начальник",
+            ),
+        ],
+    )
+
+    env = AsyncEnvironment(
+        config=config,
+        runner=_IdleRunner(),
+        llm=MockLLMProvider(),
+    )
+    base = float(env.state.reputation["off_1"].score)
+
+    env.state.event_log.log(
+        event_type="case_resolved",
+        agent_id="off_1",
+        payload={"case_id": "D-001", "decision": "ok"},
+        timestamp=env.clock.iso(),
+    )
+
+    env.clock.advance_to(env.clock.now + timedelta(days=1))
+    env._try_reputation_tick()
+    assert float(env.state.reputation["off_1"].score) == base + 1.5
+
+    env.clock.advance_to(env.clock.now + timedelta(days=1))
+    env._try_reputation_tick()
+    assert float(env.state.reputation["off_1"].score) == base + 2.5

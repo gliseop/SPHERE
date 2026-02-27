@@ -119,6 +119,7 @@ class AsyncEnvironment:
         self._round_summaries: list[dict[str, Any]] = []
         self._last_world_tick: datetime = start
         self._last_reputation_tick: datetime = start
+        self._reputation_tick_event_cursor: int = 0
         self._last_narrator_date: date | None = None
 
         self._init_state()
@@ -542,6 +543,16 @@ class AsyncEnvironment:
         if elapsed < 24 * 3600:
             return
 
+        events = self.state.event_log.get_events()
+        new_events = events[self._reputation_tick_event_cursor :]
+        resolved_since_tick: dict[str, int] = {}
+        for ev in new_events:
+            if ev.event_type != "case_resolved":
+                continue
+            if not ev.agent_id:
+                continue
+            resolved_since_tick[ev.agent_id] = resolved_since_tick.get(ev.agent_id, 0) + 1
+
         self._last_reputation_tick = self.clock.now
         governance = self._config.governance.mode
         decay_factor = self._config.governance.reputation_decay
@@ -555,12 +566,7 @@ class AsyncEnvironment:
             before_level = int(rep.position_level)
             apply_decay(rep, decay_factor=decay_factor)
 
-            cases_resolved = len(
-                self.state.event_log.get_events(
-                    event_type="case_resolved",
-                    agent_id=agent_id,
-                )
-            )
+            cases_resolved = int(resolved_since_tick.get(agent_id, 0))
             growth = compute_round_growth(rep, cases_resolved=cases_resolved)
             apply_growth(rep, growth)
 
@@ -637,6 +643,8 @@ class AsyncEnvironment:
                         },
                         timestamp=self.clock.iso(),
                     )
+
+        self._reputation_tick_event_cursor = len(self.state.event_log.get_events())
 
     def _try_narrator_tick(self) -> None:
         """Запустить нарратора в конце каждого рабочего дня."""

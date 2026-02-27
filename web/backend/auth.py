@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -16,19 +15,32 @@ _oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 _DEV_MODE = os.environ.get("MAGISTRY_DEV", "").strip() == "1"
 _JWT_SECRET_ENV = (os.environ.get("JWT_SECRET") or "").strip()
-if not _JWT_SECRET_ENV:
-    if _DEV_MODE:
-        _JWT_SECRET: str = "dev-secret-CHANGE-IN-PRODUCTION"
-    else:
-        print(
-            "JWT_SECRET is required. Set JWT_SECRET or export MAGISTRY_DEV=1 for dev mode.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+if _JWT_SECRET_ENV:
+    _JWT_SECRET: str | None = _JWT_SECRET_ENV
+elif _DEV_MODE:
+    _JWT_SECRET = "dev-secret-CHANGE-IN-PRODUCTION"
 else:
-    _JWT_SECRET = _JWT_SECRET_ENV
+    _JWT_SECRET = None
 _JWT_ALGORITHM = "HS256"
 _JWT_EXPIRE_HOURS: int = int(os.environ.get("JWT_EXPIRE_HOURS", "24"))
+
+_JWT_SECRET_ERR = (
+    "JWT_SECRET is required. Set JWT_SECRET or export MAGISTRY_DEV=1 for dev mode."
+)
+
+
+def validate_jwt_secret() -> None:
+    """Проверить, что JWT_SECRET доступен.
+
+    Используется на старте FastAPI, чтобы не завершать процесс на import-time.
+    """
+    _require_jwt_secret()
+
+
+def _require_jwt_secret() -> str:
+    if not _JWT_SECRET:
+        raise RuntimeError(_JWT_SECRET_ERR)
+    return _JWT_SECRET
 
 
 def hash_password(password: str) -> str:
@@ -68,7 +80,7 @@ def create_access_token(username: str, role: str) -> str:
     """
     expire = datetime.now(timezone.utc) + timedelta(hours=_JWT_EXPIRE_HOURS)
     payload = {"sub": username, "role": role, "exp": expire}
-    return jwt.encode(payload, _JWT_SECRET, algorithm=_JWT_ALGORITHM)
+    return jwt.encode(payload, _require_jwt_secret(), algorithm=_JWT_ALGORITHM)
 
 
 def decode_token(token: str) -> dict:
@@ -83,7 +95,7 @@ def decode_token(token: str) -> dict:
     Raises:
         jose.JWTError: При невалидном или истёкшем токене.
     """
-    return jwt.decode(token, _JWT_SECRET, algorithms=[_JWT_ALGORITHM])
+    return jwt.decode(token, _require_jwt_secret(), algorithms=[_JWT_ALGORITHM])
 
 
 async def require_viewer(token: str = Depends(_oauth2_scheme)) -> User:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from contextlib import asynccontextmanager
 import json
 import os as _os
 import re
@@ -30,6 +31,7 @@ from .auth import (
     create_access_token,
     require_admin,
     require_viewer,
+    validate_jwt_secret,
     verify_password,
     verify_ws_token,
 )
@@ -349,7 +351,13 @@ class _BodySizeLimitMiddleware:
             await res(scope, receive, send)
 
 
-app = FastAPI(title="MAGISTRY Graph UI")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    validate_jwt_secret()
+    yield
+
+
+app = FastAPI(title="MAGISTRY Graph UI", lifespan=_lifespan)
 
 app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_MAX_BODY_BYTES)
 
