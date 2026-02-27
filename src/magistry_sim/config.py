@@ -54,6 +54,8 @@ class AgentProfile(BaseModel):
     honesty: float = 0.5
     competence: float | None = None
     personality: AgentPersonality | None = None
+    personality_archetype: str | None = None
+    initial_reputation: float | None = None
     immune: bool = False
     connections: list[Connection] = Field(default_factory=list)
     initial_resources: ResourcePool = Field(default_factory=ResourcePool)

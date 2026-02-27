@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 from magistry_sim.async_environment import AsyncEnvironment
-from magistry_sim.config import AgentProfile, ScenarioConfig
+from magistry_sim.config import AgentProfile, Capability, ScenarioConfig
 from magistry_sim.llm import MockLLMProvider
 
 MSK = timezone(timedelta(hours=3))
@@ -77,3 +77,76 @@ def test_async_env_generates_events_without_agents():
     events = env.state.event_log.all_events
     assert len(events) >= 2
     assert events[0].event_type == "world_event"
+
+
+def test_async_env_uses_initial_reputation_from_profile():
+    config = ScenarioConfig(
+        id="S0",
+        title="Test",
+        description="Test",
+        start_time=START,
+        end_time=END,
+        seed=42,
+        agents=[
+            AgentProfile(
+                id="off_1",
+                name="Игорь",
+                position="Начальник",
+                initial_reputation=7.5,
+            ),
+        ],
+    )
+
+    env = AsyncEnvironment(
+        config=config,
+        runner=_IdleRunner(),
+        llm=MockLLMProvider(),
+    )
+    assert env.state.reputation["off_1"].score == 7.5
+
+
+def test_async_dispatch_open_case_updates_state_and_timestamp():
+    config = ScenarioConfig(
+        id="S0",
+        title="Test",
+        description="Test",
+        start_time=START,
+        end_time=END,
+        seed=42,
+        agents=[
+            AgentProfile(
+                id="off_1",
+                name="Игорь",
+                position="Начальник",
+                capabilities=[
+                    Capability(action="open_case", case_types=[]),
+                ],
+            ),
+        ],
+    )
+
+    env = AsyncEnvironment(
+        config=config,
+        runner=_IdleRunner(),
+        llm=MockLLMProvider(),
+    )
+    # Диспатч tool-ов в AsyncEnvironment использует текущие sim-часы
+    ts_before = env.clock.iso()
+    asyncio.run(
+        env._dispatch_action(
+            "off_1",
+            "open_case",
+            {
+                "case_type": "procurement",
+                "title": "Закупка серверов",
+                "description": "Требуется серверное оборудование.",
+            },
+        )
+    )
+    assert "D-001" in env.state.cases
+    ev = next(
+        e
+        for e in env.state.event_log.all_events
+        if e.event_type == "case_opened"
+    )
+    assert ev.timestamp == ts_before

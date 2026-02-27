@@ -51,6 +51,7 @@ def generate_strategic_plan(
     llm: LLMProvider,
     agent_role: str,
     current_round: int,
+    personality_context: str = "",
 ) -> list[str]:
     """Генерирует стратегические цели агента.
 
@@ -74,14 +75,22 @@ def generate_strategic_plan(
         else "нет"
     )
 
+    personality_block = ""
+    if personality_context.strip():
+        personality_block = (
+            f"Контекст личности (кратко):\n"
+            f"{personality_context.strip()}\n\n"
+        )
+
     prompt = (
         f"Ты — {agent_role} (агент {stream.agent_id}). "
         f"Сейчас раунд {current_round}.\n\n"
+        f"{personality_block}"
         f"Последние наблюдения:\n{context}\n\n"
         f"Твои выводы (рефлексии):\n{ref_text}\n\n"
         f"Сформулируй 2-4 стратегические цели на ближайшие "
         f"{STRATEGIC_PLAN_INTERVAL} раундов. "
-        f"Верни JSON-массив строк."
+        f"Верни только JSON-массив строк, без пояснений."
     )
     response = llm.generate(system="", user=prompt)
     try:
@@ -98,6 +107,7 @@ def generate_tactical_plan(
     llm: LLMProvider,
     strategic_goals: list[str],
     current_round: int,
+    personality_context: str = "",
 ) -> list[str]:
     """Генерирует тактические шаги на текущий раунд.
 
@@ -114,12 +124,20 @@ def generate_tactical_plan(
     context = "\n".join(f"- {r.content}" for r in recent)
     goals_text = "\n".join(f"- {g}" for g in strategic_goals)
 
+    personality_block = ""
+    if personality_context.strip():
+        personality_block = (
+            f"Контекст личности (кратко):\n"
+            f"{personality_context.strip()}\n\n"
+        )
+
     prompt = (
         f"Агент {stream.agent_id}, раунд {current_round}.\n\n"
+        f"{personality_block}"
         f"Стратегические цели:\n{goals_text}\n\n"
         f"Текущая обстановка:\n{context}\n\n"
         f"Сформулируй 1-3 конкретных шага на этот раунд. "
-        f"Верни JSON-массив строк."
+        f"Верни только JSON-массив строк, без пояснений."
     )
     response = llm.generate(system="", user=prompt)
     try:

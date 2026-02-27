@@ -18,6 +18,8 @@ def open_case(
     title: str,
     description: str,
     params: str = "",
+    *,
+    timestamp: str | None = None,
 ) -> str:
     """Открыть новое дело.
 
@@ -63,6 +65,7 @@ def open_case(
             "case_type": case_type,
             "title": title,
         },
+        timestamp=timestamp,
     )
 
     # Удалить удовлетворённую потребность
@@ -78,7 +81,12 @@ def open_case(
     return f"Дело {case_id} открыто (тип: {case_type})."
 
 
-def submit_proposal(case_id: str, content: str) -> str:
+def submit_proposal(
+    case_id: str,
+    content: str,
+    *,
+    timestamp: str | None = None,
+) -> str:
     """Подать предложение по открытому делу.
 
     Args:
@@ -128,12 +136,18 @@ def submit_proposal(case_id: str, content: str) -> str:
             "case_id": case_id,
             "proposal_id": proposal_id,
         },
+        timestamp=timestamp,
     )
 
     return f"Предложение {proposal_id} подано по делу {case_id}."
 
 
-def add_note(case_id: str, content: str) -> str:
+def add_note(
+    case_id: str,
+    content: str,
+    *,
+    timestamp: str | None = None,
+) -> str:
     """Оставить публичную запись в деле.
 
     Args:
@@ -178,13 +192,18 @@ def add_note(case_id: str, content: str) -> str:
             "case_id": case_id,
             "note_id": note_id,
         },
+        timestamp=timestamp,
     )
 
     return f"Запись {note_id} добавлена в дело {case_id}."
 
 
 def resolve_case(
-    case_id: str, decision: str, justification: str
+    case_id: str,
+    decision: str,
+    justification: str,
+    *,
+    timestamp: str | None = None,
 ) -> str:
     """Принять решение по делу.
 
@@ -227,13 +246,18 @@ def resolve_case(
             "case_id": case_id,
             "decision": decision,
         },
+        timestamp=timestamp,
     )
 
     return f"Дело {case_id} закрыто. Решение: {decision}"
 
 
 def file_report(
-    case_id: str, assessment: str, recommendation: str
+    case_id: str,
+    assessment: str,
+    recommendation: str,
+    *,
+    timestamp: str | None = None,
 ) -> str:
     """Подать отчёт или жалобу.
 
@@ -266,6 +290,7 @@ def file_report(
                 "assessment": assessment,
                 "recommendation": recommendation,
             },
+            timestamp=timestamp,
         )
         return (
             f"Отчёт по делу {case_id} зарегистрирован. "
@@ -287,6 +312,7 @@ def file_report(
                 "case_id": case_id,
                 "assessment": assessment,
             },
+            timestamp=timestamp,
         )
         return (
             f"Жалоба по делу {case_id} зарегистрирована "
@@ -294,7 +320,11 @@ def file_report(
         )
 
 
-def move_to(location_id: str) -> str:
+def move_to(
+    location_id: str,
+    *,
+    timestamp: str | None = None,
+) -> str:
     """Переместиться в указанную локацию.
 
     Args:
@@ -324,12 +354,19 @@ def move_to(location_id: str) -> str:
             "from": old_location or "",
             "to": location_id,
         },
+        timestamp=timestamp,
     )
 
     return f"Вы переместились в «{location.name}»."
 
 
-def cast_vote(case_id: str, verdict: str, reasoning: str) -> str:
+def cast_vote(
+    case_id: str,
+    verdict: str,
+    reasoning: str,
+    *,
+    timestamp: str | None = None,
+) -> str:
     """Проголосовать по делу трибунала.
 
     Args:
@@ -377,6 +414,7 @@ def cast_vote(case_id: str, verdict: str, reasoning: str) -> str:
             "case_id": case_id,
             "verdict": verdict,
         },
+        timestamp=timestamp,
     )
 
     return f"Голос по делу {case_id} засчитан: {verdict}."

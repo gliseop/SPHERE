@@ -7,10 +7,15 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from magistry_sim.agents import ACTION_FORMAT_INSTRUCTIONS, TOOL_DESCRIPTIONS
+from magistry_sim.agents import (
+    ACTION_FORMAT_INSTRUCTIONS,
+    TOOL_DESCRIPTIONS,
+    build_backstory,
+)
 from magistry_sim.memory import MemoryStream
 from magistry_sim.planning import (
     AgentPlan,
@@ -18,6 +23,7 @@ from magistry_sim.planning import (
     generate_tactical_plan,
 )
 from magistry_sim.reflection import run_reflection_cycle, should_reflect
+from magistry_sim.personality import AgentPersonality
 
 if TYPE_CHECKING:
     from magistry_sim.llm import EmbeddingProvider, LLMProvider
@@ -102,6 +108,59 @@ class CognitiveAgentRunner:
         """
         self._agent_interviews[agent_id] = interview_text
 
+    def _load_personality_archetype(
+        self, archetype_id: str
+    ) -> AgentPersonality | None:
+        """Загрузить архетип личности из data/personalities/<id>.json.
+
+        Файлы архетипов могут содержать метаданные (id/name/description),
+        поэтому валидируем только подмножество полей AgentPersonality.
+        """
+        if not archetype_id:
+            return None
+
+        root = Path(__file__).resolve().parents[2]
+        path = root / "data" / "personalities" / f"{archetype_id}.json"
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, dict):
+            return None
+
+        data = {
+            "hexaco": raw.get("hexaco", {}),
+            "dark_triad": raw.get("dark_triad", {}),
+            "neutralization_techniques": raw.get(
+                "neutralization_techniques", []
+            ),
+            "biography": raw.get("biography", ""),
+        }
+        try:
+            return AgentPersonality.model_validate(data)
+        except Exception:
+            return None
+
+    def _ensure_personality(self, agent_id: str, state: WorldState) -> None:
+        """Обеспечить наличие личности в профиле агента (если задан архетип)."""
+        profile = state.agents.get(agent_id)
+        if profile is None:
+            return
+        if profile.personality is not None:
+            return
+
+        archetype = getattr(profile, "personality_archetype", None)
+        if not archetype:
+            return
+
+        loaded = self._load_personality_archetype(str(archetype))
+        if loaded is None:
+            return
+
+        state.agents[agent_id] = profile.model_copy(
+            update={"personality": loaded}
+        )
+
     def observe(
         self,
         agent_id: str,
@@ -168,24 +227,45 @@ class CognitiveAgentRunner:
         Returns:
             Кортеж (системный промпт, пользовательский промпт).
         """
+        self._ensure_personality(agent_id, state)
+
         stream = self.get_or_create_memory(agent_id)
         plan = self.get_or_create_plan(agent_id)
         profile = state.agents.get(agent_id)
 
+        identity_text = (
+            f"Ты — {profile.name} ({agent_id}), {profile.position}.\n"
+            if profile is not None
+            else f"Ты — {agent_id}.\n"
+        )
+
+        brevity_text = (
+            "ВАЖНО: Это симуляция.\n"
+            "- Отвечай кратко (1–3 предложения в сообщениях).\n"
+            "- Не пиши формальных писем, отчётов, таблиц, git-команд.\n"
+            "- Верни только JSON-массив действий, без пояснений.\n"
+        )
+
         # Раздел личности
         personality_text = ""
-        if profile and profile.personality:
-            p = profile.personality
+        if profile is not None:
             personality_text = "\n## Твоя личность\n"
-            if p.biography:
-                personality_text += f"Биография: {p.biography}\n\n"
-            if p.neutralization_techniques:
-                techniques = ", ".join(
-                    t.value for t in p.neutralization_techniques
-                )
-                personality_text += (
-                    f"Доступные техники рационализации: {techniques}\n"
-                )
+            if profile.personality is not None:
+                p = profile.personality
+                if p.biography:
+                    bio = p.biography.strip()
+                    if len(bio) > 1200:
+                        bio = bio[:1200].rstrip() + "…"
+                    personality_text += f"Биография: {bio}\n\n"
+                if p.neutralization_techniques:
+                    techniques = ", ".join(
+                        t.value for t in p.neutralization_techniques
+                    )
+                    personality_text += (
+                        f"Доступные техники рационализации: {techniques}\n"
+                    )
+            else:
+                personality_text += build_backstory(profile) + "\n"
 
         # Раздел памяти
         current_round = state.round
@@ -261,8 +341,10 @@ class CognitiveAgentRunner:
             format_instructions = ACTION_FORMAT_INSTRUCTIONS
 
         system_prompt = (
+            f"{identity_text}"
             f"Ты — агент в симуляции организационных процессов. "
             f"Действуй в соответствии со своей личностью, воспоминаниями и планом.\n"
+            f"{brevity_text}\n"
             f"{personality_text}{interview_text}{memories_text}{plan_text}\n"
             f"{tools_text}\n\n"
             f"{format_instructions}"
@@ -296,7 +378,17 @@ class CognitiveAgentRunner:
         stream = self.get_or_create_memory(agent_id)
         plan = self.get_or_create_plan(agent_id)
         current_round = state.round
+        self._ensure_personality(agent_id, state)
         profile = state.agents.get(agent_id)
+
+        personality_context = ""
+        if profile is not None:
+            if profile.personality is not None and profile.personality.biography:
+                personality_context = profile.personality.biography.strip()
+            else:
+                personality_context = build_backstory(profile)
+        if len(personality_context) > 800:
+            personality_context = personality_context[:800].rstrip() + "…"
 
         # Фаза 1: рефлексия (при достижении порога)
         if should_reflect(stream):
@@ -319,6 +411,7 @@ class CognitiveAgentRunner:
                 llm=self._llm,
                 agent_role=role,
                 current_round=current_round,
+                personality_context=personality_context,
             )
             plan.last_strategic_round = current_round
 
@@ -327,6 +420,7 @@ class CognitiveAgentRunner:
             llm=self._llm,
             strategic_goals=plan.strategic_goals,
             current_round=current_round,
+            personality_context=personality_context,
         )
 
         # Сохранение плана в память
@@ -350,6 +444,10 @@ class CognitiveAgentRunner:
         response = self._llm.generate(system=system_prompt, user=user_prompt)
 
         if hasattr(state, "event_log") and state.event_log is not None:
+            ts: str | None = None
+            current_time = getattr(state, "current_time", None)
+            if isinstance(current_time, datetime):
+                ts = current_time.isoformat()
             state.event_log.log(
                 round=current_round,
                 event_type="llm_call",
@@ -360,6 +458,7 @@ class CognitiveAgentRunner:
                     "user_prompt": user_prompt,
                     "response": response.text,
                 },
+                timestamp=ts,
             )
 
         if self._verbose:
@@ -399,6 +498,8 @@ class CognitiveAgentRunner:
         Returns:
             Текст ответа.
         """
+        self._ensure_personality(agent_id, state)
+
         stream = self.get_or_create_memory(agent_id)
 
         # Записываем входящее сообщение как наблюдение
@@ -417,14 +518,26 @@ class CognitiveAgentRunner:
         memories_text = "\n".join(f"- {r.content}" for r in retrieved)
 
         profile = state.agents.get(agent_id)
-        bio = ""
-        if profile and profile.personality:
-            bio = profile.personality.biography[:500]
+        personality_context = ""
+        if profile is not None:
+            if profile.personality is not None and profile.personality.biography:
+                personality_context = profile.personality.biography.strip()
+            else:
+                personality_context = build_backstory(profile)
+        if len(personality_context) > 600:
+            personality_context = personality_context[:600].rstrip() + "…"
+
+        identity = (
+            f"{profile.name} ({agent_id}), {profile.position}"
+            if profile is not None
+            else agent_id
+        )
 
         system_prompt = (
-            f"Ты — {profile.name if profile else agent_id}. {bio}\n\n"
+            f"Ты — {identity}. {personality_context}\n\n"
             f"Твои воспоминания:\n{memories_text}\n\n"
-            f"Ответь на сообщение от {sender_id} в характере своей роли."
+            f"Ответь на сообщение от {sender_id} в характере своей роли. "
+            f"КРАТКО: 1–3 предложения, без формальностей."
         )
         user_prompt = (
             f"Сообщение от {sender_id}: {message}\n\nКонтекст: {context}"
@@ -432,6 +545,10 @@ class CognitiveAgentRunner:
         response = self._llm.generate(system=system_prompt, user=user_prompt)
 
         if hasattr(state, "event_log") and state.event_log is not None:
+            ts: str | None = None
+            current_time = getattr(state, "current_time", None)
+            if isinstance(current_time, datetime):
+                ts = current_time.isoformat()
             state.event_log.log(
                 round=state.round,
                 event_type="llm_call",
@@ -442,6 +559,7 @@ class CognitiveAgentRunner:
                     "user_prompt": user_prompt,
                     "response": response.text,
                 },
+                timestamp=ts,
             )
 
         return response.text.strip()

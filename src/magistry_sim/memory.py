@@ -7,7 +7,8 @@ import uuid
 from typing import Literal
 
 from pydantic import BaseModel, Field
-from rank_bm25 import BM25L
+
+from .bm25 import BM25Like, build_bm25
 
 
 MemoryKind = Literal["observation", "reflection", "plan"]
@@ -80,7 +81,7 @@ class MemoryStream:
         self.records: list[MemoryRecord] = []
         self.importance_since_reflection: float = 0.0
         self._bm25_corpus: list[list[str]] = []
-        self._bm25: BM25L | None = None
+        self._bm25: BM25Like | None = None
 
     def __len__(self) -> int:
         return len(self.records)
@@ -119,7 +120,7 @@ class MemoryStream:
         self.records.append(record)
         tokens = content.lower().split()
         self._bm25_corpus.append(tokens)
-        self._bm25 = BM25L(self._bm25_corpus)
+        self._bm25 = build_bm25(self._bm25_corpus)
         if kind == "observation":
             self.importance_since_reflection += importance
         return record

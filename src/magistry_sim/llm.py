@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import sqlite3
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -279,15 +281,52 @@ class LocalEmbeddingProvider:
         self,
         model_name: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     ) -> None:
+        self.dimensions = 384
         self._model_name = model_name
         self._model = None
+        self._use_fallback = False
 
     def _ensure_model(self) -> None:
         """Загрузить модель при первом обращении."""
-        if self._model is None:
+        if self._model is not None or self._use_fallback:
+            return
+        try:
             from sentence_transformers import SentenceTransformer
+        except ModuleNotFoundError:
+            self._use_fallback = True
+            return
+        self._model = SentenceTransformer(self._model_name)
 
-            self._model = SentenceTransformer(self._model_name)
+    def _fallback_embed(self, text: str) -> list[float]:
+        """Быстрый детерминированный эмбеддинг без внешних зависимостей.
+
+        Использует хешированную смесь word-tokens и char-ngram признаков,
+        нормализуя вектор до единичной длины (cosine-ready).
+        """
+        dims = self.dimensions
+        vec = [0.0] * dims
+        t = (text or "").lower()
+
+        # Word-level features (больше вес, чем у n-gram)
+        for token in re.findall(r"[0-9a-zа-яё]+", t):
+            idx = zlib.crc32(token.encode("utf-8")) % dims
+            vec[idx] += 2.0
+
+        # Character n-grams (устойчивы к морфологии/опечаткам)
+        cleaned = re.sub(r"\s+", " ", t).strip()
+        padded = f" {cleaned} "
+        for n in (3, 4, 5):
+            if len(padded) < n:
+                continue
+            for i in range(len(padded) - n + 1):
+                gram = padded[i : i + n]
+                idx = zlib.crc32(gram.encode("utf-8")) % dims
+                vec[idx] += 1.0
+
+        norm = math.sqrt(sum(v * v for v in vec))
+        if norm <= 0:
+            return vec
+        return [v / norm for v in vec]
 
     def embed(self, text: str) -> list[float]:
         """Получить эмбеддинг текста.
@@ -299,6 +338,8 @@ class LocalEmbeddingProvider:
             Вектор эмбеддинга (384 измерения).
         """
         self._ensure_model()
+        if self._use_fallback or self._model is None:
+            return self._fallback_embed(text)
         vector = self._model.encode(text, normalize_embeddings=True)
         return vector.tolist()
 
@@ -312,6 +353,8 @@ class LocalEmbeddingProvider:
             Список векторов эмбеддингов.
         """
         self._ensure_model()
+        if self._use_fallback or self._model is None:
+            return [self._fallback_embed(t) for t in texts]
         vectors = self._model.encode(texts, normalize_embeddings=True)
         return [v.tolist() for v in vectors]
 

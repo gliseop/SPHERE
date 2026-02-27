@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 from magistry_sim.agents import MockAgentRunner
 from magistry_sim.cases import Case, Vote
+from magistry_sim.config import AgentProfile, ScenarioConfig
 from magistry_sim.cognitive_runner import CognitiveAgentRunner
 from magistry_sim.enums import GovernanceMode, ScenarioId
 from magistry_sim.environment import Environment, SimulationResult
@@ -18,6 +19,27 @@ class TestEnvironment:
         env = Environment(scenario=scenario)
         assert env.state.round == 0
         assert "off_1" in env.state.agents
+
+    def test_initial_reputation_from_scenario_config(self):
+        scenario = ScenarioConfig(
+            id="S0",
+            title="Test",
+            description="Test",
+            agents=[
+                AgentProfile(
+                    id="off_1",
+                    name="Иванов",
+                    position="начальник",
+                    initial_reputation=7.5,
+                )
+            ],
+        )
+        env = Environment(
+            scenario=scenario,
+            governance=GovernanceMode.G0,
+            runner=MockAgentRunner(),
+        )
+        assert env.state.reputation["off_1"].score == 7.5
 
     def test_run_s0_g0(self):
         scenario = get_scenario(ScenarioId.S0)
@@ -229,6 +251,29 @@ class TestObservationPhase:
 
         stream = runner.get_or_create_memory("off_1")
         assert len(stream) >= 1
+
+    def test_llm_call_events_not_observed(self):
+        """Служебные события llm_call не должны попадать в наблюдения."""
+        mock_llm = MagicMock()
+        mock_llm.generate.return_value = MagicMock(text="[]")
+        mock_embedder = MagicMock()
+        mock_embedder.embed.return_value = [0.5] * 8
+
+        runner = CognitiveAgentRunner(
+            llm_provider=mock_llm, embedder=mock_embedder
+        )
+        config = get_scenario(ScenarioId.S0)
+        env = Environment(scenario=config, runner=runner)
+
+        env._deliver_observations(
+            "off_1",
+            prior_events_this_round=[
+                {"agent_id": "biz_1", "event_type": "llm_call", "payload": {}}
+            ],
+        )
+
+        stream = runner.get_or_create_memory("off_1")
+        assert len(stream) == 0
 
     def test_no_observations_with_mock_runner(self):
         """С MockAgentRunner наблюдения не доставляются."""

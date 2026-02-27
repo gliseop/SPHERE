@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
-from rank_bm25 import BM25L
+
+from .bm25 import BM25Like, build_bm25
 
 if TYPE_CHECKING:
     from magistry_sim.llm import EmbeddingProvider, LLMProvider
@@ -82,7 +83,7 @@ class InterviewLibrary:
     def __init__(self) -> None:
         self._interviews: list[Interview] = []
         self._corpus: list[list[str]] = []
-        self._bm25: BM25L | None = None
+        self._bm25: BM25Like | None = None
 
     def __len__(self) -> int:
         return len(self._interviews)
@@ -96,7 +97,7 @@ class InterviewLibrary:
         self._interviews.append(interview)
         tokens = interview.full_text().lower().split()
         self._corpus.append(tokens)
-        self._bm25 = BM25L(self._corpus)
+        self._bm25 = build_bm25(self._corpus)
 
     def sample(self, n: int = 1, seed: int | None = None) -> list[Interview]:
         """Случайная выборка из библиотеки.

@@ -51,6 +51,134 @@ TOOL_DISPATCH = {
     "move_to": move_to,
 }
 
+_OBSERVABLE_EVENT_TYPES: set[str] = {
+    "case_opened",
+    "case_resolved",
+    "proposal_submitted",
+    "note_added",
+    "report_filed",
+    "message_sent",
+    "message",
+    "world_event",
+    "document_created",
+    "position_promoted",
+    "tribunal_verdict",
+}
+
+def format_observation(
+    event: dict[str, Any],
+    state: WorldState,
+    *,
+    observer_id: str,
+) -> str:
+    """Сформировать человекочитаемый текст наблюдения.
+
+    Использует allowlist типов событий и резолвит agent_id в имена.
+    Не включает чувствительные поля (например, содержание сообщений)
+    в наблюдения по умолчанию.
+    """
+
+    def _agent_ref(aid: str) -> str:
+        if not aid:
+            return "кто-то"
+        profile = state.agents.get(aid)
+        if profile is None or not profile.name:
+            return aid
+        return f"{profile.name} ({aid})"
+
+    event_type = str(event.get("event_type", "") or "")
+    actor_id = str(event.get("agent_id", "") or "")
+    payload = event.get("payload", {}) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    actor = _agent_ref(actor_id)
+
+    if event_type == "case_opened":
+        case_id = str(payload.get("case_id", "") or "")
+        title = str(payload.get("title", "") or "").strip()
+        if case_id and title:
+            return f"{actor} открыл дело {case_id}: {title}"
+        if case_id:
+            return f"{actor} открыл дело {case_id}"
+        return f"{actor} открыл новое дело"
+
+    if event_type == "case_resolved":
+        case_id = str(payload.get("case_id", "") or "")
+        decision = str(payload.get("decision", "") or "").strip()
+        if decision and len(decision) > 140:
+            decision = decision[:140].rstrip() + "…"
+        if case_id and decision:
+            return f"{actor} закрыл дело {case_id} (решение: {decision})"
+        if case_id:
+            return f"{actor} закрыл дело {case_id}"
+        return f"{actor} закрыл дело"
+
+    if event_type == "proposal_submitted":
+        case_id = str(payload.get("case_id", "") or "")
+        if case_id:
+            return f"{actor} подал предложение по делу {case_id}"
+        return f"{actor} подал предложение"
+
+    if event_type == "note_added":
+        case_id = str(payload.get("case_id", "") or "")
+        if case_id:
+            return f"{actor} добавил запись в дело {case_id}"
+        return f"{actor} добавил запись"
+
+    if event_type == "report_filed":
+        case_id = str(payload.get("case_id", "") or "")
+        rec = str(payload.get("recommendation", "") or "").strip()
+        suffix = f" (рекомендация: {rec})" if rec else ""
+        if case_id:
+            return f"{actor} подал отчёт по делу {case_id}{suffix}"
+        return f"{actor} подал отчёт{suffix}"
+
+    if event_type in {"message_sent", "message"}:
+        to_id = str(payload.get("to_id", "") or "")
+        is_private = bool(payload.get("private", False))
+        if to_id == observer_id:
+            privacy = "приватное " if is_private else ""
+            return f"{actor} отправил вам {privacy}сообщение"
+        if to_id:
+            return f"{actor} отправил сообщение {_agent_ref(to_id)}"
+        return f"{actor} отправил сообщение"
+
+    if event_type == "world_event":
+        narrative = str(payload.get("narrative", "") or "").strip()
+        if narrative:
+            return f"Мировое событие: {narrative}"
+        return "Произошло мировое событие"
+
+    if event_type == "document_created":
+        title = str(payload.get("title", "") or "").strip()
+        doc_type = str(payload.get("doc_type", "") or "").strip()
+        doc_id = str(payload.get("doc_id", "") or "").strip()
+        label = "документ"
+        if title:
+            label = f"документ «{title}»"
+        elif doc_type:
+            label = f"документ ({doc_type})"
+        suffix = f" ({doc_id})" if doc_id else ""
+        return f"{actor} создал {label}{suffix}"
+
+    if event_type == "position_promoted":
+        title = str(payload.get("title", "") or "").strip()
+        if title:
+            return f"{actor} повышен до «{title}»"
+        return f"{actor} получил повышение"
+
+    if event_type == "tribunal_verdict":
+        case_id = str(payload.get("case_id", "") or "")
+        verdict = str(payload.get("verdict", "") or "").strip()
+        if case_id and verdict:
+            return f"Трибунал вынес вердикт по делу {case_id}: {verdict}"
+        if case_id:
+            return f"Трибунал вынес вердикт по делу {case_id}"
+        return "Трибунал вынес вердикт"
+
+    return ""
+
 
 @dataclass
 class SimulationResult:
@@ -113,7 +241,14 @@ class Environment:
                 for cap in (profile.capabilities or [])
             )
             if not has_governance_capability:
-                self._state.reputation[profile.id] = ReputationRecord()
+                initial_score = (
+                    float(profile.initial_reputation)
+                    if profile.initial_reputation is not None
+                    else 10.0
+                )
+                self._state.reputation[profile.id] = ReputationRecord(
+                    score=initial_score
+                )
 
             res = profile.initial_resources
             self._state.resources.init_agent(
@@ -212,6 +347,10 @@ class Environment:
             return
 
         for event in prior_events_this_round:
+            event_type = str(event.get("event_type", "") or "")
+            if event_type not in _OBSERVABLE_EVENT_TYPES:
+                continue
+
             payload = event.get("payload", {})
             is_private = payload.get("private", False)
             event_agent = event.get("agent_id", "")
@@ -224,12 +363,28 @@ class Environment:
                 if to_id != agent_id:
                     continue
 
-            event_text = (
-                f"{event_agent} выполнил {event.get('event_type', 'действие')}"
+            event_text = self._format_observation(
+                event,
+                observer_id=agent_id,
             )
+            if not event_text:
+                continue
             self._runner.observe(
                 agent_id, event_text, self._state.round
             )
+
+    def _format_observation(
+        self,
+        event: dict[str, Any],
+        *,
+        observer_id: str,
+    ) -> str:
+        """Сформировать человекочитаемый текст наблюдения."""
+        return format_observation(
+            event,
+            self._state,
+            observer_id=observer_id,
+        )
 
     def _generate_needs(self, round_num: int) -> None:
         """Сгенерировать потребности для текущего раунда.
