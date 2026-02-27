@@ -71,15 +71,9 @@ export function RunSelector({ onPlayback, onLive, speed, onSpeedChange, mode, ac
                 {showScenario ? r.scenario : r.name}
                 {showGov ? `/${r.governance}` : ''}
                 {r.seed !== null ? `/s${r.seed}` : ''}
-                {r.variant && (
-                  <span className="badge small info" style={{ marginLeft: '0.35rem' }}>
-                    {r.variant}
-                  </span>
-                )}
               </div>
               <div className="run-item-meta">
                 {r.size_kb} KB
-                {isActive && <span className="badge small success" style={{ marginLeft: '0.35rem' }}>running</span>}
               </div>
             </div>
           )

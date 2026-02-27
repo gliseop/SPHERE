@@ -43,6 +43,8 @@ AGENT_TYPES_DIR = (Path(__file__).parent.parent.parent / "data" / "agent_types")
 AGENT_TYPES_DIR.mkdir(parents=True, exist_ok=True)
 PERSONALITIES_DIR = (Path(__file__).parent.parent.parent / "data" / "personalities").resolve()
 PERSONALITIES_DIR.mkdir(parents=True, exist_ok=True)
+GOVERNANCE_MODES_DIR = (Path(__file__).parent.parent.parent / "data" / "governance_modes").resolve()
+GOVERNANCE_MODES_DIR.mkdir(parents=True, exist_ok=True)
 ARTIFACTS_DIR = (RESULTS_DIR / "artifacts").resolve()
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
@@ -104,10 +106,10 @@ _SCENARIO_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
 
 def _validate_scenario_id(scenario_id: str) -> None:
-    """Проверить идентификатор сценария (UUID или slug).
+    """Проверить идентификатор сценария (S-номер, UUID или slug).
 
     Args:
-        scenario_id: Строка-идентификатор.
+        scenario_id: Строка-идентификатор вида ``S\\d+``, UUID или slug.
 
     Raises:
         HTTPException 400: Если содержит недопустимые символы.
@@ -131,6 +133,60 @@ def _validate_library_id(item_id: str, base_dir: Path, *, kind: str) -> None:
     resolved = (base_dir / f"{item_id}.json").resolve()
     if not str(resolved).startswith(str(base_dir)):
         raise HTTPException(status_code=400, detail=f"Invalid {kind} ID")
+
+
+_S_NUM_RE = re.compile(r"^S(\d+)$")
+_G_NUM_RE = re.compile(r"^G(\d+)$")
+
+
+def _next_s_number() -> str:
+    """Определить следующий свободный S-номер для пользовательского сценария.
+
+    Сканирует файлы S*.json в SCENARIOS_DIR и встроенные сценарии (S0-S6),
+    находит максимальный номер и возвращает ``S{max+1}``.
+
+    Returns:
+        Строка вида ``S7``, ``S8`` и т.д.
+    """
+    from magistry_sim.enums import ScenarioId
+
+    max_num = -1
+    for member in ScenarioId:
+        m = _S_NUM_RE.match(member.value)
+        if m:
+            max_num = max(max_num, int(m.group(1)))
+
+    for p in SCENARIOS_DIR.glob("S*.json"):
+        m = _S_NUM_RE.match(p.stem)
+        if m:
+            max_num = max(max_num, int(m.group(1)))
+
+    return f"S{max_num + 1}"
+
+
+def _next_g_number() -> str:
+    """Определить следующий свободный G-номер для пользовательского режима управления.
+
+    Сканирует файлы G*.json в GOVERNANCE_MODES_DIR и встроенные режимы (G0-G3),
+    находит максимальный номер и возвращает ``G{max+1}``.
+
+    Returns:
+        Строка вида ``G4``, ``G5`` и т.д.
+    """
+    from magistry_sim.enums import GovernanceMode
+
+    max_num = -1
+    for member in GovernanceMode:
+        m = _G_NUM_RE.match(member.value)
+        if m:
+            max_num = max(max_num, int(m.group(1)))
+
+    for p in GOVERNANCE_MODES_DIR.glob("G*.json"):
+        m = _G_NUM_RE.match(p.stem)
+        if m:
+            max_num = max(max_num, int(m.group(1)))
+
+    return f"G{max_num + 1}"
 
 
 def _resolve_seed(value: object | None) -> int:
@@ -418,7 +474,22 @@ def _truncate_json_value(value: Any, *, max_chars: int) -> tuple[Any, bool]:
 
 
 def _event_for_ws(event: dict[str, Any]) -> dict[str, Any]:
-    """Shrink large text fields for WS transport (helps reverse-proxies)."""
+    """Shrink large text fields for WS transport (helps reverse-proxies).
+
+    Для событий ``llm_call`` промпты заменяются на метаданные (длина строк),
+    полные тексты доступны через REST ``GET /api/run/{name}/prompts``.
+    """
+    if event.get("event_type") == "llm_call":
+        payload = event.get("payload", {})
+        return {
+            **{k: v for k, v in event.items() if k != "payload"},
+            "payload": {
+                "call_type": payload.get("call_type", ""),
+                "system_prompt_len": len(payload.get("system_prompt", "")),
+                "user_prompt_len": len(payload.get("user_prompt", "")),
+                "response_len": len(payload.get("response", "")),
+            },
+        }
     if _WS_MAX_STR_CHARS <= 0:
         return event
     trimmed, truncated = _truncate_json_value(event, max_chars=_WS_MAX_STR_CHARS)
@@ -619,6 +690,83 @@ async def get_artifact(doc_id: str, _user: User = Depends(require_viewer)) -> di
     raise HTTPException(status_code=404, detail="Artifact not found")
 
 
+@app.get("/api/run/{name}/scenario")
+async def get_run_scenario(name: str, _user: User = Depends(require_viewer)) -> dict:
+    """Получить конфигурацию сценария для указанного прогона.
+
+    Args:
+        name: Имя прогона.
+        _user: Аутентифицированный пользователь.
+
+    Returns:
+        Конфигурация сценария (ScenarioConfig).
+    """
+    from fastapi import HTTPException
+
+    _validate_run_name(name)
+    path = RESULTS_DIR / f"{name}_scenario.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Scenario config not found for this run")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/run/{name}/prompts")
+async def get_run_prompts(
+    name: str,
+    agent_id: str | None = None,
+    round: int | None = None,
+    timestamp: str | None = None,
+    limit: int = 50,
+    _user: User = Depends(require_viewer),
+) -> list[dict]:
+    """Получить записи вызовов LLM для указанного прогона.
+
+    Args:
+        name: Имя прогона.
+        agent_id: Фильтр по агенту.
+        round: Фильтр по раунду.
+        timestamp: Точный timestamp для однозначного поиска события.
+        limit: Максимальное количество записей.
+        _user: Аутентифицированный пользователь.
+
+    Returns:
+        Список событий llm_call с полными данными промптов.
+    """
+    from fastapi import HTTPException
+
+    _validate_run_name(name)
+    path = RESULTS_DIR / f"{name}_events.jsonl"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    results: list[dict] = []
+    try:
+        async with aiofiles.open(path, encoding="utf-8") as f:
+            async for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("event_type") != "llm_call":
+                    continue
+                if agent_id and event.get("agent_id") != agent_id:
+                    continue
+                if round is not None and event.get("round") != round:
+                    continue
+                if timestamp and event.get("timestamp") != timestamp:
+                    continue
+                results.append(event)
+                if len(results) >= limit:
+                    break
+    except OSError:
+        raise HTTPException(status_code=404, detail="Run file not found")
+
+    return results
+
+
 @app.websocket("/ws/playback/{name}")
 async def ws_playback(
     websocket: WebSocket,
@@ -653,17 +801,26 @@ async def ws_playback(
 
     meta = _parse_run_name(f"{name}_events.jsonl")
     names = _load_names(name)
-    await websocket.send_json({"type": "meta", **meta, "names": names})
+    await websocket.send_json({"type": "meta", **meta, "names": names, "run_name": name})
     builder = GraphStateBuilder()
     _seed_builder_from_names(builder, names)
     await websocket.send_json({"type": "graph_state", **builder.state()})
 
+    last_graph_send = time.monotonic()
+    graph_dirty = False
     try:
         async for event in _stream_events_from_file(path, speed=speed):
             builder.ingest(event)
             await websocket.send_json({"type": "event", "data": _event_for_ws(event)})
-            await websocket.send_json({"type": "graph_state", **builder.state()})
+            graph_dirty = True
+            now = time.monotonic()
+            if now - last_graph_send >= _LIVE_GRAPH_THROTTLE_S:
+                await websocket.send_json({"type": "graph_state", **builder.state()})
+                last_graph_send = now
+                graph_dirty = False
 
+        if graph_dirty:
+            await websocket.send_json({"type": "graph_state", **builder.state()})
         await websocket.send_json({"type": "done"})
         await websocket.close(code=1000)
     except WebSocketDisconnect:
@@ -931,16 +1088,135 @@ async def get_template_scenario(
     if governance:
         try:
             gov = GovernanceMode(governance)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Unknown governance") from exc
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Режим управления '{governance}' не поддерживается движком. "
+                "Кастомные режимы (G4+) пока доступны только как метаданные.",
+            )
         cfg = add_governance_agents(cfg, gov)
 
     return cfg.model_dump(mode="json")
 
 
+class GeneratePersonalityPayload(BaseModel):
+    """Запрос на генерацию профиля личности через LLM."""
+
+    model_config = ConfigDict(strict=False)
+    description: str = Field(..., min_length=5, max_length=2000)
+
+
+@app.post("/api/ai/generate-personality")
+async def generate_personality(
+    payload: GeneratePersonalityPayload,
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Сгенерировать профиль личности (биография, HEXACO, тёмная триада, техники) по описанию.
+
+    Args:
+        payload: Описание желаемой личности (свободный текст).
+        _user: Аутентифицированный пользователь с ролью admin.
+
+    Returns:
+        Словарь с полями biography, hexaco, dark_triad, neutralization_techniques.
+    """
+    from fastapi import HTTPException
+
+    if not _os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(status_code=409, detail="OPENAI_API_KEY is not set")
+
+    if not _os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(status_code=409, detail="OPENAI_API_KEY is not set")
+
+    from magistry_sim.llm import create_provider
+    from magistry_sim.personality import NeutralizationTechnique
+
+    techniques = [t.value for t in NeutralizationTechnique]
+
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "biography": {
+                "type": "string",
+                "minLength": 50,
+                "maxLength": 2000,
+                "description": "Развёрнутая биография персонажа: происхождение, карьера, мотивация, слабости, слепые зоны.",
+            },
+            "hexaco": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "honesty_humility": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "emotionality": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "extraversion": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "agreeableness": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "conscientiousness": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "openness": {"type": "integer", "minimum": 0, "maximum": 100},
+                },
+                "required": [
+                    "honesty_humility", "emotionality", "extraversion",
+                    "agreeableness", "conscientiousness", "openness",
+                ],
+            },
+            "dark_triad": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "narcissism": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "machiavellianism": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "psychopathy": {"type": "integer", "minimum": 0, "maximum": 100},
+                },
+                "required": ["narcissism", "machiavellianism", "psychopathy"],
+            },
+            "neutralization_techniques": {
+                "type": "array",
+                "items": {"type": "string", "enum": techniques},
+                "minItems": 0,
+                "maxItems": len(techniques),
+                "description": "Техники нейтрализации (Sykes & Matza), которыми владеет персонаж.",
+            },
+        },
+        "required": ["biography", "hexaco", "dark_triad", "neutralization_techniques"],
+    }
+
+    system_prompt = (
+        "Ты — эксперт по организационной психологии и криминологии. "
+        "Пользователь описывает желаемый типаж персонажа для симуляции коррупции в госорганах. "
+        "Сгенерируй полный психологический профиль: биографию, параметры HEXACO (0-100), "
+        "тёмную триаду (0-100) и подходящие техники нейтрализации. "
+        "Биография должна быть на русском языке, 3-5 абзацев. "
+        "Параметры должны быть логически согласованы с описанием и биографией."
+    )
+    user_prompt = f"Описание персонажа:\n{payload.description}"
+
+    llm = create_provider(mock=False, cache_path=".llm_cache.db")
+    try:
+        response = llm.generate_structured(
+            system=system_prompt,
+            user=user_prompt,
+            schema=schema,
+            temperature=0.25,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
+
+    return response.data if isinstance(response.data, dict) else {}
+
+
 @app.get("/api/templates/governance")
-async def list_governance_modes(_user: User = Depends(require_viewer)) -> list[dict]:
-    """Вернуть список режимов управления (G0-G3) с пояснениями."""
+async def list_governance_templates(_user: User = Depends(require_viewer)) -> list[dict]:
+    """Вернуть список режимов управления (встроенные G0-G3 и пользовательские).
+
+    Встроенные режимы перечислены статически, пользовательские загружаются
+    из ``GOVERNANCE_MODES_DIR/*.json``.
+
+    Args:
+        _user: Аутентифицированный пользователь (любая роль).
+
+    Returns:
+        Список словарей с полями id, label, description.
+    """
     from magistry_sim.enums import GovernanceMode
 
     labels = {
@@ -956,7 +1232,7 @@ async def list_governance_modes(_user: User = Depends(require_viewer)) -> list[d
         "G3": "Аудитор может инициировать трибунал; решение принимает коллегия присяжных.",
     }
 
-    return [
+    result = [
         {
             "id": mode.value,
             "label": f"{mode.value} — {labels.get(mode.value, mode.value)}",
@@ -964,6 +1240,15 @@ async def list_governance_modes(_user: User = Depends(require_viewer)) -> list[d
         }
         for mode in GovernanceMode
     ]
+
+    for p in sorted(GOVERNANCE_MODES_DIR.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            result.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return result
 
 
 @app.post("/api/ai/secondary-agents")
@@ -992,8 +1277,17 @@ async def generate_secondary_agents(
             base_cfg = ScenarioConfig.model_validate(payload.sim_config)
         else:
             sid = ScenarioId(payload.scenario)
-            gov = GovernanceMode(payload.governance)
+            try:
+                gov = GovernanceMode(payload.governance)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Режим управления '{payload.governance}' не поддерживается движком. "
+                    "Кастомные режимы (G4+) пока доступны только как метаданные.",
+                )
             base_cfg = add_governance_agents(get_scenario(sid), gov)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -1348,6 +1642,9 @@ async def get_scenario(scenario_id: str, _user: User = Depends(require_viewer)) 
 async def create_scenario(payload: ScenarioPayload, _user: User = Depends(require_admin)) -> dict:
     """Создать новый сценарий.
 
+    Автоматически присваивает S-номер (S7, S8, ...) на основе
+    существующих встроенных сценариев (S0-S6) и файлов в SCENARIOS_DIR.
+
     Args:
         payload: Данные сценария.
         _user: Аутентифицированный пользователь с ролью admin.
@@ -1355,7 +1652,7 @@ async def create_scenario(payload: ScenarioPayload, _user: User = Depends(requir
     Returns:
         Сохранённый сценарий с назначенным id.
     """
-    scenario_id = str(uuid.uuid4())
+    scenario_id = _next_s_number()
     data = payload.model_dump(mode="json")
     data["id"] = scenario_id
     path = SCENARIOS_DIR / f"{scenario_id}.json"
@@ -1503,6 +1800,130 @@ async def delete_personality(personality_id: str, _user: User = Depends(require_
     path = PERSONALITIES_DIR / f"{personality_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Personality not found")
+    path.unlink()
+
+
+# ---------------------------------------------------------------------------
+# Governance modes CRUD
+# ---------------------------------------------------------------------------
+
+_BUILTIN_GOVERNANCE_IDS: set[str] = {"G0", "G1", "G2", "G3"}
+
+
+@app.get("/api/governance-modes")
+async def list_governance_modes(_user: User = Depends(require_viewer)) -> list[dict]:
+    """Вернуть список всех режимов управления (встроенные + пользовательские).
+
+    Встроенные режимы (G0-G3) формируются из перечисления GovernanceMode,
+    пользовательские загружаются из ``GOVERNANCE_MODES_DIR/*.json``.
+
+    Args:
+        _user: Аутентифицированный пользователь (любая роль).
+
+    Returns:
+        Список словарей с полями id, label, description.
+    """
+    from magistry_sim.enums import GovernanceMode
+
+    labels = {
+        "G0": "Без контроля",
+        "G1": "Аудитор (рекомендательный)",
+        "G2": "Аудитор (санкции по репутации)",
+        "G3": "Полный контроль (трибунал)",
+    }
+    descriptions = {
+        "G0": "Нет надзора со стороны аудитора или трибунала.",
+        "G1": "Аудитор может наблюдать и давать рекомендации.",
+        "G2": "Аудитор может рекомендовать заморозку репутации участников.",
+        "G3": "Аудитор может инициировать трибунал; решение принимает коллегия присяжных.",
+    }
+
+    result: list[dict] = [
+        {
+            "id": mode.value,
+            "label": f"{mode.value} — {labels.get(mode.value, mode.value)}",
+            "description": descriptions.get(mode.value, ""),
+        }
+        for mode in GovernanceMode
+    ]
+
+    for p in sorted(GOVERNANCE_MODES_DIR.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            result.append(data)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return result
+
+
+@app.post("/api/governance-modes", status_code=201)
+async def create_governance_mode(data: dict, _user: User = Depends(require_admin)) -> dict:
+    """Создать пользовательский режим управления.
+
+    Автоматически присваивает G-номер (G4, G5, ...) на основе
+    существующих встроенных режимов (G0-G3) и файлов в GOVERNANCE_MODES_DIR.
+
+    Args:
+        data: Словарь с полями label и description.
+        _user: Аутентифицированный пользователь с ролью admin.
+
+    Returns:
+        Сохранённый режим управления с назначенным id.
+    """
+    mode_id = _next_g_number()
+    data["id"] = mode_id
+    data["custom"] = True
+    path = GOVERNANCE_MODES_DIR / f"{mode_id}.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+@app.put("/api/governance-modes/{mode_id}")
+async def update_governance_mode(
+    mode_id: str, data: dict, _user: User = Depends(require_admin),
+) -> dict:
+    """Обновить пользовательский режим управления.
+
+    Args:
+        mode_id: Идентификатор режима (G4, G5, ...).
+        data: Новые данные режима.
+        _user: Аутентифицированный пользователь с ролью admin.
+
+    Returns:
+        Обновлённый режим управления.
+    """
+    from fastapi import HTTPException
+
+    _validate_library_id(mode_id, GOVERNANCE_MODES_DIR, kind="governance-mode")
+    if mode_id in _BUILTIN_GOVERNANCE_IDS:
+        raise HTTPException(status_code=403, detail="Cannot modify built-in governance mode")
+    path = GOVERNANCE_MODES_DIR / f"{mode_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Governance mode not found")
+    data["id"] = mode_id
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return data
+
+
+@app.delete("/api/governance-modes/{mode_id}", status_code=204)
+async def delete_governance_mode(mode_id: str, _user: User = Depends(require_admin)) -> None:
+    """Удалить пользовательский режим управления.
+
+    Встроенные режимы (G0-G3) не могут быть удалены.
+
+    Args:
+        mode_id: Идентификатор режима (G4, G5, ...).
+        _user: Аутентифицированный пользователь с ролью admin.
+    """
+    from fastapi import HTTPException
+
+    _validate_library_id(mode_id, GOVERNANCE_MODES_DIR, kind="governance-mode")
+    if mode_id in _BUILTIN_GOVERNANCE_IDS:
+        raise HTTPException(status_code=403, detail="Cannot delete built-in governance mode")
+    path = GOVERNANCE_MODES_DIR / f"{mode_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Governance mode not found")
     path.unlink()
 
 

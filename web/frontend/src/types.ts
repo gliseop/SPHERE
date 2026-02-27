@@ -35,6 +35,7 @@ export interface SimMeta {
   governance: string
   seed: number | null
   variant?: string | null
+  run_name?: string
   names: Record<string, string>   // agent_id -> display name
 }
 

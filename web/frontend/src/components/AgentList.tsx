@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
 import { SUSPICIOUS_THRESHOLD } from '../constants'
 import { getNumber } from '../utils/payload'
@@ -10,6 +10,7 @@ interface Props {
   selectedNode: string | null
   names: Record<string, string>
   onSelect: (id: string) => void
+  scenarioConfig?: Record<string, unknown> | null
 }
 
 function roleLabel(id: string): string {
@@ -46,8 +47,152 @@ function repTooltip(node: GraphNode): string {
   return `Репутация: ${node.reputation.toFixed(1)} (${frozen})${title}${next}`
 }
 
-export function AgentList({ nodes, edges, events, selectedNode, names, onSelect }: Props) {
+function isGovernanceAgent(id: string): boolean {
+  return id === 'auditor' || id.startsWith('aud_') || id.startsWith('juror_')
+}
+
+interface AgentProfile {
+  id: string
+  name?: string
+  position?: string
+  personality?: {
+    biography?: string
+    hexaco?: Record<string, number>
+    dark_triad?: Record<string, number>
+    neutralization_techniques?: string[]
+  }
+  connections?: Array<{ target_id: string; relation: string; strength: number }>
+}
+
+const HEXACO_LABELS: Record<string, string> = {
+  honesty_humility: 'Честность-скромность',
+  emotionality: 'Эмоциональность',
+  extraversion: 'Экстраверсия',
+  agreeableness: 'Доброжелательность',
+  conscientiousness: 'Добросовестность',
+  openness: 'Открытость опыту',
+}
+
+const DARK_TRIAD_LABELS: Record<string, string> = {
+  narcissism: 'Нарциссизм',
+  machiavellianism: 'Макиавеллизм',
+  psychopathy: 'Психопатия',
+}
+
+const TECHNIQUE_LABELS: Record<string, string> = {
+  denial_of_injury: 'Отрицание ущерба',
+  denial_of_victim: 'Отрицание жертвы',
+  condemnation_of_condemners: 'Осуждение осуждающих',
+  appeal_to_higher_loyalties: 'Апелляция к высшим ценностям',
+  denial_of_responsibility: 'Отрицание ответственности',
+  everyone_does_it: '«Все так делают»',
+  claim_of_entitlement: 'Претензия на право',
+  defense_of_necessity: 'Защита необходимостью',
+}
+
+function AgentProfilePanel({ profile, names }: { profile: AgentProfile; names: Record<string, string> }) {
+  const p = profile.personality
+  if (!p) return null
+
+  return (
+    <div className="agent-profile-panel">
+      {profile.position && (
+        <div className="agent-profile-row">
+          <span className="agent-profile-label">Должность</span>
+          <span>{profile.position}</span>
+        </div>
+      )}
+      {p.biography && (
+        <div className="agent-profile-section">
+          <div className="agent-profile-label">Биография</div>
+          <div className="agent-profile-bio">{p.biography}</div>
+        </div>
+      )}
+      {p.hexaco && (
+        <div className="agent-profile-section">
+          <div className="agent-profile-label">HEXACO</div>
+          <div className="agent-profile-traits">
+            {Object.entries(p.hexaco).map(([k, v]) => (
+              <div key={k} className="agent-profile-trait">
+                <span>{HEXACO_LABELS[k] ?? k}</span>
+                <span className="agent-profile-trait-value">{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {p.dark_triad && (
+        <div className="agent-profile-section">
+          <div className="agent-profile-label">Тёмная триада</div>
+          <div className="agent-profile-traits">
+            {Object.entries(p.dark_triad).map(([k, v]) => (
+              <div key={k} className="agent-profile-trait">
+                <span>{DARK_TRIAD_LABELS[k] ?? k}</span>
+                <span className="agent-profile-trait-value">{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {p.neutralization_techniques && p.neutralization_techniques.length > 0 && (
+        <div className="agent-profile-section">
+          <div className="agent-profile-label">Техники нейтрализации</div>
+          <div className="agent-profile-techniques">
+            {p.neutralization_techniques.map((t) => (
+              <span key={t} className="badge small">{TECHNIQUE_LABELS[t] ?? t}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {profile.connections && profile.connections.length > 0 && (
+        <div className="agent-profile-section">
+          <div className="agent-profile-label">Связи</div>
+          <div className="agent-profile-connections">
+            {profile.connections.map((c, i) => (
+              <div key={i} className="agent-profile-connection">
+                <span>{names[c.target_id] ?? c.target_id}</span>
+                <span className="text-muted">{c.relation}</span>
+                <span className={c.strength >= SUSPICIOUS_THRESHOLD ? 'danger' : ''}>{c.strength.toFixed(1)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function AgentList({ nodes, edges, events, selectedNode, names, onSelect, scenarioConfig }: Props) {
   const [expandedRep, setExpandedRep] = useState<string | null>(null)
+
+  const repHistoryMap = useMemo(() => {
+    const map = new Map<string, SimEvent[]>()
+    for (const e of events) {
+      if (e.event_type !== 'reputation_snapshot') continue
+      let arr = map.get(e.agent_id)
+      if (!arr) {
+        arr = []
+        map.set(e.agent_id, arr)
+      }
+      arr.push(e)
+    }
+    // Обрезаем до 40 последних
+    for (const [key, arr] of map) {
+      if (arr.length > 40) map.set(key, arr.slice(-40))
+    }
+    return map
+  }, [events])
+
+  const agentProfiles = useMemo(() => {
+    if (!scenarioConfig) return new Map<string, AgentProfile>()
+    const agents = (scenarioConfig as { agents?: AgentProfile[] }).agents
+    if (!Array.isArray(agents)) return new Map<string, AgentProfile>()
+    const map = new Map<string, AgentProfile>()
+    for (const a of agents) {
+      if (a.id) map.set(a.id, a)
+    }
+    return map
+  }, [scenarioConfig])
 
   if (nodes.length === 0) {
     return (
@@ -62,6 +207,10 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect 
     const br = b.has_reputation === false ? Number.NEGATIVE_INFINITY : b.reputation
     return br - ar
   })
+
+  const selectedProfile = selectedNode && !isGovernanceAgent(selectedNode)
+    ? agentProfiles.get(selectedNode) ?? null
+    : null
 
   return (
     <div className="agent-list">
@@ -83,9 +232,7 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect 
         )
         const isExpanded = expandedRep === node.id
 
-        const repHistory = events
-          .filter((e) => e.event_type === 'reputation_snapshot' && e.agent_id === node.id)
-          .slice(-40)
+        const repHistory = repHistoryMap.get(node.id) ?? []
 
         const totalDelta = repHistory.reduce(
           (sum, ev) => sum + (getNumber(ev.payload, 'delta') ?? 0),
@@ -179,6 +326,10 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect 
           </div>
         )
       })}
+
+      {selectedProfile && (
+        <AgentProfilePanel profile={selectedProfile} names={names} />
+      )}
     </div>
   )
 }

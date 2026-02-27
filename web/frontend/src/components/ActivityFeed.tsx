@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SimEvent, SimMeta, ThreadGroup } from '../types'
-import { getString, getBool } from '../utils/payload'
+import { getString, getBool, getNumber } from '../utils/payload'
 import { toDayKey, formatDayLabel } from '../utils/time'
 import { Markdown } from './Markdown'
+import { apiClient } from '../utils/apiClient'
 
 interface Props {
   events: SimEvent[]
@@ -12,6 +13,7 @@ interface Props {
   selectedAgent: string | null
   onClearFilter?: () => void
   focusDay?: string | null
+  runName?: string | null
 }
 
 interface DayGroup {
@@ -74,6 +76,38 @@ function CollapsibleMarkdown({ content, className }: { content: string; classNam
       <Markdown content={content} className={className} />
     </details>
   )
+}
+
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  case_opened: 'дело открыто',
+  case_resolved: 'дело закрыто',
+  case_modified: 'дело изменено',
+  case_frozen: 'дело заморожено',
+  funds_transferred: 'перевод средств',
+  evidence_added: 'улика добавлена',
+  evidence_removed: 'улика удалена',
+  reputation_modified: 'репутация изменена',
+  reputation_frozen: 'репутация заморожена',
+  graph_updated: 'связь обновлена',
+  complaint_filed: 'жалоба подана',
+  tribunal_formed: 'трибунал созван',
+  tribunal_verdict: 'вердикт трибунала',
+  vote_cast: 'голос отдан',
+  agent_moved: 'агент перемещён',
+  need_created: 'потребность создана',
+  proposal_submitted: 'предложение подано',
+  note_added: 'заметка добавлена',
+  report_filed: 'отчёт подан',
+  position_promoted: 'повышение',
+  arbiter_op_failed: 'ошибка арбитра',
+  arbiter_approved: 'арбитр одобрил',
+  arbiter_rejected: 'арбитр отклонил',
+  agent_error: 'ошибка агента',
+  llm_call: 'вызов LLM',
+}
+
+function eventTypeLabel(eventType: string): string {
+  return EVENT_TYPE_LABELS[eventType] ?? eventType.replace(/_/g, ' ')
 }
 
 function channelIcon(channel: string): string {
@@ -208,7 +242,7 @@ function ThreadView({
         <span className="thread-participants">
           {thread.participants.map((id) => dn(id, names)).join(' • ')}
         </span>
-        {thread.private && <span className="private-badge">🔒 private</span>}
+        {thread.private && <span className="private-badge">приватный</span>}
         {headerTime && <span className="activity-time">{headerTime}</span>}
       </div>
       <div className="thread-bubbles">
@@ -273,16 +307,91 @@ function DocumentView({
   )
 }
 
+function PromptModal({
+  runName,
+  agentId,
+  round,
+  timestamp,
+  names,
+  onClose,
+}: {
+  runName: string
+  agentId: string
+  round: number | null
+  timestamp?: string
+  names: Record<string, string>
+  onClose: () => void
+}) {
+  const [data, setData] = useState<{ system_prompt: string; user_prompt: string; response: string } | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const params = new URLSearchParams()
+    if (agentId) params.set('agent_id', agentId)
+    if (round !== null) params.set('round', String(round))
+    if (timestamp) params.set('timestamp', timestamp)
+    params.set('limit', '1')
+    apiClient.get(`/api/run/${runName}/prompts?${params}`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((arr) => {
+        if (Array.isArray(arr) && arr.length > 0) {
+          const p = arr[0].payload ?? arr[0]
+          setData({
+            system_prompt: p.system_prompt ?? '',
+            user_prompt: p.user_prompt ?? '',
+            response: p.response ?? '',
+          })
+        }
+      })
+      .finally(() => setLoading(false))
+  }, [runName, agentId, round])
+
+  return (
+    <div className="prompt-modal-overlay" onClick={onClose}>
+      <div className="prompt-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="prompt-modal-header">
+          <span>Промпт — {dn(agentId, names)}{round !== null ? ` (R${round})` : ''}</span>
+          <button className="btn-clipped small" onClick={onClose}>✕</button>
+        </div>
+        {loading ? (
+          <div className="text-muted" style={{ padding: '1rem' }}>Загрузка...</div>
+        ) : data ? (
+          <div className="prompt-modal-content">
+            <div className="prompt-section">
+              <div className="prompt-section-label">Системный промпт</div>
+              <pre className="prompt-text">{data.system_prompt}</pre>
+            </div>
+            <div className="prompt-section">
+              <div className="prompt-section-label">Пользовательский промпт</div>
+              <pre className="prompt-text">{data.user_prompt}</pre>
+            </div>
+            <div className="prompt-section">
+              <div className="prompt-section-label">Ответ модели</div>
+              <pre className="prompt-text">{data.response}</pre>
+            </div>
+          </div>
+        ) : (
+          <div className="text-muted" style={{ padding: '1rem' }}>Промпт не найден</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function EventView({
   event,
   names,
   docExpanded,
   onToggleDoc,
+  runName,
+  onShowPrompt,
 }: {
   event: SimEvent
   names: Record<string, string>
   docExpanded: boolean
   onToggleDoc: (docId: string) => void
+  runName?: string | null
+  onShowPrompt?: (agentId: string, round: number | null, timestamp?: string) => void
 }) {
   const { event_type, agent_id, payload, timestamp } = event
   if (event_type === 'document_created') {
@@ -345,9 +454,35 @@ function EventView({
     )
   }
 
+  if (event_type === 'llm_call') {
+    const callType = getString(payload, 'call_type')
+    const sysLen = getNumber(payload, 'system_prompt_len') ?? 0
+    const usrLen = getNumber(payload, 'user_prompt_len') ?? 0
+    const respLen = getNumber(payload, 'response_len') ?? 0
+    return (
+      <div className="activity-item generic llm-call">
+        <span className="badge small accent">{callType === 'reply' ? 'LLM ответ' : 'LLM ход'}</span>
+        <span className="activity-agent text-muted">{dn(agent_id, names)}</span>
+        <span className="text-muted" style={{ fontSize: '0.55rem' }}>
+          sys:{sysLen} usr:{usrLen} resp:{respLen}
+        </span>
+        {timestamp && <span className="activity-time">{fmtTime(timestamp)}</span>}
+        {runName && onShowPrompt && (
+          <button
+            className="prompt-view-btn"
+            onClick={() => onShowPrompt(agent_id, event.round ?? null, timestamp)}
+            title="Посмотреть полный промпт"
+          >
+            {'{ }'}
+          </button>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="activity-item generic">
-      <span className="badge small">{event_type.replace(/_/g, ' ')}</span>
+      <span className="badge small">{eventTypeLabel(event_type)}</span>
       <span className="activity-agent text-muted">{dn(agent_id, names)}</span>
       {timestamp && <span className="activity-time">{fmtTime(timestamp)}</span>}
     </div>
@@ -362,11 +497,17 @@ export function ActivityFeed({
   selectedAgent,
   onClearFilter,
   focusDay,
+  runName,
 }: Props) {
   const [openDocs, setOpenDocs] = useState<Record<string, boolean>>({})
+  const [promptTarget, setPromptTarget] = useState<{ agentId: string; round: number | null; timestamp?: string } | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const pausedRef = useRef(false)
+
+  const handleShowPrompt = useCallback((agentId: string, round: number | null, timestamp?: string) => {
+    setPromptTarget({ agentId, round, timestamp })
+  }, [])
 
   const filtered = useMemo(() => {
     const noIdle = events.filter((e) => e.event_type !== 'idle' && e.event_type !== 'reputation_snapshot')
@@ -472,6 +613,8 @@ export function ActivityFeed({
                   names={names}
                   docExpanded={Boolean(openDocs[docId])}
                   onToggleDoc={toggleDoc}
+                  runName={runName}
+                  onShowPrompt={handleShowPrompt}
                 />
               )
             })}
@@ -479,6 +622,16 @@ export function ActivityFeed({
         ))}
         <div ref={bottomRef} />
       </div>
+      {promptTarget && runName && (
+        <PromptModal
+          runName={runName}
+          agentId={promptTarget.agentId}
+          round={promptTarget.round}
+          timestamp={promptTarget.timestamp}
+          names={names}
+          onClose={() => setPromptTarget(null)}
+        />
+      )}
     </div>
   )
 }

@@ -7,6 +7,7 @@ import { Timeline } from './components/RoundScrubber'
 import { ActivityFeed } from './components/ActivityFeed'
 import { RunSelector } from './components/RunSelector'
 import { AgentList } from './components/AgentList'
+import { ScenarioPanel } from './components/ScenarioPanel'
 import { ScenariosView } from './components/ScenariosView'
 import { RunsView } from './components/RunsView'
 import { AgentTypesView } from './components/AgentTypesView'
@@ -64,6 +65,9 @@ export default function App() {
   const [speed, setSpeed] = useState(3.0)
   const [focusDay, setFocusDay] = useState<string | null>(null)
   const [activeRuns, setActiveRuns] = useState<Array<{ run_name: string; pid: number; status: 'running' | 'finished'; returncode?: number }>>([])
+  const [rightTab, setRightTab] = useState<'activity' | 'scenario'>('activity')
+  const [scenarioConfig, setScenarioConfig] = useState<Record<string, unknown> | null>(null)
+  const [currentRunName, setCurrentRunName] = useState<string | null>(null)
 
   useEffect(() => {
     if (!auth.isAuthenticated) return
@@ -78,6 +82,19 @@ export default function App() {
     const interval = setInterval(poll, 5_000)
     return () => clearInterval(interval)
   }, [auth.isAuthenticated, view, mode])
+
+  useEffect(() => {
+    const runName = state.meta?.run_name ?? null
+    setCurrentRunName(runName)
+    if (!runName) {
+      setScenarioConfig(null)
+      return
+    }
+    apiClient.get(`/api/run/${encodeURIComponent(runName)}/scenario`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => setScenarioConfig(data))
+      .catch(() => setScenarioConfig(null))
+  }, [state.meta?.run_name])
 
   const [leftWidth, setLeftWidth] = useState<number>(() => {
     const stored = localStorage.getItem('magistry-left-w')
@@ -327,6 +344,7 @@ export default function App() {
                       selectedNode={selectedNode}
                       names={state.names}
                       onSelect={(id) => setSelectedNode(id || null)}
+                      scenarioConfig={scenarioConfig}
                     />
                   </div>
                 </>
@@ -365,15 +383,65 @@ export default function App() {
                 {rightCollapsed ? '◀' : '▶'}
               </button>
               {!rightCollapsed && (
-                <ActivityFeed
-                  events={state.events}
-                  names={state.names}
-                  mode={mode}
-                  meta={state.meta}
-                  selectedAgent={selectedNode}
-                  onClearFilter={() => setSelectedNode(null)}
-                  focusDay={focusDay}
-                />
+                <>
+                  <div style={{
+                    display: 'flex',
+                    gap: 0,
+                    borderBottom: '1px solid var(--border)',
+                    background: 'var(--surface-1)',
+                    flexShrink: 0,
+                  }}>
+                    <button
+                      onClick={() => setRightTab('activity')}
+                      style={{
+                        flex: 1,
+                        padding: '0.35rem 0.5rem',
+                        fontSize: '0.65rem',
+                        fontWeight: rightTab === 'activity' ? 600 : 400,
+                        color: rightTab === 'activity' ? 'var(--accent)' : 'var(--text-secondary)',
+                        background: 'transparent',
+                        border: 'none',
+                        borderBottom: rightTab === 'activity' ? '2px solid var(--accent)' : '2px solid transparent',
+                        cursor: 'pointer',
+                        transition: 'color 0.15s, border-color 0.15s',
+                      }}
+                    >
+                      Активность
+                    </button>
+                    <button
+                      onClick={() => setRightTab('scenario')}
+                      style={{
+                        flex: 1,
+                        padding: '0.35rem 0.5rem',
+                        fontSize: '0.65rem',
+                        fontWeight: rightTab === 'scenario' ? 600 : 400,
+                        color: rightTab === 'scenario' ? 'var(--accent)' : 'var(--text-secondary)',
+                        background: 'transparent',
+                        border: 'none',
+                        borderBottom: rightTab === 'scenario' ? '2px solid var(--accent)' : '2px solid transparent',
+                        cursor: 'pointer',
+                        transition: 'color 0.15s, border-color 0.15s',
+                      }}
+                    >
+                      Сценарий
+                    </button>
+                  </div>
+                  {rightTab === 'activity' && (
+                    <ActivityFeed
+                      events={state.events}
+                      names={state.names}
+                      mode={mode}
+                      meta={state.meta}
+                      selectedAgent={selectedNode}
+                      onClearFilter={() => setSelectedNode(null)}
+                      focusDay={focusDay}
+                      runName={currentRunName}
+                    />
+                  )}
+                  {rightTab === 'scenario' && (
+                    <ScenarioPanel runName={currentRunName} />
+                  )}
+                </>
               )}
             </aside>
           </div>

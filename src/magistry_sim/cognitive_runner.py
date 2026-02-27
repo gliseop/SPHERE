@@ -349,6 +349,19 @@ class CognitiveAgentRunner:
         )
         response = self._llm.generate(system=system_prompt, user=user_prompt)
 
+        if hasattr(state, "event_log") and state.event_log is not None:
+            state.event_log.log(
+                round=current_round,
+                event_type="llm_call",
+                agent_id=agent_id,
+                payload={
+                    "call_type": "turn",
+                    "system_prompt": system_prompt,
+                    "user_prompt": user_prompt,
+                    "response": response.text,
+                },
+            )
+
         if self._verbose:
             logger.info(
                 "[%s] Cognitive LLM response:\n%s",
@@ -417,6 +430,20 @@ class CognitiveAgentRunner:
             f"Сообщение от {sender_id}: {message}\n\nКонтекст: {context}"
         )
         response = self._llm.generate(system=system_prompt, user=user_prompt)
+
+        if hasattr(state, "event_log") and state.event_log is not None:
+            state.event_log.log(
+                round=state.round,
+                event_type="llm_call",
+                agent_id=agent_id,
+                payload={
+                    "call_type": "reply",
+                    "system_prompt": system_prompt,
+                    "user_prompt": user_prompt,
+                    "response": response.text,
+                },
+            )
+
         return response.text.strip()
 
     # ------------------------------------------------------------------

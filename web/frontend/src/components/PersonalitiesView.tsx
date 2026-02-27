@@ -112,6 +112,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
   const [editing, setEditing] = useState<Personality | null>(null)
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [generating, setGenerating] = useState(false)
 
   useEffect(() => {
     apiClient.get('/api/personalities')
@@ -166,6 +167,41 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
     }
   }
 
+  async function handleGenerate() {
+    if (!editing || !editing.description?.trim()) return
+    setGenerating(true)
+    try {
+      const res = await apiClient.post('/api/ai/generate-personality', {
+        description: editing.description.trim(),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        window.alert(text || 'Не удалось сгенерировать профиль')
+        return
+      }
+      const data = await res.json().catch(() => null)
+      if (!data || typeof data !== 'object') return
+      setEditing((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          biography: typeof data.biography === 'string' ? data.biography : prev.biography,
+          hexaco: data.hexaco && typeof data.hexaco === 'object'
+            ? { ...prev.hexaco, ...data.hexaco }
+            : prev.hexaco,
+          dark_triad: data.dark_triad && typeof data.dark_triad === 'object'
+            ? { ...prev.dark_triad, ...data.dark_triad }
+            : prev.dark_triad,
+          neutralization_techniques: Array.isArray(data.neutralization_techniques)
+            ? data.neutralization_techniques
+            : prev.neutralization_techniques,
+        }
+      })
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   async function handleDelete(id: string) {
     if (!window.confirm('Удалить личность? Это действие необратимо.')) return
     await apiClient.delete(`/api/personalities/${id}`)
@@ -202,13 +238,25 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
           </div>
 
           <div className="form-field">
-            <label>Описание</label>
+            <div className="form-field-header">
+              <label>Описание</label>
+              {user?.role === 'admin' && (
+                <button
+                  className="btn-clipped primary small"
+                  onClick={handleGenerate}
+                  disabled={generating || !editing.description?.trim()}
+                  title="Сгенерировать биографию, HEXACO, тёмную триаду и техники нейтрализации по описанию (LLM)"
+                >
+                  {generating ? '…' : 'Сгенерировать профиль'}
+                </button>
+              )}
+            </div>
             <textarea
               className="hud-input"
               rows={2}
               value={editing.description ?? ''}
               onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-              placeholder="Коротко: для каких ролей и поведения"
+              placeholder="Опишите типаж: роль, поведение, мотивация (минимум 5 символов для генерации)"
             />
           </div>
 
