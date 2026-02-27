@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import type { SimEvent } from '../types'
 import { toDayKey, formatDayLabel } from '../utils/time'
 
@@ -14,21 +15,22 @@ interface Props {
 }
 
 export function Timeline({ events, focusDay, onDayClick }: Props) {
-  const countByDay = new Map<string, number>()
-  for (const event of events) {
-    const key = toDayKey(event)
-    countByDay.set(key, (countByDay.get(key) ?? 0) + 1)
-  }
+  const points: TimelinePoint[] = useMemo(() => {
+    const countByDay = new Map<string, number>()
+    for (const event of events) {
+      const key = toDayKey(event)
+      countByDay.set(key, (countByDay.get(key) ?? 0) + 1)
+    }
+    return [...countByDay.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, count]) => ({
+        key,
+        label: formatDayLabel(key),
+        count,
+      }))
+  }, [events])
 
-  const points: TimelinePoint[] = [...countByDay.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, count]) => ({
-      key,
-      label: formatDayLabel(key),
-      count,
-    }))
-
-  const maxCount = points.reduce((m, p) => Math.max(m, p.count), 1)
+  const maxCount = useMemo(() => points.reduce((m, p) => Math.max(m, p.count), 1), [points])
 
   if (points.length === 0) {
     return (

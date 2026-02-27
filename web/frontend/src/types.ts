@@ -42,8 +42,10 @@ export interface SimMeta {
 export type WsMessage =
   | ({ type: 'meta' } & SimMeta)
   | { type: 'event'; data: SimEvent }
+  | { type: 'events'; data: SimEvent[] }
   | { type: 'graph_state'; nodes: GraphNode[]; edges: GraphEdge[] }
   | { type: 'done' }
+  | { type: 'ping'; t?: number }
   | { type: 'error'; message: string }
 
 export interface RunInfo {

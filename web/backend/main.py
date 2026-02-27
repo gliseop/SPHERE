@@ -85,6 +85,23 @@ try:
 except ValueError:
     _LIVE_GRAPH_THROTTLE_S = 0.25
 
+try:
+    _WS_EVENT_BATCH_SIZE = max(1, int(_os.environ.get("MAGISTRY_WS_EVENT_BATCH_SIZE", "50")))
+except ValueError:
+    _WS_EVENT_BATCH_SIZE = 50
+
+try:
+    _WS_EVENT_BATCH_INTERVAL_S = max(0.02, float(_os.environ.get("MAGISTRY_WS_EVENT_BATCH_INTERVAL_S", "0.15")))
+except ValueError:
+    _WS_EVENT_BATCH_INTERVAL_S = 0.15
+
+_drop_raw = (_os.environ.get("MAGISTRY_WS_DROP_EVENT_TYPES", "idle") or "").strip()
+_WS_DROP_EVENT_TYPES = (
+    {t.strip() for t in _drop_raw.split(",") if t.strip()}
+    if _drop_raw
+    else set()
+)
+
 
 def _validate_run_name(name: str) -> None:
     """Проверить имя прогона на допустимые символы и path traversal.
@@ -534,6 +551,26 @@ def _event_for_ws(
     return result
 
 
+def _ws_should_send_event(event: dict[str, Any]) -> bool:
+    event_type = str(event.get("event_type") or "")
+    if not event_type:
+        return False
+    return event_type not in _WS_DROP_EVENT_TYPES
+
+
+async def _ws_flush_events(
+    websocket: WebSocket,
+    pending: list[dict[str, Any]],
+) -> None:
+    if not pending:
+        return
+    if len(pending) == 1:
+        await websocket.send_json({"type": "event", "data": pending[0]})
+    else:
+        await websocket.send_json({"type": "events", "data": pending})
+    pending.clear()
+
+
 async def _bootstrap_graph_from_file(
     path: Path,
     builder: GraphStateBuilder,
@@ -864,6 +901,51 @@ async def get_run_prompts(
     return results
 
 
+@app.get("/api/debug/llm-log")
+async def get_llm_debug_log(
+    limit: int = 200,
+    _user: User = Depends(require_admin),
+) -> list[dict]:
+    """Вернуть хвост debug-лога LLM (JSONL).
+
+    Лог пишется провайдером ``magistry_sim.llm.OpenAICompatibleProvider``
+    в файл ``results/llm_debug.jsonl`` (или ``MAGISTRY_LLM_LOG_PATH``).
+    """
+    try:
+        limit = max(0, min(2_000, int(limit)))
+    except Exception:
+        limit = 200
+    raw_path = (_os.environ.get("MAGISTRY_LLM_LOG_PATH") or "").strip()
+    path = Path(raw_path).expanduser() if raw_path else (RESULTS_DIR / "llm_debug.jsonl")
+    if limit <= 0 or not path.exists():
+        return []
+
+    try:
+        with open(path, "rb") as f:  # noqa: WPS515
+            f.seek(0, 2)
+            pos = f.tell()
+            buf = bytearray()
+            need_lines = limit + 1
+            while pos > 0 and buf.count(b"\n") < need_lines:
+                step = min(64 * 1024, pos)
+                pos -= step
+                f.seek(pos)
+                buf[:0] = f.read(step)
+            lines = bytes(buf).splitlines()[-limit:]
+    except OSError:
+        return []
+
+    out: list[dict] = []
+    for line in lines:
+        try:
+            item = json.loads(line.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            out.append(item)
+    return out
+
+
 @app.websocket("/ws/playback/{name}")
 async def ws_playback(
     websocket: WebSocket,
@@ -905,17 +987,29 @@ async def ws_playback(
 
     last_graph_send = time.monotonic()
     graph_dirty = False
+    pending: list[dict[str, Any]] = []
+    pending_since = time.monotonic()
     try:
         async for event in _stream_events_from_file(path, speed=speed):
             builder.ingest(event)
-            await websocket.send_json({"type": "event", "data": _event_for_ws(event, names)})
+            if _ws_should_send_event(event):
+                pending.append(_event_for_ws(event, names))
             graph_dirty = True
             now = time.monotonic()
+            if pending and (
+                len(pending) >= _WS_EVENT_BATCH_SIZE
+                or (now - pending_since) >= _WS_EVENT_BATCH_INTERVAL_S
+            ):
+                await _ws_flush_events(websocket, pending)
+                pending_since = now
             if now - last_graph_send >= _LIVE_GRAPH_THROTTLE_S:
+                await _ws_flush_events(websocket, pending)
+                pending_since = now
                 await websocket.send_json({"type": "graph_state", **builder.state()})
                 last_graph_send = now
                 graph_dirty = False
 
+        await _ws_flush_events(websocket, pending)
         if graph_dirty:
             await websocket.send_json({"type": "graph_state", **builder.state()})
         await websocket.send_json({"type": "done"})
@@ -955,6 +1049,8 @@ async def ws_live(
     last_send = time.monotonic()
     last_graph_send = 0.0
     graph_dirty = False
+    pending: list[dict[str, Any]] = []
+    pending_since = time.monotonic()
 
     try:
         if run_name:
@@ -1012,6 +1108,7 @@ async def ws_live(
                 _seed_builder_from_names(builder, names)
                 bootstrapped = False
                 graph_dirty = False
+                pending.clear()
                 meta = _parse_run_name(f"{target_run}_events.jsonl")
                 await websocket.send_json(
                     {"type": "meta", **meta, "names": names, "run_name": target_run}
@@ -1019,6 +1116,7 @@ async def ws_live(
                 await websocket.send_json({"type": "graph_state", **builder.state()})
                 last_send = time.monotonic()
                 last_graph_send = last_send
+                pending_since = last_send
 
             if watched_path and not watched_path.exists():
                 now = time.monotonic()
@@ -1043,11 +1141,23 @@ async def ws_live(
                 await websocket.send_json({"type": "graph_state", **builder.state()})
                 last_send = time.monotonic()
                 last_graph_send = last_send
+                pending.clear()
+                pending_since = last_send
                 for ev in tail_events:
-                    await websocket.send_json(
-                        {"type": "event", "data": _event_for_ws(ev, names)}
-                    )
+                    if _ws_should_send_event(ev):
+                        pending.append(_event_for_ws(ev, names))
+                    now = time.monotonic()
+                    if pending and (
+                        len(pending) >= _WS_EVENT_BATCH_SIZE
+                        or (now - pending_since) >= _WS_EVENT_BATCH_INTERVAL_S
+                    ):
+                        await _ws_flush_events(websocket, pending)
+                        last_send = time.monotonic()
+                        pending_since = last_send
+                if pending:
+                    await _ws_flush_events(websocket, pending)
                     last_send = time.monotonic()
+                    pending_since = last_send
                 bootstrapped = True
 
             try:
@@ -1075,14 +1185,21 @@ async def ws_live(
                                 except json.JSONDecodeError:
                                     continue
                                 builder.ingest(event)
-                                await websocket.send_json(
-                                    {"type": "event", "data": _event_for_ws(event, names)}
-                                )
-                                last_send = time.monotonic()
+                                if _ws_should_send_event(event):
+                                    pending.append(_event_for_ws(event, names))
+                                    if len(pending) >= _WS_EVENT_BATCH_SIZE:
+                                        await _ws_flush_events(websocket, pending)
+                                        last_send = time.monotonic()
+                                        pending_since = last_send
                                 graph_dirty = True
 
                         now = time.monotonic()
+                        if pending and (now - pending_since) >= _WS_EVENT_BATCH_INTERVAL_S:
+                            await _ws_flush_events(websocket, pending)
+                            last_send = time.monotonic()
+                            pending_since = last_send
                         if graph_dirty and (now - last_graph_send) >= _LIVE_GRAPH_THROTTLE_S:
+                            await _ws_flush_events(websocket, pending)
                             await websocket.send_json(
                                 {"type": "graph_state", **builder.state()}
                             )

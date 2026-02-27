@@ -137,6 +137,25 @@ function belongsToAgent(event: SimEvent, agentId: string): boolean {
   return false
 }
 
+const MAX_VISIBLE_EVENTS = 2_000
+
+function takeTail(
+  events: SimEvent[],
+  predicate: (event: SimEvent) => boolean,
+  limit: number,
+): SimEvent[] {
+  if (limit <= 0) return []
+  const out: SimEvent[] = []
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i]
+    if (!predicate(e)) continue
+    out.push(e)
+    if (out.length >= limit) break
+  }
+  out.reverse()
+  return out
+}
+
 function buildEntries(events: SimEvent[]): DayItem[] {
   // Pass 1: collect all messages by thread_id
   const threadMessages = new Map<string, SimEvent[]>()
@@ -511,34 +530,26 @@ export function ActivityFeed({
     setPromptTarget({ agentId, round, timestamp })
   }, [])
 
-  const filtered = useMemo(() => {
-    const noIdle = events.filter((e) => e.event_type !== 'idle' && e.event_type !== 'reputation_snapshot')
-    if (!selectedAgent) return noIdle
-    return noIdle.filter((event) => belongsToAgent(event, selectedAgent))
+  const visible = useMemo(() => {
+    const base = (e: SimEvent) => e.event_type !== 'idle' && e.event_type !== 'reputation_snapshot'
+    if (!selectedAgent) return takeTail(events, base, MAX_VISIBLE_EVENTS)
+    return takeTail(
+      events,
+      (e) => base(e) && belongsToAgent(e, selectedAgent),
+      MAX_VISIBLE_EVENTS,
+    )
   }, [events, selectedAgent])
 
-  const sorted = useMemo(() => {
-    return [...filtered].sort((a, b) => {
-      const ta = toMillis(eventTimestamp(a))
-      const tb = toMillis(eventTimestamp(b))
-      if (!Number.isNaN(ta) && !Number.isNaN(tb) && ta !== tb) return ta - tb
-      if (typeof a.round === 'number' && typeof b.round === 'number' && a.round !== b.round) {
-        return a.round - b.round
-      }
-      return 0
-    })
-  }, [filtered])
-
   const grouped = useMemo(() => {
-    const entries = buildEntries(sorted)
+    const entries = buildEntries(visible)
     return groupByDayAndHour(entries)
-  }, [sorted])
+  }, [visible])
 
   useEffect(() => {
     if (!pausedRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [events.length, selectedAgent])
+  }, [visible.length, selectedAgent])
 
   useEffect(() => {
     if (!focusDay || !scrollRef.current) return
@@ -563,7 +574,12 @@ export function ActivityFeed({
   return (
     <div className="activity-feed">
       <div className="activity-feed-header">
-        <span>Активность{selectedAgent ? ` — ${dn(selectedAgent, names)}` : ''}</span>
+        <span>
+          Активность{selectedAgent ? ` — ${dn(selectedAgent, names)}` : ''}
+          <span className="text-muted" style={{ fontSize: '0.6rem', marginLeft: '0.5rem' }}>
+            {events.length > visible.length ? `показаны последние ${visible.length}` : `${visible.length}`}
+          </span>
+        </span>
         {selectedAgent && onClearFilter && (
           <button
             className="btn-clipped small"

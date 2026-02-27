@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as d3 from 'd3'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
 import { SUSPICIOUS_THRESHOLD } from '../constants'
@@ -63,18 +63,39 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
   const lastEventRef = useRef<SimEvent | null>(null)
   const [tooltip, setTooltip] = useState<{ node: D3Node; x: number; y: number } | null>(null)
   const selectedRef = useRef(selectedNode)
+  const privateEdgesRef = useRef<Set<string>>(new Set())
+  const lastPrivateEventRef = useRef<SimEvent | null>(null)
 
-  // Строим Set приватных рёбер из событий
-  const privateEdges = useMemo(() => {
-    const edgesSet = new Set<string>()
-    for (const e of events) {
+  // Собираем Set приватных рёбер инкрементально (чтобы не сканировать все события на каждый рендер).
+  useEffect(() => {
+    if (events.length === 0) {
+      privateEdgesRef.current = new Set()
+      lastPrivateEventRef.current = null
+      return
+    }
+
+    const lastProcessed = lastPrivateEventRef.current
+    let startIdx = 0
+    if (lastProcessed) {
+      // Ищем с конца — обычно попадание рядом с хвостом.
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i] === lastProcessed) {
+          startIdx = i + 1
+          break
+        }
+      }
+    }
+
+    const set = privateEdgesRef.current
+    for (let i = startIdx; i < events.length; i++) {
+      const e = events[i]
       if ((e.event_type === 'message_sent' || e.event_type === 'message') && getBool(e.payload, 'private')) {
         const from = e.agent_id
         const to = getString(e.payload, 'to_id')
-        if (from && to) edgesSet.add([from, to].sort().join('|'))
+        if (from && to) set.add([from, to].sort().join('|'))
       }
     }
-    return edgesSet
+    lastPrivateEventRef.current = events[events.length - 1] ?? null
   }, [events])
 
   // Синхронизируем ref selectedNode чтобы tick не захватывал устаревший closure
@@ -228,7 +249,7 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
       source: e.source,
       target: e.target,
       strength: e.strength,
-      isPrivate: privateEdges.has([e.source, e.target].sort().join('|')),
+      isPrivate: privateEdgesRef.current.has([e.source, e.target].sort().join('|')),
     }))
 
     // === РЁБРА ===

@@ -38,14 +38,14 @@ export function AgentPanel({ nodeId, nodes, edges, events }: Props) {
   const connections = edges
     .filter((e) => e.source === nodeId || e.target === nodeId)
     .sort((a, b) => b.strength - a.strength)
-  const messages = events
-    .filter(
-      (e) =>
-        (e.event_type === 'message_sent' || e.event_type === 'message') &&
-        (e.agent_id === nodeId || getString(e.payload, 'to_id') === nodeId)
-    )
-    .slice(-20)
-    .reverse()
+  const messages: SimEvent[] = []
+  for (let i = events.length - 1; i >= 0 && messages.length < 20; i--) {
+    const e = events[i]
+    if (e.event_type !== 'message_sent' && e.event_type !== 'message') continue
+    if (e.agent_id !== nodeId && getString(e.payload, 'to_id') !== nodeId) continue
+    messages.push(e)
+  }
+  messages.reverse()
 
   const suspiciousCount = connections.filter((c) => c.strength >= SUSPICIOUS_THRESHOLD).length
   const reputation = node?.reputation ?? 0

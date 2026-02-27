@@ -5,12 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import random
 import re
 import sqlite3
+import threading
+import time
+import traceback
+import uuid
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 
 def _strip_think_tags(text: str) -> str:
@@ -29,6 +35,111 @@ def _strip_think_tags(text: str) -> str:
         r"<think>.*?</think>", "", text, flags=re.DOTALL
     )
     return cleaned.strip()
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_llm_log_path() -> Path | None:
+    """Вернуть путь для debug-лога LLM, если логирование включено."""
+    explicit = (os.getenv("MAGISTRY_LLM_LOG_PATH") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    if not (_should_log_success() or _should_log_errors()):
+        return None
+    return (_project_root() / "results" / "llm_debug.jsonl").resolve()
+
+
+def _should_log_success() -> bool:
+    return (os.getenv("MAGISTRY_LLM_LOG") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _should_log_errors() -> bool:
+    # По умолчанию пишем ошибки (не мусорит при нормальной работе, но помогает дебажить).
+    raw = (os.getenv("MAGISTRY_LLM_LOG_ERRORS") or "").strip()
+    if raw == "":
+        return True
+    return raw.lower() in ("1", "true", "yes", "on")
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return text
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "…"
+
+
+def _jsonable(value: Any) -> Any:
+    """Преобразовать объект в JSON-совместимый вид (best-effort)."""
+    try:
+        if hasattr(value, "model_dump"):
+            return value.model_dump()  # type: ignore[attr-defined]
+        if hasattr(value, "to_dict"):
+            return value.to_dict()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return str(value)
+
+
+def _sanitize_create_kwargs(create_kwargs: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
+    """Обрезать потенциально большие строки в запросе (messages/response_format)."""
+    result: dict[str, Any] = {}
+    for k, v in create_kwargs.items():
+        if k == "messages" and isinstance(v, list):
+            sanitized_msgs = []
+            for msg in v:
+                if not isinstance(msg, dict):
+                    sanitized_msgs.append(_jsonable(msg))
+                    continue
+                content = msg.get("content")
+                if isinstance(content, str):
+                    msg = dict(msg)
+                    msg["content"] = _truncate_text(content, max_chars)
+                sanitized_msgs.append(msg)
+            result[k] = sanitized_msgs
+            continue
+        if k in ("response_format", "tools", "tool_choice", "extra_body"):
+            result[k] = _jsonable(v)
+            continue
+        result[k] = _jsonable(v)
+    return result
+
+
+class _LLMDebugLogger:
+    def __init__(self, path: Path, *, max_chars: int) -> None:
+        self._path = path
+        self._max_chars = max_chars
+        self._lock = threading.Lock()
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+    def write(self, record: dict[str, Any]) -> None:
+        line = json.dumps(record, ensure_ascii=False)
+        with self._lock:
+            with open(self._path, "a", encoding="utf-8") as f:  # noqa: WPS515
+                f.write(line + "\n")
 
 
 def _extract_json(text: str) -> str:
@@ -545,6 +656,13 @@ class OpenAICompatibleProvider:
         self._model = model
         self._cache = LLMCache(cache_path) if cache_path else None
         self._use_tool_calls = use_tool_calls
+        self._max_retries = max(0, _env_int("MAGISTRY_LLM_MAX_RETRIES", 2))
+        self._retry_base_delay_s = max(0.05, _env_float("MAGISTRY_LLM_RETRY_BASE_DELAY_S", 0.75))
+        self._retry_max_delay_s = max(self._retry_base_delay_s, _env_float("MAGISTRY_LLM_RETRY_MAX_DELAY_S", 8.0))
+        self._retry_on_parse = (os.getenv("MAGISTRY_LLM_RETRY_ON_PARSE") or "").strip().lower() not in ("0", "false", "no", "off")
+        self._log_max_chars = _env_int("MAGISTRY_LLM_LOG_MAX_CHARS", 0)
+        log_path = _resolve_llm_log_path()
+        self._debug_logger = _LLMDebugLogger(log_path, max_chars=self._log_max_chars) if log_path else None
         self._extra_body: dict | None = None
         if provider_order:
             self._extra_body = {
@@ -553,6 +671,137 @@ class OpenAICompatibleProvider:
                     "allow_fallbacks": True,
                 }
             }
+
+    def _retry_sleep_s(self, attempt: int) -> float:
+        base = self._retry_base_delay_s * (2 ** max(0, attempt))
+        jitter = random.uniform(0.85, 1.25)
+        return min(self._retry_max_delay_s, base * jitter)
+
+    def _is_retryable_error(self, exc: Exception) -> bool:
+        name = exc.__class__.__name__
+        if name in (
+            "RateLimitError",
+            "APITimeoutError",
+            "APIConnectionError",
+            "InternalServerError",
+            "ServiceUnavailableError",
+            "APIError",
+        ):
+            return True
+        status = getattr(exc, "status_code", None)
+        if isinstance(status, int) and (status == 429 or status >= 500):
+            return True
+        return False
+
+    def _log(self, record: dict[str, Any], *, is_error: bool) -> None:
+        if self._debug_logger is None:
+            return
+        if is_error and not _should_log_errors():
+            return
+        if not is_error and not _should_log_success():
+            return
+        try:
+            self._debug_logger.write(record)
+        except Exception:
+            # Никогда не ломаем основной поток из-за логирования.
+            return
+
+    def _call_with_retries(
+        self,
+        *,
+        kind: str,
+        create_kwargs: dict[str, Any],
+        parse: Callable[[Any], tuple[Any, dict[str, Any]]],
+    ) -> tuple[Any, dict[str, Any]]:
+        call_id = uuid.uuid4().hex
+        sanitized_kwargs = _sanitize_create_kwargs(create_kwargs, max_chars=self._log_max_chars)
+
+        for attempt in range(self._max_retries + 1):
+            started = time.monotonic()
+            self._log(
+                {
+                    "ts": time.time(),
+                    "call_id": call_id,
+                    "attempt": attempt,
+                    "kind": kind,
+                    "model": self._model,
+                    "phase": "request",
+                    "request": sanitized_kwargs,
+                },
+                is_error=False,
+            )
+
+            response = None
+            try:
+                response = self._client.chat.completions.create(**create_kwargs)
+                duration_ms = round((time.monotonic() - started) * 1000, 1)
+                raw_response = _jsonable(response)
+                self._log(
+                    {
+                        "ts": time.time(),
+                        "call_id": call_id,
+                        "attempt": attempt,
+                        "kind": kind,
+                        "model": self._model,
+                        "phase": "response",
+                        "duration_ms": duration_ms,
+                        "response": raw_response,
+                    },
+                    is_error=False,
+                )
+
+                parsed, meta = parse(response)
+                meta = meta or {}
+                self._log(
+                    {
+                        "ts": time.time(),
+                        "call_id": call_id,
+                        "attempt": attempt,
+                        "kind": kind,
+                        "model": self._model,
+                        "phase": "parsed",
+                        "duration_ms": duration_ms,
+                        **meta,
+                    },
+                    is_error=False,
+                )
+                return parsed, {"call_id": call_id, **meta}
+            except Exception as exc:
+                duration_ms = round((time.monotonic() - started) * 1000, 1)
+                is_parse = exc.__class__.__name__ in ("JSONDecodeError", "_LLMStructuredParseError")
+                retryable = self._is_retryable_error(exc) or (self._retry_on_parse and is_parse)
+                will_retry = attempt < self._max_retries and retryable
+                sleep_s = self._retry_sleep_s(attempt) if will_retry else 0.0
+
+                self._log(
+                    {
+                        "ts": time.time(),
+                        "call_id": call_id,
+                        "attempt": attempt,
+                        "kind": kind,
+                        "model": self._model,
+                        "phase": "error",
+                        "duration_ms": duration_ms,
+                        "error": {
+                            "type": exc.__class__.__name__,
+                            "message": str(exc),
+                            "traceback": traceback.format_exc(limit=30),
+                        },
+                        "retry": {
+                            "will_retry": will_retry,
+                            "sleep_s": round(sleep_s, 3),
+                        },
+                        "request": sanitized_kwargs,
+                        "response": _jsonable(response) if response is not None else None,
+                    },
+                    is_error=True,
+                )
+
+                if not will_retry:
+                    raise
+                time.sleep(sleep_s)
+
+        raise RuntimeError("LLM retries exhausted")
 
     def generate(
         self,
@@ -573,6 +822,15 @@ class OpenAICompatibleProvider:
         if self._cache:
             cached = self._cache.get(system, user, self._model)
             if cached is not None:
+                self._log(
+                    {
+                        "ts": time.time(),
+                        "kind": "generate",
+                        "model": self._model,
+                        "phase": "cache_hit",
+                    },
+                    is_error=False,
+                )
                 return LLMResponse(text=cached, model=self._model)
 
         # MiniMax API допускает temperature только в (0, 1].
@@ -590,21 +848,33 @@ class OpenAICompatibleProvider:
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
 
-        response = self._client.chat.completions.create(**create_kwargs)
+        def _parse(resp: Any) -> tuple[LLMResponse, dict[str, Any]]:
+            raw_text = resp.choices[0].message.content or ""
+            text = _strip_think_tags(raw_text)
+            usage = {}
+            if resp.usage:
+                usage = {
+                    "prompt_tokens": resp.usage.prompt_tokens,
+                    "completion_tokens": resp.usage.completion_tokens,
+                }
+            return (
+                LLMResponse(text=text, model=self._model, usage=usage),
+                {
+                    "usage": usage,
+                    "raw_text": _truncate_text(raw_text, self._log_max_chars),
+                },
+            )
 
-        raw_text = response.choices[0].message.content or ""
-        text = _strip_think_tags(raw_text)
-        usage = {}
-        if response.usage:
-            usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-            }
+        result, _meta = self._call_with_retries(
+            kind="generate",
+            create_kwargs=create_kwargs,
+            parse=_parse,
+        )
 
         if self._cache:
-            self._cache.put(system, user, self._model, text)
+            self._cache.put(system, user, self._model, result.text)
 
-        return LLMResponse(text=text, model=self._model, usage=usage)
+        return result
 
     def generate_structured(
         self,
@@ -665,25 +935,35 @@ class OpenAICompatibleProvider:
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
 
-        response = self._client.chat.completions.create(**create_kwargs)
+        def _parse(resp: Any) -> tuple[StructuredLLMResponse, dict[str, Any]]:
+            raw_text = resp.choices[0].message.content or "{}"
+            text = _strip_think_tags(raw_text)
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                extracted = _extract_json(text)
+                data = json.loads(extracted)
+            usage = {}
+            if resp.usage:
+                usage = {
+                    "prompt_tokens": resp.usage.prompt_tokens,
+                    "completion_tokens": resp.usage.completion_tokens,
+                }
+            return (
+                StructuredLLMResponse(data=data, model=self._model, usage=usage),
+                {
+                    "usage": usage,
+                    "raw_text": _truncate_text(raw_text, self._log_max_chars),
+                    "parsed": data,
+                },
+            )
 
-        raw_text = response.choices[0].message.content or "{}"
-        text = _strip_think_tags(raw_text)
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            extracted = _extract_json(text)
-            data = json.loads(extracted)
-        usage = {}
-        if response.usage:
-            usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-            }
-
-        return StructuredLLMResponse(
-            data=data, model=self._model, usage=usage
+        result, _meta = self._call_with_retries(
+            kind="structured_json_schema",
+            create_kwargs=create_kwargs,
+            parse=_parse,
         )
+        return result
 
     def _structured_via_tool_call(
         self,
@@ -720,31 +1000,41 @@ class OpenAICompatibleProvider:
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
 
-        response = self._client.chat.completions.create(**create_kwargs)
+        def _parse(resp: Any) -> tuple[StructuredLLMResponse, dict[str, Any]]:
+            msg = resp.choices[0].message
+            raw_args = ""
+            if msg.tool_calls and msg.tool_calls[0].function.arguments:
+                raw_args = msg.tool_calls[0].function.arguments
+            elif msg.content:
+                raw_args = msg.content
 
-        msg = response.choices[0].message
-        raw_args = ""
-        if msg.tool_calls and msg.tool_calls[0].function.arguments:
-            raw_args = msg.tool_calls[0].function.arguments
-        elif msg.content:
-            raw_args = msg.content
+            text = _strip_think_tags(raw_args) if raw_args else "{}"
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                extracted = _extract_json(text)
+                data = json.loads(extracted)
+            usage = {}
+            if resp.usage:
+                usage = {
+                    "prompt_tokens": resp.usage.prompt_tokens,
+                    "completion_tokens": resp.usage.completion_tokens,
+                }
+            return (
+                StructuredLLMResponse(data=data, model=self._model, usage=usage),
+                {
+                    "usage": usage,
+                    "raw_text": _truncate_text(raw_args, self._log_max_chars),
+                    "parsed": data,
+                },
+            )
 
-        text = _strip_think_tags(raw_args) if raw_args else "{}"
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            extracted = _extract_json(text)
-            data = json.loads(extracted)
-        usage = {}
-        if response.usage:
-            usage = {
-                "prompt_tokens": response.usage.prompt_tokens,
-                "completion_tokens": response.usage.completion_tokens,
-            }
-
-        return StructuredLLMResponse(
-            data=data, model=self._model, usage=usage
+        result, _meta = self._call_with_retries(
+            kind="structured_tool_call",
+            create_kwargs=create_kwargs,
+            parse=_parse,
         )
+        return result
 
 
 def create_provider(
