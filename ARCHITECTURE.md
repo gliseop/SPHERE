@@ -1069,11 +1069,11 @@ React 19 с хуками `useAuth` (авторизация) и `useSimulation` (
 
 ### Устаревшие компоненты
 
-**CrewAI runner** (`agents.py`, класс `CrewAIAgentRunner`). Заменён собственным `CognitiveAgentRunner` с полным когнитивным циклом. Код остаётся в репозитории и доступен через `--runner crewai`, но не входит в основные зависимости `pyproject.toml` и не развивается. Мёртвый код в том же файле: функции `_honesty_text`, `_competence_text`, `_capability_text`, `_strip_model_artifacts` не вызываются из основного кода.
+**CrewAI runner** (`agents.py`, класс `CrewAIAgentRunner`). Заменён собственным `CognitiveAgentRunner` с полным когнитивным циклом. Код удалён вместе с функцией `_build_crewai_tools` и всеми ссылками в CLI и веб-сервере. Ключ `--runner crewai` больше не доступен.
 
 **Система фиксированных инструментов** (`TOOL_DISPATCH` в `environment.py`). Восемь инструментов (раздел 6) — наследие раундовой архитектуры v2. Целевая модель — произвольные действия через `perform_action` + арбитр (раздел 20), где агент описывает намерение в свободной форме, а LLM-арбитр оценивает допустимость и формирует последствия. В `AsyncEnvironment` переход уже начался: `talk_to` заменён многорепликовым `talk_to_threaded` (работает через `ConversationManager`), добавлен `create_document` — оба обрабатываются вне `TOOL_DISPATCH`. Синхронная однорепликовая `talk_to` (`tools/communication.py`) частично устарела.
 
-**Шаблоны сценариев v4** (`scenarios_v4.py`). Экспериментальный модуль с классами `TraitRange`, `AgentTemplate`, `ScenarioTemplate` и библиотекой `SCENARIO_LIBRARY`. Не интегрирован в основной `scenarios.py`, используется только в тестах.
+**Шаблоны сценариев v4** (`scenarios_v4.py`). Экспериментальный модуль с классами `TraitRange`, `AgentTemplate`, `ScenarioTemplate` и библиотекой `SCENARIO_LIBRARY`. Код удалён вместе с тестами `test_scenarios_v4.py`.
 
 ### Требует рефакторинга
 

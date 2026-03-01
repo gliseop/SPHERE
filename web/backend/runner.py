@@ -138,7 +138,7 @@ def launch_simulation_from_config(
     )
     if runner_type == "mock":
         raise RuntimeError("mock runner is not supported; use cognitive")
-    if runner_type in ("cognitive", "llm", "crewai") and not os.environ.get("OPENAI_API_KEY"):
+    if runner_type in ("cognitive", "llm") and not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY is not set; LLM runner requires it")
 
     run_name = f"{scenario_id}_{governance}_seed{seed}_{safe_variant}_d{int(rounds)}_{runner_type}"
@@ -260,7 +260,7 @@ def launch_simulation(
     """
     if runner_type == "mock":
         raise RuntimeError("mock runner is not supported; use cognitive")
-    if runner_type in ("cognitive", "llm", "crewai") and not os.environ.get("OPENAI_API_KEY"):
+    if runner_type in ("cognitive", "llm") and not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY is not set; LLM runner requires it")
 
     run_name = f"{scenario}_{governance}_seed{seed}_d{int(rounds)}_{runner_type}"

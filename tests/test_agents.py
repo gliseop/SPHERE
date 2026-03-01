@@ -2,7 +2,6 @@
 
 from magistry_sim.agents import (
     AgentRunner,
-    CrewAIAgentRunner,
     LLMAgentRunner,
     MockAgentRunner,
     build_backstory,
@@ -232,38 +231,3 @@ class TestJsonParser:
         assert result[0]["tool"] == "open_case"
 
 
-class TestCrewAIAgentRunner:
-    def test_reply_provider_reuses_runner_llm_config(
-        self, monkeypatch
-    ):
-        calls = []
-        provider = MockLLMProvider()
-
-        def _fake_create_provider(**kwargs):
-            calls.append(kwargs)
-            return provider
-
-        monkeypatch.setattr(
-            "magistry_sim.llm.create_provider",
-            _fake_create_provider,
-        )
-
-        runner = CrewAIAgentRunner.__new__(CrewAIAgentRunner)
-        runner._model = "openai/MiniMax-M2.5"
-        runner._api_key = "test-key"
-        runner._base_url = "https://minimax.example/v1"
-        runner._reply_llm_provider = None
-
-        first = runner._get_reply_provider()
-        second = runner._get_reply_provider()
-
-        assert first is provider
-        assert second is provider
-        assert len(calls) == 1
-        assert calls[0] == {
-            "mock": False,
-            "model": "MiniMax-M2.5",
-            "api_key": "test-key",
-            "base_url": "https://minimax.example/v1",
-            "cache_path": ".llm_cache.db",
-        }

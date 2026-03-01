@@ -129,17 +129,17 @@ def _create_runner(
 ) -> object:
     """Создать runner указанного типа.
 
-    Для runner-ов, требующих API-ключей (llm, crewai, cognitive),
+    Для runner-ов, требующих API-ключей (llm, cognitive),
     загружает переменные окружения через dotenv.
 
     Args:
-        runner_type: Тип runner-а (llm, crewai, cognitive).
+        runner_type: Тип runner-а (llm, cognitive).
         interview_path: Путь к библиотеке интервью (JSONL).
 
     Returns:
         Экземпляр runner-а.
     """
-    if runner_type in ("llm", "crewai"):
+    if runner_type == "llm":
         import os
 
         from dotenv import load_dotenv
@@ -147,10 +147,6 @@ def _create_runner(
 
         if not os.getenv("OPENAI_API_KEY"):
             raise RuntimeError("OPENAI_API_KEY is not set")
-
-        if runner_type == "crewai":
-            from .agents import CrewAIAgentRunner
-            return CrewAIAgentRunner(verbose=True)
 
         from .agents import LLMAgentRunner
         from .llm import create_provider
@@ -277,7 +273,7 @@ def main() -> None:
         "--runner",
         type=str,
         default="cognitive",
-        choices=["llm", "crewai", "cognitive"],
+        choices=["llm", "cognitive"],
         help="Тип runner-а: llm, crewai, cognitive",
     )
     parser.add_argument(

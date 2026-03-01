@@ -190,10 +190,9 @@ magistry-sim --scenario S0 --batch --batch-runs 10 --batch-modes G0,G2,G3
 
 | Компонент | Описание | Статус |
 |-----------|---------|--------|
-| `CrewAIAgentRunner` (`agents.py`) | Runner на CrewAI, заменён `CognitiveAgentRunner`. Не входит в зависимости `pyproject.toml` | Устаревший |
-| `_honesty_text`, `_competence_text`, `_capability_text`, `_strip_model_artifacts` (`agents.py`) | Вспомогательные функции, не вызываемые из основного кода | Мёртвый код |
-| `--runner crewai` (`cli.py`) | Путь запуска CrewAI runner | Устаревший |
-| `scenarios_v4.py` | Шаблоны сценариев, не интегрированные в основной `scenarios.py` | Экспериментальный |
+| `CrewAIAgentRunner`, `_build_crewai_tools` (`agents.py`) | Runner на CrewAI и обвязка. Заменён `CognitiveAgentRunner` | Удалён |
+| `--runner crewai` (`cli.py`, `runner.py`) | Путь запуска CrewAI runner | Удалён |
+| `scenarios_v4.py`, `test_scenarios_v4.py` | Шаблоны сценариев, не интегрированные в основной `scenarios.py` | Удалён |
 | `TOOL_DISPATCH` (`environment.py`) | Фиксированный набор из 8 инструментов. Целевая модель — произвольные действия через Arbiter + `perform_action`. В `AsyncEnvironment` переход уже начался: `talk_to_threaded` и `create_document` обрабатываются вне `TOOL_DISPATCH` | Переходный период |
 | `talk_to` (`tools/communication.py`) | Синхронная однорепликовая версия. В async-режиме заменена на `talk_to_threaded` (многорепликовые диалоги через `ConversationManager`) | Частично устаревший |
 
