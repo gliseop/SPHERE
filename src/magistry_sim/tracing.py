@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .llm import LLMProvider, LLMResponse, StructuredLLMResponse
+from .tools import current_agent_id, current_state
 
 
 class LLMTracer:
@@ -117,6 +118,22 @@ class TracingLLMProvider:
         self.agent_id = agent_id
         self.round_num: int = 0
 
+    def _resolve_context(self) -> tuple[str, int]:
+        agent_id = self.agent_id
+        try:
+            agent_id = current_agent_id.get()
+        except LookupError:
+            pass
+
+        round_num = int(self.round_num or 0)
+        try:
+            state = current_state.get()
+            round_num = int(getattr(state, "round", round_num) or round_num)
+        except LookupError:
+            pass
+
+        return agent_id, round_num
+
     def generate(
         self,
         system: str,
@@ -136,11 +153,12 @@ class TracingLLMProvider:
         start = time.monotonic()
         resp = self._inner.generate(system, user, temperature)
         duration_ms = (time.monotonic() - start) * 1000
+        agent_id, round_num = self._resolve_context()
 
         self._tracer.record(
             role=self.role,
-            agent_id=self.agent_id,
-            round_num=self.round_num,
+            agent_id=agent_id,
+            round_num=round_num,
             system=system,
             user=user,
             response=resp.text,
@@ -171,11 +189,12 @@ class TracingLLMProvider:
         start = time.monotonic()
         resp = self._inner.generate_structured(system, user, schema, temperature)
         duration_ms = (time.monotonic() - start) * 1000
+        agent_id, round_num = self._resolve_context()
 
         self._tracer.record(
             role=self.role,
-            agent_id=self.agent_id,
-            round_num=self.round_num,
+            agent_id=agent_id,
+            round_num=round_num,
             system=system,
             user=user,
             response=json.dumps(resp.data, ensure_ascii=False),

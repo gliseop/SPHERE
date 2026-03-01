@@ -544,6 +544,8 @@ def _run_async(args, scenario, runner) -> None:
         llm=llm or runner._llm if hasattr(runner, "_llm") else None,
         narrator=narrator,
         world_generator=world_gen,
+        parallel_agents=bool(args.parallel_agents),
+        parallel_workers=args.parallel_workers,
     )
 
     console.print(

@@ -36,6 +36,32 @@ class TooManyRunsError(RuntimeError):
     """Exceeded the max number of concurrent runs."""
 
 
+def _env_truthy(name: str) -> bool:
+    """True, если переменная окружения выставлена в «истинное» значение."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return False
+    value = raw.strip().lower()
+    return value not in ("", "0", "false", "no", "off")
+
+
+def _maybe_add_parallel_flags(cmd: list[str]) -> None:
+    """Добавить флаги параллельной симуляции из env (best-effort)."""
+    if not _env_truthy("MAGISTRY_PARALLEL_AGENTS"):
+        return
+    cmd.append("--parallel-agents")
+
+    raw_workers = os.environ.get("MAGISTRY_PARALLEL_WORKERS")
+    if not raw_workers:
+        return
+    try:
+        workers = int(raw_workers)
+    except ValueError:
+        return
+    if workers > 0:
+        cmd.extend(["--parallel-workers", str(workers)])
+
+
 def _resolve_time_window(days: int) -> tuple[str, str]:
     """Преобразовать длительность (в днях) в start/end ISO-время для async-симуляции."""
     safe_days = max(1, int(days))
@@ -187,6 +213,7 @@ def launch_simulation_from_config(
             cmd.extend(["--personalities-dir", str(personalities_dir)])
         if interviews_dir is not None:
             cmd.extend(["--interviews-dir", str(interviews_dir)])
+        _maybe_add_parallel_flags(cmd)
 
         with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
             proc = subprocess.Popen(
@@ -296,6 +323,7 @@ def launch_simulation(
             cmd.extend(["--personalities-dir", str(personalities_dir)])
         if interviews_dir is not None:
             cmd.extend(["--interviews-dir", str(interviews_dir)])
+        _maybe_add_parallel_flags(cmd)
 
         # Важно: не использовать PIPE без чтения stdout/stderr — иначе процесс может
         # зависнуть при заполнении буфера (особенно для verbose-runner-ов).

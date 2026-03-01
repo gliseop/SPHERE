@@ -81,6 +81,9 @@ class AsyncEnvironment:
         llm: "LLMProvider",
         narrator: WorldNarrator | None = None,
         world_generator: WorldGenerator | None = None,
+        *,
+        parallel_agents: bool = False,
+        parallel_workers: int | None = None,
     ) -> None:
         self._config = config
         self._runner = runner
@@ -121,6 +124,8 @@ class AsyncEnvironment:
         self._last_reputation_tick: datetime = start
         self._reputation_tick_event_cursor: int = 0
         self._last_narrator_date: date | None = None
+        self._parallel_agents = bool(parallel_agents)
+        self._parallel_workers = parallel_workers
 
         self._init_state()
         self._last_wakeup = {
@@ -302,37 +307,124 @@ class AsyncEnvironment:
             if next_time is None or next_time > self._end_time:
                 break
 
-            agent_id, wake_time = self.scheduler.next()
-            if wake_time > self.clock.now:
-                self.clock.advance_to(wake_time)
-            self.state.current_time = self.clock.now
+            if not self._parallel_agents:
+                agent_id, wake_time = self.scheduler.next()
+                if wake_time > self.clock.now:
+                    self.clock.advance_to(wake_time)
+                self.state.current_time = self.clock.now
 
-            self.state.round = self._turn_index
-            if agent_id in self.state.agents:
-                self._generate_needs(self.state.round)
-                self._deliver_observations(agent_id)
-
-            used_tools: list[str] = ["default"]
-            try:
-                used_tools = await self._run_agent_action(agent_id)
-            except Exception as e:
-                self.state.event_log.log(
-                    event_type="agent_error",
-                    agent_id=agent_id,
-                    payload={"error": str(e)},
-                    timestamp=self.clock.iso(),
-                )
-            finally:
+                self.state.round = self._turn_index
                 if agent_id in self.state.agents:
-                    self._last_wakeup[agent_id] = self.clock.now
-                self._turn_index += 1
-                self._schedule_next(agent_id, used_tools)
+                    self._generate_needs(self.state.round)
+                    self._deliver_observations(agent_id)
 
-            # Периодические тики
-            self._try_world_tick()
-            self._try_reputation_tick()
-            self._try_narrator_tick()
-            self._try_memory_summarization(agent_id)
+                used_tools: list[str] = ["default"]
+                try:
+                    used_tools = await self._run_agent_action(agent_id)
+                except Exception as e:
+                    self.state.event_log.log(
+                        event_type="agent_error",
+                        agent_id=agent_id,
+                        payload={"error": str(e)},
+                        timestamp=self.clock.iso(),
+                    )
+                finally:
+                    if agent_id in self.state.agents:
+                        self._last_wakeup[agent_id] = self.clock.now
+                    self._turn_index += 1
+                    self._schedule_next(agent_id, used_tools)
+
+                # Периодические тики
+                self._try_world_tick()
+                self._try_reputation_tick()
+                self._try_narrator_tick()
+                self._try_memory_summarization(agent_id)
+            else:
+                # Батч по одинаковому времени пробуждения: параллелим только
+                # генерацию решений (LLM), применение к миру остаётся последовательным.
+                batch: list[tuple[str, datetime]] = []
+                agent_id, wake_time = self.scheduler.next()
+                batch.append((agent_id, wake_time))
+                while True:
+                    peek = self.scheduler.peek_time()
+                    if peek is None or peek != wake_time:
+                        break
+                    batch.append(self.scheduler.next())
+
+                if wake_time > self.clock.now:
+                    self.clock.advance_to(wake_time)
+                self.state.current_time = self.clock.now
+                self.state.round = self._turn_index
+
+                # Deliver observations + needs for all agents before decision generation.
+                for aid, _wt in batch:
+                    if aid not in self.state.agents:
+                        continue
+                    self._generate_needs(self.state.round)
+                    self._deliver_observations(aid)
+
+                # Генерация действий параллельно.
+                tools = [
+                    "talk_to",
+                    "create_document",
+                    "open_case",
+                    "submit_proposal",
+                    "resolve_case",
+                    "file_report",
+                    "cast_vote",
+                    "add_note",
+                    "move_to",
+                ]
+                tasks = []
+                for aid, _wt in batch:
+                    if aid not in self.state.agents:
+                        continue
+                    situation = build_situation(aid, self.state)
+                    tasks.append(
+                        asyncio.to_thread(
+                            self._runner.run_turn,
+                            agent_id=aid,
+                            situation=situation,
+                            tools=tools,
+                            state=self.state,
+                        )
+                    )
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                actions_by_agent: dict[str, list[dict]] = {}
+                idx = 0
+                for aid, _wt in batch:
+                    if aid not in self.state.agents:
+                        continue
+                    res = results[idx]
+                    idx += 1
+                    if isinstance(res, Exception):
+                        actions_by_agent[aid] = []
+                    else:
+                        actions_by_agent[aid] = res if isinstance(res, list) else []
+
+                # Применяем последовательно в порядке batch.
+                for aid, _wt in batch:
+                    used_tools: list[str] = ["default"]
+                    try:
+                        used_tools = await self._apply_actions(aid, actions_by_agent.get(aid, []))
+                    except Exception as e:
+                        self.state.event_log.log(
+                            event_type="agent_error",
+                            agent_id=aid,
+                            payload={"error": str(e)},
+                            timestamp=self.clock.iso(),
+                        )
+                    finally:
+                        if aid in self.state.agents:
+                            self._last_wakeup[aid] = self.clock.now
+                        self._schedule_next(aid, used_tools)
+                        self._try_memory_summarization(aid)
+
+                self._turn_index += 1
+                self._try_world_tick()
+                self._try_reputation_tick()
+                self._try_narrator_tick()
 
         self.state.event_log.log(
             event_type="world_event",
@@ -340,6 +432,30 @@ class AsyncEnvironment:
             timestamp=self.clock.iso(),
         )
         return self._build_result()
+
+    async def _apply_actions(self, agent_id: str, actions: list[dict]) -> list[str]:
+        """Применить список действий агента (без повторной генерации)."""
+        if agent_id not in self.state.agents:
+            return ["default"]
+
+        if not actions:
+            self.state.event_log.log(
+                event_type="idle",
+                agent_id=agent_id,
+                payload={},
+                timestamp=self.clock.iso(),
+            )
+            return ["default"]
+
+        tool_names: list[str] = []
+        for action in actions:
+            tool = str(action.get("tool", "default"))
+            args = action.get("args", {})
+            if not isinstance(args, dict):
+                args = {}
+            await self._dispatch_action(agent_id, tool, args)
+            tool_names.append(tool)
+        return tool_names or ["default"]
 
     async def _run_agent_action(self, agent_id: str) -> list[str]:
         """Пробудить агента и выполнить его действия.
