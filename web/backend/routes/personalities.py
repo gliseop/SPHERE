@@ -123,7 +123,7 @@ async def generate_personality_interview(
 
         archetype = personality.classify_archetype()
         llm = create_provider(mock=False)
-        embedder = create_embedding_provider(mock=False, provider="local")
+        embedder = create_embedding_provider(mock=False)
 
         interview = generate_interview(
             personality=personality,

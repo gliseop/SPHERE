@@ -197,7 +197,7 @@ def main() -> None:
     args = parser.parse_args()
 
     llm = create_provider(mock=False)
-    embedder = create_embedding_provider(mock=False, provider="local")
+    embedder = create_embedding_provider(mock=False)
 
     if args.per_personality:
         generate_per_personality(llm, embedder, role=args.role)

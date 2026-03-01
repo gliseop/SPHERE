@@ -113,7 +113,7 @@ MAGISTRY/
 ## Стек и зависимости
 
 - Python 3.12+, Pydantic 2.0+, NetworkX 3.0+, OpenAI 1.0+, Rich 13.7+
-- Дополнительно: rank-bm25 0.2.2+, sentence-transformers 3.0+ (для локальных эмбеддингов)
+- Дополнительно: rank-bm25 0.2.2+ (для гибридного поиска)
 - Веб: FastAPI 0.115+, aiosqlite, PyJWT; React 19, D3.js 7, Vite
 - Тесты: pytest 9.0+, pytest-asyncio 0.23+
 
@@ -188,7 +188,7 @@ magistry-sim --scenario S0 --batch --batch-runs 10 --batch-modes G0,G2,G3
 - **Два `conftest.py`**: корневой `tests/conftest.py` содержит основные фикстуры; отдельных конфигураций для подкаталогов нет.
 - **Асинхронный режим**: `AsyncEnvironment` использует `asyncio.run()` из CLI, но в веб-интерфейсе запускается через фоновый поток (`runner.py`).
 - **Зависимость от OpenAI**: для запуска когнитивного агента требуется `OPENAI_API_KEY`. Тесты используют `MockLLMProvider` и не требуют ключа.
-- **Локальные эмбеддинги**: при `EMBEDDING_PROVIDER=local` используется `sentence-transformers` (требует установки `pip install -e ".[search]"`).
+- **Эмбеддинги**: генерируются через OpenAI-совместимый API (требуется `OPENAI_API_KEY`). Тесты используют `MockEmbeddingProvider`.
 
 ## Техническое состояние кодовой базы
 

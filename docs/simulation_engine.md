@@ -217,9 +217,8 @@ HEXACO выбрана вместо Big Five, поскольку фактор Hon
 
 ### EmbeddingProvider
 
-Протокол для генерации эмбеддингов. Две реализации:
-- **OpenAIEmbeddingProvider** — через OpenAI API (`text-embedding-3-small`).
-- **LocalEmbeddingProvider** — через `sentence-transformers` (локальная модель, `EMBEDDING_PROVIDER=local`).
+Протокол для генерации эмбеддингов. Реализация:
+- **OpenAIEmbeddingProvider** — через OpenAI-совместимый API (`text-embedding-3-small`).
 
 ### LLMTracer
 

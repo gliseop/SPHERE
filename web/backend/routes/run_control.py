@@ -72,7 +72,7 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
         interviews_dir = (RESULTS_DIR / f"assets_{uuid.uuid4().hex[:10]}_interviews").resolve()
 
         llm = create_provider(mock=False, cache_path=".llm_cache.db", use_tool_calls=True)
-        embedder = create_embedding_provider(mock=False, provider="local")
+        embedder = create_embedding_provider(mock=False)
         cfg_with_personas, _artifacts = await asyncio.to_thread(
             generate_personas_parallel,
             base_cfg,
@@ -139,7 +139,7 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
         interviews_dir = (RESULTS_DIR / f"assets_{uuid.uuid4().hex[:10]}_interviews").resolve()
 
         llm = create_provider(mock=False, cache_path=".llm_cache.db", use_tool_calls=True)
-        embedder = create_embedding_provider(mock=False, provider="local")
+        embedder = create_embedding_provider(mock=False)
         cfg_with_personas, _artifacts = await asyncio.to_thread(
             generate_personas_parallel,
             base_cfg,

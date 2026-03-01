@@ -122,7 +122,7 @@ python -m web.backend.manage_users change-role --username viewer1 --role admin
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `EMBEDDING_PROVIDER` | `openai` | Провайдер эмбеддингов: `openai` или `local` (sentence-transformers) |
+| `EMBEDDING_PROVIDER` | — | Не используется (эмбеддинги генерируются через OpenAI-совместимый API) |
 
 ### Веб-сервер
 

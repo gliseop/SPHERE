@@ -167,10 +167,7 @@ def _create_runner(
             raise RuntimeError("OPENAI_API_KEY is not set")
 
         llm = create_provider(mock=False)
-        embed_mode = os.getenv("EMBEDDING_PROVIDER", "openai").lower()
-        if embed_mode not in ("local", "openai"):
-            embed_mode = "openai"
-        embedder = create_embedding_provider(mock=False, provider=embed_mode)
+        embedder = create_embedding_provider(mock=False)
 
         lib_path = Path(interview_path) if interview_path else None
         interviews_dir_path = Path(interviews_dir) if interviews_dir else None

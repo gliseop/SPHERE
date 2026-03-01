@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import json
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,27 +42,6 @@ class PersonalitySeed(BaseModel, extra="forbid"):
     family_situation: str
     life_events: list[str] = Field(min_length=2, max_length=3)
     temperament_hint: str = ""
-
-
-class _LockedEmbedder:
-    """Потокобезопасная обёртка над EmbeddingProvider (best-effort).
-
-    LocalEmbeddingProvider использует sentence-transformers и может не быть
-    безопасным при одновременных encode() из нескольких потоков. Для генерации
-    персон эмбеддинги не являются основным bottleneck, поэтому сериализуем.
-    """
-
-    def __init__(self, inner: "EmbeddingProvider") -> None:
-        self._inner = inner
-        self._lock = threading.Lock()
-
-    def embed(self, text: str) -> list[float]:
-        with self._lock:
-            return self._inner.embed(text)
-
-    def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        with self._lock:
-            return self._inner.embed_batch(texts)
 
 
 def generate_seeds(
@@ -340,7 +318,7 @@ def generate_personas_parallel(
             seeds.append(seeds[-1])
         seeds = seeds[: len(targets)]
 
-    locked_embedder: EmbeddingProvider = _LockedEmbedder(embedder)
+    locked_embedder: EmbeddingProvider = embedder
 
     def _job(agent: AgentProfile, seed_obj: PersonalitySeed) -> PersonaArtifacts:
         # Для сгенерированных персон используем personality_id == agent_id.

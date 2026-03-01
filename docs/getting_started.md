@@ -28,7 +28,7 @@ pip install -e ".[dev,search]"
 
 Группы зависимостей:
 - `dev` — pytest, pytest-asyncio, rank-bm25 (для тестов)
-- `search` — rank-bm25, sentence-transformers (для локальных эмбеддингов)
+- `search` — rank-bm25 (для гибридного поиска)
 - `stats` — scipy (для статистического анализа пакетных прогонов)
 
 ### Настройка переменных окружения
@@ -42,7 +42,7 @@ cp .env.example .env
 | Переменная | Обязательна | Описание |
 |---|---|---|
 | `OPENAI_API_KEY` | Да (для симуляций) | Ключ OpenAI API |
-| `EMBEDDING_PROVIDER` | Нет | `openai` (по умолчанию) или `local` (sentence-transformers) |
+| `EMBEDDING_PROVIDER` | Нет | Не используется (всегда OpenAI-совместимый API) |
 | `JWT_SECRET` | Да (для веб) | Секрет для JWT-токенов, генерируется: `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `JWT_EXPIRE_HOURS` | Нет | Время жизни токена, по умолчанию 24 часа |
 | `MAGISTRY_DEV` | Нет | `1` для режима разработки (позволяет запуск без JWT_SECRET) |

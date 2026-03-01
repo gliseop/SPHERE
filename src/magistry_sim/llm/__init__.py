@@ -8,7 +8,6 @@ from magistry_sim.llm.protocols import (
 from magistry_sim.llm.cache import LLMCache
 from magistry_sim.llm.embeddings import (
     EmbeddingProvider,
-    LocalEmbeddingProvider,
     MockEmbeddingProvider,
     OpenAIEmbeddingProvider,
     create_embedding_provider,
@@ -33,7 +32,6 @@ __all__ = [
     "LLMCache",
     # embeddings
     "EmbeddingProvider",
-    "LocalEmbeddingProvider",
     "MockEmbeddingProvider",
     "OpenAIEmbeddingProvider",
     "create_embedding_provider",
