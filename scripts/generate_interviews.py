@@ -1,12 +1,19 @@
 """Генерация библиотеки синтетических интервью.
 
-Матрица: 5 архетипов x 4 роли x 3 вариации = 60 интервью.
-Результат: data/interview_library.jsonl
+Два режима:
+  1. Библиотека (по умолчанию): матрица 5 архетипов x 4 роли x 3 вариации = 60 интервью.
+     Результат: data/interview_library.jsonl
+  2. Per-personality (--per-personality): читает data/personalities/*.json, для каждого
+     генерирует расширенное интервью (30 вопросов), сохраняет в data/interviews/.
 
 Запуск:
-    python scripts/generate_interviews.py
+    python scripts/generate_interviews.py                  # библиотека
+    python scripts/generate_interviews.py --per-personality # per-personality
+    python scripts/generate_interviews.py --per-personality --role аудитор
 """
 
+import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -16,7 +23,7 @@ load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from magistry_sim.interviews import InterviewLibrary, generate_interview
+from magistry_sim.interviews import InterviewLibrary, generate_interview, save_interview
 from magistry_sim.llm import create_embedding_provider, create_provider
 from magistry_sim.personality import (
     CORRUPTION_ARCHETYPES,
@@ -72,11 +79,8 @@ ARCHETYPE_PROFILES: dict[str, list[dict]] = {
 }
 
 
-def main() -> None:
-    """Генерация 60 синтетических интервью."""
-    llm = create_provider(mock=False)
-    embedder = create_embedding_provider(mock=False)
-
+def generate_library(llm, embedder) -> None:
+    """Генерация 60 синтетических интервью в библиотеку."""
     lib = InterviewLibrary()
     counter = 0
 
@@ -120,6 +124,85 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lib.save_jsonl(output_path)
     print(f"\nГотово: {len(lib)} интервью сохранено в {output_path}")
+
+
+def generate_per_personality(llm, embedder, role: str) -> None:
+    """Генерация расширенных интервью для каждой личности из data/personalities/."""
+    personalities_dir = Path("data/personalities")
+    interviews_dir = Path("data/interviews")
+
+    if not personalities_dir.exists():
+        print(f"Директория {personalities_dir} не найдена")
+        sys.exit(1)
+
+    files = sorted(personalities_dir.glob("*.json"))
+    if not files:
+        print(f"Нет файлов личностей в {personalities_dir}")
+        sys.exit(1)
+
+    total = len(files)
+    for idx, path in enumerate(files, 1):
+        personality_id = path.stem
+        print(f"[{idx}/{total}] {personality_id}")
+
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"  Ошибка чтения {path}: {exc}")
+            continue
+
+        hexaco_raw = raw.get("hexaco", {})
+        dt_raw = raw.get("dark_triad", {})
+        personality = AgentPersonality(
+            hexaco=HEXACOProfile(**hexaco_raw),
+            dark_triad=DarkTriadProfile(**dt_raw),
+            neutralization_techniques=raw.get("neutralization_techniques", []),
+            biography=raw.get("biography", ""),
+        )
+
+        archetype = personality.classify_archetype()
+        print(f"  архетип: {archetype}, роль: {role}")
+
+        interview = generate_interview(
+            personality=personality,
+            role=role,
+            archetype=archetype,
+            llm=llm,
+            embedder=embedder,
+            interview_id=personality_id,
+            use_extended_protocol=True,
+        )
+
+        out_path = save_interview(interview, interviews_dir)
+        print(f"  сохранено: {out_path}")
+
+    print(f"\nГотово: интервью для {total} личностей сохранены в {interviews_dir}")
+
+
+def main() -> None:
+    """Точка входа."""
+    parser = argparse.ArgumentParser(
+        description="Генерация синтетических интервью для MAGISTRY",
+    )
+    parser.add_argument(
+        "--per-personality",
+        action="store_true",
+        help="Генерировать расширенное интервью (30 вопросов) для каждой личности из data/personalities/",
+    )
+    parser.add_argument(
+        "--role",
+        default="чиновник",
+        help="Роль персонажа для per-personality режима (по умолчанию: чиновник)",
+    )
+    args = parser.parse_args()
+
+    llm = create_provider(mock=False)
+    embedder = create_embedding_provider(mock=False, provider="local")
+
+    if args.per_personality:
+        generate_per_personality(llm, embedder, role=args.role)
+    else:
+        generate_library(llm, embedder)
 
 
 if __name__ == "__main__":

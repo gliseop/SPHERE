@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
@@ -30,6 +31,7 @@ class EventLog:
     def __init__(self) -> None:
         self._events: list[Event] = []
         self._stream_file: IO[str] | None = None
+        self._lock = threading.Lock()
 
     def set_stream_path(self, path: Path) -> None:
         """Открыть файл для потоковой дозаписи событий.
@@ -40,15 +42,17 @@ class EventLog:
         Args:
             path: Путь к файлу для дозаписи.
         """
-        if self._stream_file is not None:
-            self._stream_file.close()
-        self._stream_file = open(path, "a", encoding="utf-8")  # noqa: WPS515
+        with self._lock:
+            if self._stream_file is not None:
+                self._stream_file.close()
+            self._stream_file = open(path, "a", encoding="utf-8")  # noqa: WPS515
 
     def close_stream(self) -> None:
         """Закрыть открытый поток записи событий."""
-        if self._stream_file is not None:
-            self._stream_file.close()
-            self._stream_file = None
+        with self._lock:
+            if self._stream_file is not None:
+                self._stream_file.close()
+                self._stream_file = None
 
     def log(
         self,
@@ -78,12 +82,13 @@ class EventLog:
             payload=payload or {},
             **({"timestamp": timestamp} if timestamp else {}),
         )
-        self._events.append(event)
-        if self._stream_file is not None:
-            self._stream_file.write(
-                event.model_dump_json(exclude_none=True) + "\n"
-            )
-            self._stream_file.flush()
+        with self._lock:
+            self._events.append(event)
+            if self._stream_file is not None:
+                self._stream_file.write(
+                    event.model_dump_json(exclude_none=True) + "\n"
+                )
+                self._stream_file.flush()
         return event
 
     def get_events(
@@ -102,7 +107,8 @@ class EventLog:
         Returns:
             Список событий.
         """
-        result = self._events
+        with self._lock:
+            result = list(self._events)
         if event_type is not None:
             result = [e for e in result if e.event_type == event_type]
         if agent_id is not None:
@@ -114,7 +120,8 @@ class EventLog:
     @property
     def all_events(self) -> list[Event]:
         """Все события."""
-        return list(self._events)
+        with self._lock:
+            return list(self._events)
 
     def save_jsonl(self, path: Path) -> None:
         """Сохранить журнал в JSONL.
@@ -122,8 +129,10 @@ class EventLog:
         Args:
             path: Путь к файлу.
         """
+        with self._lock:
+            events = list(self._events)
         with open(path, "w", encoding="utf-8") as f:
-            for event in self._events:
+            for event in events:
                 f.write(
                     event.model_dump_json(exclude_none=True) + "\n"
                 )
@@ -134,9 +143,11 @@ class EventLog:
         Args:
             path: Путь к файлу.
         """
-        self._events.clear()
+        with self._lock:
+            self._events.clear()
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:
-                    self._events.append(Event.model_validate_json(line))
+                    with self._lock:
+                        self._events.append(Event.model_validate_json(line))

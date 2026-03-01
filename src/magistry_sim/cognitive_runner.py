@@ -1,6 +1,7 @@
-"""Когнитивный агент по модели Park et al. (2023).
+"""Когнитивный агент по модели Park et al. (2023, 2024).
 
 Реализует полный цикл: наблюдение -> извлечение -> рефлексия -> планирование -> действие.
+Поддерживает fragment-based retrieval из интервью (Park et al., 2024).
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from magistry_sim.reflection import run_reflection_cycle, should_reflect
 from magistry_sim.personality import AgentPersonality
 
 if TYPE_CHECKING:
+    from magistry_sim.interviews import InterviewFragment, InterviewFragmentIndex
     from magistry_sim.llm import EmbeddingProvider, LLMProvider
     from magistry_sim.state import WorldState
 
@@ -52,6 +54,9 @@ class CognitiveAgentRunner:
         embedder: EmbeddingProvider,
         verbose: bool = False,
         interview_library_path: Path | None = None,
+        interviews_dir: Path | None = None,
+        personalities_dir: Path | None = None,
+        use_subqueries: bool = True,
     ) -> None:
         self._llm = llm_provider
         self._embedder = embedder
@@ -60,6 +65,10 @@ class CognitiveAgentRunner:
         self._plans: dict[str, AgentPlan] = {}
         self._interview_library = None
         self._agent_interviews: dict[str, str] = {}
+        self._fragment_indices: dict[str, "InterviewFragmentIndex"] = {}
+        self._interviews_dir = interviews_dir
+        self._personalities_dir = personalities_dir
+        self._use_subqueries = use_subqueries
         self.use_free_actions: bool = False
 
         if interview_library_path:
@@ -68,6 +77,13 @@ class CognitiveAgentRunner:
             self._interview_library = InterviewLibrary.load_jsonl(
                 interview_library_path
             )
+
+        if self._interviews_dir is None:
+            default_dir = Path(__file__).resolve().parents[2] / "data" / "interviews"
+            if default_dir.exists():
+                self._interviews_dir = default_dir
+        if self._personalities_dir is None:
+            self._personalities_dir = Path(__file__).resolve().parents[2] / "data" / "personalities"
 
     def get_or_create_memory(self, agent_id: str) -> MemoryStream:
         """Возвращает поток памяти агента, создавая при необходимости.
@@ -120,12 +136,26 @@ class CognitiveAgentRunner:
             return None
 
         root = Path(__file__).resolve().parents[2]
-        path = root / "data" / "personalities" / f"{archetype_id}.json"
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(raw, dict):
+        default_dir = root / "data" / "personalities"
+        candidates: list[Path] = []
+        if self._personalities_dir is not None:
+            candidates.append(self._personalities_dir)
+        if default_dir not in candidates:
+            candidates.append(default_dir)
+
+        raw: dict | None = None
+        for base_dir in candidates:
+            path = base_dir / f"{archetype_id}.json"
+            if not path.exists():
+                continue
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(loaded, dict):
+                raw = loaded
+                break
+        if raw is None:
             return None
 
         data = {
@@ -208,6 +238,149 @@ class CognitiveAgentRunner:
             return max(1.0, min(10.0, score))
         except (ValueError, TypeError):
             return 5.0
+
+    def _load_fragment_index(
+        self, agent_id: str, state: WorldState,
+    ) -> InterviewFragmentIndex | None:
+        """Загружает или возвращает из кэша фрагментный индекс интервью.
+
+        Порядок поиска:
+        1. Кэш _fragment_indices.
+        2. Per-personality файл из data/interviews/{archetype}.json.
+        3. Привязанное текстовое интервью из _agent_interviews.
+
+        Args:
+            agent_id: Идентификатор агента.
+            state: Состояние мира.
+
+        Returns:
+            Индекс фрагментов или None.
+        """
+        if agent_id in self._fragment_indices:
+            return self._fragment_indices[agent_id]
+
+        from magistry_sim.interviews import (
+            InterviewFragmentIndex,
+            load_interview,
+        )
+        root = Path(__file__).resolve().parents[2]
+        fallback_interviews_dir = root / "data" / "interviews"
+
+        profile = state.agents.get(agent_id)
+        archetype = None
+        if profile is not None:
+            archetype = getattr(profile, "personality_archetype", None)
+
+        # Попытка загрузить per-personality интервью
+        if archetype and self._interviews_dir:
+            interview = load_interview(str(archetype), self._interviews_dir)
+            if interview is None and fallback_interviews_dir.exists():
+                interview = load_interview(str(archetype), fallback_interviews_dir)
+            if interview is not None:
+                index = InterviewFragmentIndex.from_interview(
+                    interview, embedder=self._embedder,
+                )
+                self._fragment_indices[agent_id] = index
+                return index
+
+        # Попытка загрузить по agent_id
+        if self._interviews_dir:
+            interview = load_interview(agent_id, self._interviews_dir)
+            if interview is None and fallback_interviews_dir.exists():
+                interview = load_interview(agent_id, fallback_interviews_dir)
+            if interview is not None:
+                index = InterviewFragmentIndex.from_interview(
+                    interview, embedder=self._embedder,
+                )
+                self._fragment_indices[agent_id] = index
+                return index
+
+        return None
+
+    def retrieve_interview_context(
+        self,
+        agent_id: str,
+        situation: str,
+        state: WorldState,
+    ) -> str:
+        """Извлекает релевантные фрагменты интервью для текущей ситуации.
+
+        Реализует подход Park et al. (2024): ситуация декомпозируется
+        на подвопросы, по каждому выполняется поиск в фрагментном индексе,
+        результаты дедуплицируются и форматируются.
+
+        Args:
+            agent_id: Идентификатор агента.
+            situation: Текстовая сводка ситуации.
+            state: Состояние мира.
+
+        Returns:
+            Отформатированный текст с релевантными фрагментами или пустая строка.
+        """
+        index = self._load_fragment_index(agent_id, state)
+        if index is None or len(index) == 0:
+            return ""
+
+        queries: list[str] = [situation[:500]]
+
+        if self._use_subqueries:
+            try:
+                sub_response = self._llm.generate_structured(
+                    system=(
+                        "Ты помощник, определяющий релевантные аспекты личности "
+                        "агента для принятия решения."
+                    ),
+                    user=(
+                        f"Ситуация: {situation[:800]}\n\n"
+                        f"Сформулируй 2-3 коротких вопроса о личности агента, "
+                        f"ответы на которые помогут предсказать его поведение "
+                        f"в данной ситуации. Вопросы должны касаться мотивации, "
+                        f"ценностей, отношения к риску, стиля принятия решений."
+                    ),
+                    schema={
+                        "type": "object",
+                        "properties": {
+                            "questions": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "required": ["questions"],
+                    },
+                )
+                sub_questions = sub_response.data.get("questions", [])
+                queries.extend(sub_questions[:3])
+            except Exception:
+                logger.debug(
+                    "[%s] Не удалось сгенерировать подвопросы, "
+                    "используем прямой поиск",
+                    agent_id,
+                )
+
+        seen_questions: set[str] = set()
+        unique_fragments: list[InterviewFragment] = []
+
+        for query in queries:
+            query_emb = self._embedder.embed(query[:500])
+            results = index.search(
+                query=query, query_embedding=query_emb, top_k=3,
+            )
+            for frag in results:
+                if frag.question not in seen_questions:
+                    seen_questions.add(frag.question)
+                    unique_fragments.append(frag)
+
+        # Ограничиваем до 8 фрагментов
+        unique_fragments = unique_fragments[:8]
+
+        if not unique_fragments:
+            return ""
+
+        parts = ["\n## Нарративное интервью (релевантные фрагменты)"]
+        for frag in unique_fragments:
+            parts.append(f"[{frag.domain}] {frag.text()}")
+
+        return "\n".join(parts) + "\n"
 
     def _build_cognitive_prompt(
         self,
@@ -297,17 +470,16 @@ class CognitiveAgentRunner:
                 for s in plan.tactical_steps:
                     plan_text += f"- {s}\n"
 
-        # Раздел интервью
-        interview_text = ""
-        if agent_id in self._agent_interviews:
-            # Привязанное интервью имеет приоритет над библиотекой
+        # Раздел интервью — fragment-based retrieval (Park et al., 2024)
+        interview_text = self.retrieve_interview_context(
+            agent_id, situation, state,
+        )
+        if not interview_text and agent_id in self._agent_interviews:
             interview_text = (
                 f"\n## Нарративное интервью\n"
                 f"{self._agent_interviews[agent_id]}\n"
             )
-        elif self._interview_library and len(self._interview_library) > 0:
-            # Запасная ветка: случайная выборка из общей библиотеки.
-            # seed = hash(agent_id) гарантирует воспроизводимость для агента.
+        if not interview_text and self._interview_library and len(self._interview_library) > 0:
             seed = hash(agent_id) % (2**31)
             results = self._interview_library.sample(n=1, seed=seed)
             if results:
@@ -537,9 +709,15 @@ class CognitiveAgentRunner:
             else agent_id
         )
 
+        # Фрагменты интервью, релевантные контексту сообщения
+        interview_context = self.retrieve_interview_context(
+            agent_id, message, state,
+        )
+
         system_prompt = (
             f"Ты — {identity}. {personality_context}\n\n"
-            f"Твои воспоминания:\n{memories_text}\n\n"
+            f"Твои воспоминания:\n{memories_text}\n"
+            f"{interview_context}\n"
             f"Ответь на сообщение от {sender_id} в характере своей роли. "
             f"КРАТКО: 1–3 предложения, без формальностей."
         )

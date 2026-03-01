@@ -30,6 +30,10 @@ const DEFAULT_GENERATE_PERSONALITY_SYSTEM_PROMPT = (
   + 'Пользователь описывает желаемый типаж персонажа для симуляции коррупции в госорганах. '
   + 'Сгенерируй полный психологический профиль: биографию, параметры HEXACO (0-100), '
   + 'тёмную триаду (0-100) и подходящие техники нейтрализации. '
+  + 'Верни ТОЛЬКО JSON без пояснений и префиксов. '
+  + 'Биография должна опираться на 1–3 реальных прототипа (исторические/публичные личности; предпочтительно умершие). '
+  + 'Персонаж при этом остаётся вымышленным: не используй реальные имена в тексте биографии. '
+  + 'Прототипы перечисли в поле prototypes (массив строк). '
   + 'Биография должна быть на русском языке, 3-5 абзацев. '
   + 'Параметры должны быть логически согласованы с описанием и биографией.'
 )
@@ -53,19 +57,30 @@ interface DarkTriad {
   psychopathy: number
 }
 
+interface InterviewData {
+  id: string
+  interview: Record<string, string>
+  expert_psychologist: string
+  expert_economist: string
+  protocol_version: string
+}
+
 interface Personality {
   id?: string
   name: string
   description?: string
+  prototypes?: string[]
   biography: string
   hexaco: Hexaco
   dark_triad: DarkTriad
   neutralization_techniques: TechniqueValue[]
+  has_interview?: boolean
 }
 
 const EMPTY_PERSONALITY: Personality = {
   name: '',
   description: '',
+  prototypes: [],
   biography: '',
   hexaco: {
     honesty_humility: 50,
@@ -122,6 +137,19 @@ function clamp01_100(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)))
 }
 
+function prototypesToText(prototypes: string[] | undefined): string {
+  if (!Array.isArray(prototypes) || prototypes.length === 0) return ''
+  return prototypes.join(', ')
+}
+
+function parsePrototypes(text: string): string[] {
+  return text
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+}
+
 export function PersonalitiesView({ user }: { user: AuthUser | null }) {
   const [items, setItems] = useState<Personality[] | null>(null)
   const [editing, setEditing] = useState<Personality | null>(null)
@@ -139,6 +167,10 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
   const [genUserPrompt, setGenUserPrompt] = useState(defaultGeneratePersonalityUserPrompt(''))
   const [genSystemDirty, setGenSystemDirty] = useState(false)
   const [genUserDirty, setGenUserDirty] = useState(false)
+  const [generatingInterviewId, setGeneratingInterviewId] = useState<string | null>(null)
+  const [loadingInterviewId, setLoadingInterviewId] = useState<string | null>(null)
+  const [viewingInterviewId, setViewingInterviewId] = useState<string | null>(null)
+  const [interviewData, setInterviewData] = useState<InterviewData | null>(null)
   const prevEditingIdRef = useRef<string | null>(null)
   const editingKey = editing ? (editing.id ?? '__new__') : null
 
@@ -182,6 +214,9 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
       ...editing,
       name: editing.name.trim(),
       description: (editing.description || '').trim(),
+      prototypes: Array.isArray(editing.prototypes)
+        ? editing.prototypes.map((p) => String(p).trim()).filter(Boolean).slice(0, 3)
+        : [],
       biography: (editing.biography || '').trim(),
       hexaco: {
         honesty_humility: clamp01_100(editing.hexaco.honesty_humility),
@@ -240,6 +275,9 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
         if (!prev) return prev
         return {
           ...prev,
+          prototypes: Array.isArray((data as { prototypes?: unknown }).prototypes)
+            ? ((data as { prototypes: unknown[] }).prototypes.map((p) => String(p).trim()).filter(Boolean).slice(0, 3))
+            : prev.prototypes,
           biography: typeof data.biography === 'string' ? data.biography : prev.biography,
           hexaco: data.hexaco && typeof data.hexaco === 'object'
             ? { ...prev.hexaco, ...data.hexaco }
@@ -269,6 +307,66 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
     if (set.has(value)) set.delete(value)
     else set.add(value)
     setEditing({ ...editing, neutralization_techniques: [...set] })
+  }
+
+  async function handleGenerateInterview(personalityId: string) {
+    setGeneratingInterviewId(personalityId)
+    try {
+      const res = await apiClient.post(
+        `/api/personalities/${personalityId}/interview/generate`,
+        { role: 'чиновник' },
+      )
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        window.alert(text || 'Не удалось сгенерировать интервью')
+        return
+      }
+      const data: InterviewData = await res.json()
+      setInterviewData(data)
+      setViewingInterviewId(personalityId)
+      setItems((prev) =>
+        Array.isArray(prev)
+          ? prev.map((p) => (p.id === personalityId ? { ...p, has_interview: true } : p))
+          : prev,
+      )
+    } finally {
+      setGeneratingInterviewId(null)
+    }
+  }
+
+  async function handleViewInterview(personalityId: string) {
+    if (viewingInterviewId === personalityId) {
+      setViewingInterviewId(null)
+      setInterviewData(null)
+      return
+    }
+    setLoadingInterviewId(personalityId)
+    try {
+      const res = await apiClient.get(`/api/personalities/${personalityId}/interview`)
+      if (!res.ok) {
+        window.alert('Не удалось загрузить интервью')
+        return
+      }
+      const data: InterviewData = await res.json()
+      setInterviewData(data)
+      setViewingInterviewId(personalityId)
+    } finally {
+      setLoadingInterviewId(null)
+    }
+  }
+
+  async function handleDeleteInterview(personalityId: string) {
+    if (!window.confirm('Удалить интервью? Потребуется перегенерация.')) return
+    await apiClient.delete(`/api/personalities/${personalityId}/interview`)
+    setItems((prev) =>
+      Array.isArray(prev)
+        ? prev.map((p) => (p.id === personalityId ? { ...p, has_interview: false } : p))
+        : prev,
+    )
+    if (viewingInterviewId === personalityId) {
+      setViewingInterviewId(null)
+      setInterviewData(null)
+    }
   }
 
   const list = items ?? []
@@ -382,6 +480,19 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
                 </span>
               </div>
             )}
+          </div>
+
+          <div className="form-field">
+            <label>Прототипы (реальные личности, 1–3)</label>
+            <input
+              className="hud-input"
+              value={prototypesToText(editing.prototypes)}
+              onChange={(e) => setEditing({ ...editing, prototypes: parsePrototypes(e.target.value) })}
+              placeholder="Например: Никколо Макиавелли, Шарль Морис Талейран"
+            />
+            <div className="text-muted" style={{ fontSize: '0.65rem', marginTop: '0.25rem' }}>
+              Используются как вдохновение для биографии; персонаж остаётся вымышленным.
+            </div>
           </div>
 
           <div className="form-field">
@@ -549,6 +660,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
                 <div className="scenario-card-meta">
                   <span className={`badge small ${archetypeBadgeClass(a)}`}>{archetypeLabel(a)}</span>
                   <span className="badge small">{p.neutralization_techniques?.length ?? 0} техн.</span>
+                  {p.has_interview && <span className="badge small success">интервью</span>}
                   {isActive && <span className="badge small accent">выбрана</span>}
                 </div>
               </div>
@@ -561,6 +673,26 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
                 >
                   {isActive ? '✓' : '○'}
                 </button>
+                {p.id && p.has_interview && (
+                  <button
+                    className={`btn-clipped small ${viewingInterviewId === p.id ? 'accent' : ''}`}
+                    onClick={() => handleViewInterview(p.id!)}
+                    disabled={loadingInterviewId === p.id}
+                    title={viewingInterviewId === p.id ? 'Скрыть интервью' : 'Просмотреть интервью'}
+                  >
+                    {loadingInterviewId === p.id ? '...' : '📋'}
+                  </button>
+                )}
+                {user?.role === 'admin' && p.id && (
+                  <button
+                    className="btn-clipped small"
+                    onClick={() => handleGenerateInterview(p.id!)}
+                    disabled={generatingInterviewId === p.id}
+                    title={p.has_interview ? 'Перегенерировать интервью' : 'Сгенерировать интервью'}
+                  >
+                    {generatingInterviewId === p.id ? '...' : p.has_interview ? '↻' : '🎤'}
+                  </button>
+                )}
                 {user?.role === 'admin' && (
                   <>
                     <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_PERSONALITY, ...p })} title="Редактировать">✎</button>
@@ -574,6 +706,85 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
           )
         })}
       </div>
+
+      {viewingInterviewId && interviewData && (
+        <div className="hud-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
+          <div className="corner tl" /><div className="corner tr" />
+          <div className="corner bl" /><div className="corner br" />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
+              Интервью
+              {interviewData.protocol_version === 'v2' && (
+                <span className="badge small" style={{ marginLeft: '0.5rem' }}>v2 (30 вопросов)</span>
+              )}
+            </span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              {user?.role === 'admin' && (
+                <button
+                  className="btn-clipped danger small"
+                  onClick={() => handleDeleteInterview(viewingInterviewId)}
+                  title="Удалить интервью"
+                >
+                  Удалить
+                </button>
+              )}
+              <button
+                className="btn-clipped small"
+                onClick={() => { setViewingInterviewId(null); setInterviewData(null) }}
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+            {Object.entries(interviewData.interview).map(([question, answer]) => (
+              <details key={question} className="md-details" style={{ marginBottom: '0.5rem' }}>
+                <summary className="md-summary" style={{ fontSize: '0.75rem' }}>{question}</summary>
+                <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.75rem', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                  {answer}
+                </div>
+              </details>
+            ))}
+
+            {(interviewData.expert_psychologist || interviewData.expert_economist) && (
+              <>
+                <div style={{ borderTop: '1px solid var(--border)', margin: '0.75rem 0' }} />
+                <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem' }}>Экспертные оценки</div>
+                {interviewData.expert_psychologist && (
+                  <details className="md-details" style={{ marginBottom: '0.5rem' }}>
+                    <summary className="md-summary" style={{ fontSize: '0.75rem' }}>Психолог</summary>
+                    <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.75rem', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                      {interviewData.expert_psychologist}
+                    </div>
+                  </details>
+                )}
+                {interviewData.expert_economist && (
+                  <details className="md-details" style={{ marginBottom: '0.5rem' }}>
+                    <summary className="md-summary" style={{ fontSize: '0.75rem' }}>Экономист</summary>
+                    <div style={{ padding: '0.5rem 0.75rem', fontSize: '0.75rem', lineHeight: 1.6, color: 'var(--text-secondary)' }}>
+                      {interviewData.expert_economist}
+                    </div>
+                  </details>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {generatingInterviewId && (
+        <div className="hud-panel" style={{ marginTop: '1rem', padding: '1rem', textAlign: 'center' }}>
+          <div className="corner tl" /><div className="corner tr" />
+          <div className="corner bl" /><div className="corner br" />
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            Генерация интервью (30 вопросов + экспертные оценки)...
+          </div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+            Это может занять 30-60 секунд
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -45,6 +45,8 @@ AGENT_TYPES_DIR = (Path(__file__).parent.parent.parent / "data" / "agent_types")
 AGENT_TYPES_DIR.mkdir(parents=True, exist_ok=True)
 PERSONALITIES_DIR = (Path(__file__).parent.parent.parent / "data" / "personalities").resolve()
 PERSONALITIES_DIR.mkdir(parents=True, exist_ok=True)
+INTERVIEWS_DIR = (Path(__file__).parent.parent.parent / "data" / "interviews").resolve()
+INTERVIEWS_DIR.mkdir(parents=True, exist_ok=True)
 GOVERNANCE_MODES_DIR = (Path(__file__).parent.parent.parent / "data" / "governance_modes").resolve()
 GOVERNANCE_MODES_DIR.mkdir(parents=True, exist_ok=True)
 ARTIFACTS_DIR = (RESULTS_DIR / "artifacts").resolve()
@@ -1350,6 +1352,17 @@ async def generate_personality(
         "type": "object",
         "additionalProperties": False,
         "properties": {
+            "prototypes": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 2, "maxLength": 120},
+                "minItems": 1,
+                "maxItems": 3,
+                "description": (
+                    "1–3 реальных прототипа (исторические/публичные личности), на которых основан образ. "
+                    "Не используйте живущих персон. Прототипы — только вдохновение; не делайте утверждений "
+                    "о незаконной деятельности прототипов."
+                ),
+            },
             "biography": {
                 "type": "string",
                 "minLength": 50,
@@ -1390,7 +1403,7 @@ async def generate_personality(
                 "description": "Техники нейтрализации (Sykes & Matza), которыми владеет персонаж.",
             },
         },
-        "required": ["biography", "hexaco", "dark_triad", "neutralization_techniques"],
+        "required": ["prototypes", "biography", "hexaco", "dark_triad", "neutralization_techniques"],
     }
 
     system_prompt = (
@@ -1398,13 +1411,17 @@ async def generate_personality(
         "Пользователь описывает желаемый типаж персонажа для симуляции коррупции в госорганах. "
         "Сгенерируй полный психологический профиль: биографию, параметры HEXACO (0-100), "
         "тёмную триаду (0-100) и подходящие техники нейтрализации. "
+        "Верни ТОЛЬКО JSON без пояснений и префиксов. "
+        "Биография должна опираться на 1–3 реальных прототипа (исторические/публичные личности; предпочтительно умершие). "
+        "Персонаж при этом остаётся вымышленным: не используй реальные имена в тексте биографии. "
+        "Прототипы перечисли в поле prototypes (массив строк). "
         "Биография должна быть на русском языке, 3-5 абзацев. "
         "Параметры должны быть логически согласованы с описанием и биографией."
     )
     system_prompt = (payload.system_prompt or system_prompt).strip()
     user_prompt = (payload.user_prompt or f"Описание персонажа:\n{payload.description}").strip()
 
-    llm = create_provider(mock=False, cache_path=".llm_cache.db")
+    llm = create_provider(mock=False, cache_path=".llm_cache.db", use_tool_calls=True)
     try:
         response = llm.generate_structured(
             system=system_prompt,
@@ -1492,7 +1509,7 @@ async def generate_agent_type(
     system_prompt = (payload.system_prompt or system_prompt_default).strip()
     user_prompt = (payload.user_prompt or user_prompt_default).strip()
 
-    llm = create_provider(mock=False, cache_path=".llm_cache.db")
+    llm = create_provider(mock=False, cache_path=".llm_cache.db", use_tool_calls=True)
     try:
         response = llm.generate_structured(
             system=system_prompt,
@@ -1810,7 +1827,7 @@ async def generate_secondary_agents(
         "- biography 2–5 предложений, отражает мотивацию/давление среды\n"
     )
 
-    provider = create_provider(mock=False, cache_path=".llm_cache.db")
+    provider = create_provider(mock=False, cache_path=".llm_cache.db", use_tool_calls=True)
     try:
         resp = provider.generate_structured(
             system=system,
@@ -2063,6 +2080,9 @@ async def list_personalities(_user: User = Depends(require_viewer)) -> list[dict
     for p in sorted(PERSONALITIES_DIR.glob("*.json")):
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
+            pid = data.get("id", "")
+            interview_path = INTERVIEWS_DIR / f"{pid}.json"
+            data["has_interview"] = interview_path.exists()
             result.append(data)
         except (json.JSONDecodeError, OSError):
             continue
@@ -2102,6 +2122,106 @@ async def delete_personality(personality_id: str, _user: User = Depends(require_
     path = PERSONALITIES_DIR / f"{personality_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Personality not found")
+    path.unlink()
+
+
+# ---------------------------------------------------------------------------
+# Interview CRUD (per-personality)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/personalities/{personality_id}/interview")
+async def get_interview(personality_id: str, _user: User = Depends(require_viewer)) -> dict:
+    """Получить интервью для личности (без embedding для экономии трафика)."""
+    from fastapi import HTTPException
+
+    path = INTERVIEWS_DIR / f"{personality_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Interview not found")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.pop("embedding", None)
+        return data
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+class GenerateInterviewPayload(BaseModel):
+    """Параметры генерации интервью."""
+
+    model_config = ConfigDict(strict=False)
+    role: str = Field(default="чиновник", min_length=1, max_length=128)
+
+
+@app.post("/api/personalities/{personality_id}/interview/generate")
+async def generate_personality_interview(
+    personality_id: str,
+    payload: GenerateInterviewPayload,
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Сгенерировать интервью для личности через LLM.
+
+    Длительная операция (5 LLM-вызовов), выполняется в отдельном потоке.
+    """
+    from fastapi import HTTPException
+
+    pers_path = PERSONALITIES_DIR / f"{personality_id}.json"
+    if not pers_path.exists():
+        raise HTTPException(status_code=404, detail="Personality not found")
+
+    try:
+        raw = json.loads(pers_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    def _generate() -> dict:
+        from magistry_sim.personality import (
+            AgentPersonality,
+            DarkTriadProfile,
+            HEXACOProfile,
+        )
+        from magistry_sim.interviews import generate_interview, save_interview
+        from magistry_sim.llm import create_embedding_provider, create_provider
+
+        hexaco_raw = raw.get("hexaco", {})
+        dt_raw = raw.get("dark_triad", {})
+        personality = AgentPersonality(
+            hexaco=HEXACOProfile(**hexaco_raw),
+            dark_triad=DarkTriadProfile(**dt_raw),
+            neutralization_techniques=raw.get("neutralization_techniques", []),
+            biography=raw.get("biography", ""),
+        )
+
+        archetype = personality.classify_archetype()
+        llm = create_provider(mock=False)
+        embedder = create_embedding_provider(mock=False, provider="local")
+
+        interview = generate_interview(
+            personality=personality,
+            role=payload.role,
+            archetype=archetype,
+            llm=llm,
+            embedder=embedder,
+            interview_id=personality_id,
+            use_extended_protocol=True,
+        )
+        save_interview(interview, INTERVIEWS_DIR)
+        result = interview.model_dump()
+        result.pop("embedding", None)
+        return result
+
+    result = await asyncio.to_thread(_generate)
+    return result
+
+
+@app.delete("/api/personalities/{personality_id}/interview", status_code=204)
+async def delete_interview(personality_id: str, _user: User = Depends(require_admin)) -> None:
+    """Удалить интервью для перегенерации."""
+    from fastapi import HTTPException
+
+    path = INTERVIEWS_DIR / f"{personality_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Interview not found")
     path.unlink()
 
 
@@ -2241,7 +2361,7 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
         Словарь с run_name и статусом.
     """
     from fastapi import HTTPException
-    from web.backend.runner import TooManyRunsError, launch_simulation
+    from web.backend.runner import TooManyRunsError, launch_simulation, launch_simulation_from_config
 
     _validate_scenario_id(scenario_id)
     path = SCENARIOS_DIR / f"{scenario_id}.json"
@@ -2254,29 +2374,63 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
         runner_type = "cognitive"
         rounds = _resolve_rounds(scenario.get("rounds"), default=10)
         sim_config = scenario.get("sim_config")
-        if isinstance(sim_config, dict):
-            from web.backend.runner import launch_simulation_from_config
+        # Генерация персон (личность + интервью) для всех агентов:
+        # для качества и масштабирования используем run-specific директории и
+        # fragment-based retrieval в CognitiveAgentRunner.
+        if not _os.environ.get("OPENAI_API_KEY"):
+            raise HTTPException(status_code=409, detail="OPENAI_API_KEY is not set")
 
-            suffix = scenario_id.replace("-", "")[:8]
-            result = launch_simulation_from_config(
-                scenario_config=sim_config,
-                governance=governance,
-                seed=seed,
-                runner_type=runner_type,
-                rounds=rounds,
-                variant=f"scn{suffix}",
-            )
+        from magistry_sim.llm import create_embedding_provider, create_provider
+        from magistry_sim.persona_generator import generate_personas_parallel
+        from magistry_sim.config import ScenarioConfig
+        from magistry_sim.enums import GovernanceMode, ScenarioId
+        from magistry_sim.scenarios import add_governance_agents, get_scenario
+
+        if isinstance(sim_config, dict):
+            base_cfg = ScenarioConfig.model_validate(sim_config)
         else:
-            result = launch_simulation(
-                scenario=scenario.get("scenario", "S1"),
-                governance=governance,
-                seed=seed,
-                runner_type=runner_type,
-                rounds=rounds,
-            )
+            base_cfg = get_scenario(ScenarioId(scenario.get("scenario", "S1")))
+
+        # Ensure governance agents exist before persona generation so everyone has interview context.
+        try:
+            gov_mode = GovernanceMode(governance)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        base_cfg = add_governance_agents(base_cfg, gov_mode)
+
+        max_workers = int(_os.environ.get("MAGISTRY_PERSONA_MAX_WORKERS", "5") or "5")
+        personalities_dir = (RESULTS_DIR / f"assets_{uuid.uuid4().hex[:10]}_personalities").resolve()
+        interviews_dir = (RESULTS_DIR / f"assets_{uuid.uuid4().hex[:10]}_interviews").resolve()
+
+        llm = create_provider(mock=False, cache_path=".llm_cache.db", use_tool_calls=True)
+        embedder = create_embedding_provider(mock=False, provider="local")
+        cfg_with_personas, _artifacts = await asyncio.to_thread(
+            generate_personas_parallel,
+            base_cfg,
+            llm=llm,
+            embedder=embedder,
+            out_personalities_dir=personalities_dir,
+            out_interviews_dir=interviews_dir,
+            max_workers=max_workers,
+            seed=seed,
+        )
+
+        suffix = scenario_id.replace("-", "")[:8]
+        result = launch_simulation_from_config(
+            scenario_config=cfg_with_personas.model_dump(mode="json"),
+            governance=governance,
+            seed=seed,
+            runner_type=runner_type,
+            rounds=rounds,
+            variant=f"scn{suffix}",
+            personalities_dir=personalities_dir,
+            interviews_dir=interviews_dir,
+        )
         return {"status": "accepted", **result}
     except TooManyRunsError as exc:
         raise HTTPException(status_code=429, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
@@ -2293,7 +2447,7 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
         Словарь с run_name и PID.
     """
     from fastapi import HTTPException
-    from web.backend.runner import TooManyRunsError, launch_simulation
+    from web.backend.runner import TooManyRunsError, launch_simulation_from_config
 
     scenario = data.get("scenario", "S1")
     governance = data.get("governance", "G1")
@@ -2301,16 +2455,49 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
     runner_type = "cognitive"
     rounds = _resolve_rounds(data.get("rounds"), default=10)
     try:
-        result = launch_simulation(
-            scenario=scenario,
+        if not _os.environ.get("OPENAI_API_KEY"):
+            raise HTTPException(status_code=409, detail="OPENAI_API_KEY is not set")
+
+        from magistry_sim.llm import create_embedding_provider, create_provider
+        from magistry_sim.persona_generator import generate_personas_parallel
+        from magistry_sim.enums import GovernanceMode, ScenarioId
+        from magistry_sim.scenarios import add_governance_agents, get_scenario
+
+        base_cfg = get_scenario(ScenarioId(str(scenario)))
+        base_cfg = add_governance_agents(base_cfg, GovernanceMode(str(governance)))
+
+        max_workers = int(_os.environ.get("MAGISTRY_PERSONA_MAX_WORKERS", "5") or "5")
+        personalities_dir = (RESULTS_DIR / f"assets_{uuid.uuid4().hex[:10]}_personalities").resolve()
+        interviews_dir = (RESULTS_DIR / f"assets_{uuid.uuid4().hex[:10]}_interviews").resolve()
+
+        llm = create_provider(mock=False, cache_path=".llm_cache.db", use_tool_calls=True)
+        embedder = create_embedding_provider(mock=False, provider="local")
+        cfg_with_personas, _artifacts = await asyncio.to_thread(
+            generate_personas_parallel,
+            base_cfg,
+            llm=llm,
+            embedder=embedder,
+            out_personalities_dir=personalities_dir,
+            out_interviews_dir=interviews_dir,
+            max_workers=max_workers,
+            seed=seed,
+        )
+
+        result = launch_simulation_from_config(
+            scenario_config=cfg_with_personas.model_dump(mode="json"),
             governance=governance,
             seed=seed,
             runner_type=runner_type,
             rounds=rounds,
+            variant="launch",
+            personalities_dir=personalities_dir,
+            interviews_dir=interviews_dir,
         )
         return {"status": "accepted", **result}
     except TooManyRunsError as exc:
         raise HTTPException(status_code=429, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 

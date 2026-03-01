@@ -37,6 +37,15 @@ def _strip_think_tags(text: str) -> str:
     return cleaned.strip()
 
 
+class LLMCallError(RuntimeError):
+    def __init__(self, *, call_id: str, kind: str, attempt: int, original: Exception) -> None:
+        self.call_id = call_id
+        self.kind = kind
+        self.attempt = attempt
+        self.original = original
+        super().__init__(f"{kind} failed (call_id={call_id}, attempt={attempt}): {original}")
+
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
@@ -250,12 +259,26 @@ class LLMCache:
     """SQLite-кеш для LLM-ответов."""
 
     def __init__(self, db_path: str = ".llm_cache.db") -> None:
-        self._conn = sqlite3.connect(db_path)
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS cache "
-            "(key TEXT PRIMARY KEY, response TEXT)"
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(
+            db_path,
+            check_same_thread=False,
+            timeout=30.0,
         )
-        self._conn.commit()
+        with self._lock:
+            # WAL improves concurrent reads/writes across threads/processes.
+            try:
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+                self._conn.execute("PRAGMA busy_timeout=30000")
+            except Exception:
+                # Pragmas are best-effort; cache must never break main flow.
+                pass
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS cache "
+                "(key TEXT PRIMARY KEY, response TEXT)"
+            )
+            self._conn.commit()
 
     def _make_key(self, system: str, user: str, model: str) -> str:
         """Сформировать ключ кеша.
@@ -283,10 +306,11 @@ class LLMCache:
             Кешированный текст или None.
         """
         key = self._make_key(system, user, model)
-        row = self._conn.execute(
-            "SELECT response FROM cache WHERE key = ?", (key,)
-        ).fetchone()
-        return row[0] if row else None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT response FROM cache WHERE key = ?", (key,)
+            ).fetchone()
+            return row[0] if row else None
 
     def put(
         self, system: str, user: str, model: str, response: str
@@ -300,15 +324,17 @@ class LLMCache:
             response: Текст ответа.
         """
         key = self._make_key(system, user, model)
-        self._conn.execute(
-            "INSERT OR REPLACE INTO cache (key, response) VALUES (?, ?)",
-            (key, response),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO cache (key, response) VALUES (?, ?)",
+                (key, response),
+            )
+            self._conn.commit()
 
     def close(self) -> None:
         """Закрыть соединение с БД."""
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
 
 @runtime_checkable
@@ -486,8 +512,20 @@ class OpenAIEmbeddingProvider:
     ) -> None:
         from openai import OpenAI
 
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
+        self._openai_cls = OpenAI
+        self._client_kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": base_url,
+        }
+        self._client_local = threading.local()
+
+    def _get_client(self) -> Any:
+        client = getattr(self._client_local, "client", None)
+        if client is None:
+            client = self._openai_cls(**self._client_kwargs)
+            self._client_local.client = client
+        return client
 
     def embed(self, text: str) -> list[float]:
         """Получить эмбеддинг текста через API.
@@ -498,7 +536,7 @@ class OpenAIEmbeddingProvider:
         Returns:
             Вектор эмбеддинга.
         """
-        resp = self._client.embeddings.create(input=[text], model=self._model)
+        resp = self._get_client().embeddings.create(input=[text], model=self._model)
         return resp.data[0].embedding
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
@@ -510,7 +548,7 @@ class OpenAIEmbeddingProvider:
         Returns:
             Список векторов эмбеддингов, упорядоченных по индексу.
         """
-        resp = self._client.embeddings.create(input=texts, model=self._model)
+        resp = self._get_client().embeddings.create(input=texts, model=self._model)
         return [d.embedding for d in sorted(resp.data, key=lambda x: x.index)]
 
 
@@ -652,7 +690,9 @@ class OpenAICompatibleProvider:
             kwargs["api_key"] = api_key
         if base_url:
             kwargs["base_url"] = base_url
-        self._client = OpenAI(**kwargs)
+        self._client_local = threading.local()
+        self._openai_cls = OpenAI
+        self._client_kwargs = dict(kwargs)
         self._model = model
         self._cache = LLMCache(cache_path) if cache_path else None
         self._use_tool_calls = use_tool_calls
@@ -671,6 +711,13 @@ class OpenAICompatibleProvider:
                     "allow_fallbacks": True,
                 }
             }
+
+    def _get_client(self) -> Any:
+        client = getattr(self._client_local, "client", None)
+        if client is None:
+            client = self._openai_cls(**self._client_kwargs)
+            self._client_local.client = client
+        return client
 
     def _retry_sleep_s(self, attempt: int) -> float:
         base = self._retry_base_delay_s * (2 ** max(0, attempt))
@@ -733,7 +780,7 @@ class OpenAICompatibleProvider:
 
             response = None
             try:
-                response = self._client.chat.completions.create(**create_kwargs)
+                response = self._get_client().chat.completions.create(**create_kwargs)
                 duration_ms = round((time.monotonic() - started) * 1000, 1)
                 raw_response = _jsonable(response)
                 self._log(
@@ -798,7 +845,7 @@ class OpenAICompatibleProvider:
                 )
 
                 if not will_retry:
-                    raise
+                    raise LLMCallError(call_id=call_id, kind=kind, attempt=attempt, original=exc) from exc
                 time.sleep(sleep_s)
 
         raise RuntimeError("LLM retries exhausted")
@@ -899,12 +946,45 @@ class OpenAICompatibleProvider:
             Structured-ответ LLM.
         """
         if self._use_tool_calls:
+            try:
+                return self._structured_via_tool_call(
+                    system, user, schema, temperature
+                )
+            except Exception as exc:
+                self._log(
+                    {
+                        "ts": time.time(),
+                        "kind": "structured_fallback",
+                        "model": self._model,
+                        "from": "tool_call",
+                        "to": "json_schema",
+                        "error": {"type": exc.__class__.__name__, "message": str(exc)},
+                    },
+                    is_error=True,
+                )
+                return self._structured_via_json_schema(
+                    system, user, schema, temperature
+                )
+
+        try:
+            return self._structured_via_json_schema(
+                system, user, schema, temperature
+            )
+        except Exception as exc:
+            self._log(
+                {
+                    "ts": time.time(),
+                    "kind": "structured_fallback",
+                    "model": self._model,
+                    "from": "json_schema",
+                    "to": "tool_call",
+                    "error": {"type": exc.__class__.__name__, "message": str(exc)},
+                },
+                is_error=True,
+            )
             return self._structured_via_tool_call(
                 system, user, schema, temperature
             )
-        return self._structured_via_json_schema(
-            system, user, schema, temperature
-        )
 
     def _structured_via_json_schema(
         self,
@@ -1074,13 +1154,18 @@ def create_provider(
     resolved_key = api_key or os.getenv("OPENAI_API_KEY")
     resolved_url = base_url or os.getenv("OPENAI_BASE_URL")
 
+    resolved_use_tool_calls = use_tool_calls
+    if not resolved_use_tool_calls:
+        raw = (os.getenv("MAGISTRY_LLM_USE_TOOL_CALLS") or "").strip().lower()
+        resolved_use_tool_calls = raw in ("1", "true", "yes", "on")
+
     return OpenAICompatibleProvider(
         model=resolved_model,
         api_key=resolved_key,
         base_url=resolved_url,
         cache_path=cache_path,
         provider_order=provider_order,
-        use_tool_calls=use_tool_calls,
+        use_tool_calls=resolved_use_tool_calls,
     )
 
 

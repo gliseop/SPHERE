@@ -4,8 +4,14 @@ import pytest
 from magistry_sim.interviews import (
     Interview,
     InterviewLibrary,
+    InterviewFragment,
+    InterviewFragmentIndex,
     INTERVIEW_QUESTIONS,
+    INTERVIEW_QUESTIONS_FLAT,
+    INTERVIEW_PROTOCOL,
     generate_interview,
+    save_interview,
+    load_interview,
 )
 from magistry_sim.personality import (
     AgentPersonality,
@@ -59,6 +65,28 @@ class TestInterviewModel:
 
     def test_questions_count(self):
         assert len(INTERVIEW_QUESTIONS) == 10
+
+    def test_extended_protocol_count(self):
+        assert len(INTERVIEW_QUESTIONS_FLAT) == 30
+
+    def test_protocol_has_8_domains(self):
+        assert len(INTERVIEW_PROTOCOL) == 8
+
+    def test_protocol_version_default(self):
+        interview = Interview(
+            id="v1",
+            archetype="pragmatist",
+            role="чиновник",
+            hexaco={"honesty_humility": 50, "emotionality": 50,
+                    "extraversion": 50, "agreeableness": 50,
+                    "conscientiousness": 50, "openness": 50},
+            dark_triad={"narcissism": 30, "machiavellianism": 30,
+                        "psychopathy": 30},
+            interview={"q": "a"},
+            expert_psychologist="ok",
+            expert_economist="ok",
+        )
+        assert interview.protocol_version == "v1"
 
 
 class TestInterviewLibrary:
@@ -189,7 +217,7 @@ class TestInterviewGeneration:
             ),
         )
 
-    def test_generate_interview_returns_interview(self):
+    def test_generate_interview_v1_returns_interview(self):
         llm = MockLLMProvider()
         embedder = MockEmbeddingProvider(dimensions=384)
         personality = self._make_personality()
@@ -201,11 +229,30 @@ class TestInterviewGeneration:
             llm=llm,
             embedder=embedder,
             interview_id="test_001",
+            use_extended_protocol=False,
         )
         assert result.id == "test_001"
         assert result.archetype == "opportunist"
         assert result.role == "чиновник"
         assert len(result.embedding) == 384
+        assert result.protocol_version == "v1"
+
+    def test_generate_interview_v2_returns_30_answers(self):
+        llm = MockLLMProvider()
+        embedder = MockEmbeddingProvider(dimensions=384)
+        personality = self._make_personality()
+
+        result = generate_interview(
+            personality=personality,
+            role="чиновник",
+            archetype="opportunist",
+            llm=llm,
+            embedder=embedder,
+            interview_id="test_v2",
+            use_extended_protocol=True,
+        )
+        assert len(result.interview) == 30
+        assert result.protocol_version == "v2"
 
     def test_generate_interview_has_expert_assessments(self):
         llm = MockLLMProvider(
@@ -223,11 +270,12 @@ class TestInterviewGeneration:
             llm=llm,
             embedder=embedder,
             interview_id="test_002",
+            use_extended_protocol=False,
         )
         assert result.expert_psychologist == "Экспертный анализ"
         assert result.expert_economist == "Экспертный анализ"
 
-    def test_generate_interview_calls_llm(self):
+    def test_generate_interview_v1_calls_llm_3_times(self):
         llm = MockLLMProvider()
         embedder = MockEmbeddingProvider(dimensions=384)
         personality = self._make_personality()
@@ -239,9 +287,111 @@ class TestInterviewGeneration:
             llm=llm,
             embedder=embedder,
             interview_id="test_003",
+            use_extended_protocol=False,
         )
-        # 1 вызов на интервью + 1 на психолога + 1 на экономиста = 3
+        # 1 блок ответов + 1 психолог + 1 экономист = 3
         assert llm.call_count == 3
+
+    def test_generate_interview_v2_calls_llm_5_times(self):
+        llm = MockLLMProvider()
+        embedder = MockEmbeddingProvider(dimensions=384)
+        personality = self._make_personality()
+
+        generate_interview(
+            personality=personality,
+            role="бизнесмен",
+            archetype="initiator",
+            llm=llm,
+            embedder=embedder,
+            interview_id="test_v2_calls",
+            use_extended_protocol=True,
+        )
+        # 3 блока по 10 ответов + 1 психолог + 1 экономист = 5
+        assert llm.call_count == 5
+
+
+class TestInterviewPersistence:
+    """Тесты сохранения и загрузки per-personality интервью."""
+
+    def test_save_and_load(self, tmp_path):
+        interview = Interview(
+            id="pers_001",
+            archetype="pragmatist",
+            role="чиновник",
+            hexaco={"honesty_humility": 50, "emotionality": 50,
+                    "extraversion": 50, "agreeableness": 50,
+                    "conscientiousness": 50, "openness": 50},
+            dark_triad={"narcissism": 30, "machiavellianism": 30,
+                        "psychopathy": 30},
+            interview={"q1": "answer1"},
+            expert_psychologist="psych",
+            expert_economist="econ",
+            protocol_version="v2",
+        )
+        save_interview(interview, tmp_path)
+        loaded = load_interview("pers_001", tmp_path)
+        assert loaded is not None
+        assert loaded.id == "pers_001"
+        assert loaded.protocol_version == "v2"
+
+    def test_load_missing_returns_none(self, tmp_path):
+        assert load_interview("nonexistent", tmp_path) is None
+
+
+class TestInterviewFragmentIndex:
+    """Тесты fragment-based retrieval."""
+
+    def _make_interview(self) -> Interview:
+        return Interview(
+            id="frag_test",
+            archetype="opportunist",
+            role="чиновник",
+            hexaco={"honesty_humility": 30, "emotionality": 50,
+                    "extraversion": 60, "agreeableness": 40,
+                    "conscientiousness": 45, "openness": 55},
+            dark_triad={"narcissism": 60, "machiavellianism": 70,
+                        "psychopathy": 30},
+            interview={
+                "Как вы относитесь к деньгам?": "Деньги для меня инструмент влияния и свободы.",
+                "Что для вас справедливость?": "Справедливость — понятие относительное и зависит от контекста.",
+                "Как вы принимаете решения под давлением?": "Я анализирую выгоды и риски, действую прагматично.",
+            },
+            expert_psychologist="Склонен к оппортунизму, низкая эмпатия.",
+            expert_economist="Ищет краткосрочную выгоду, готов к риску.",
+        )
+
+    def test_from_interview_creates_fragments(self):
+        interview = self._make_interview()
+        index = InterviewFragmentIndex.from_interview(interview)
+        # 3 вопроса + 2 эксперта = 5 фрагментов
+        assert len(index) == 5
+
+    def test_search_returns_relevant_fragments(self):
+        interview = self._make_interview()
+        index = InterviewFragmentIndex.from_interview(interview)
+        results = index.search("деньги финансы выгода", top_k=2)
+        assert len(results) == 2
+        # Фрагмент про деньги должен быть в топе
+        texts = [r.text() for r in results]
+        assert any("деньги" in t.lower() for t in texts)
+
+    def test_search_empty_index(self):
+        index = InterviewFragmentIndex()
+        results = index.search("любой запрос")
+        assert results == []
+
+    def test_fragment_domains(self):
+        interview = self._make_interview()
+        index = InterviewFragmentIndex.from_interview(interview)
+        domains = {f.domain for f in index._fragments}
+        assert "expert" in domains
+
+    def test_from_interview_with_embedder(self):
+        interview = self._make_interview()
+        embedder = MockEmbeddingProvider(dimensions=8)
+        index = InterviewFragmentIndex.from_interview(interview, embedder=embedder)
+        for frag in index._fragments:
+            assert len(frag.embedding) == 8
 
 
 class TestStructuredInterviewGeneration:
@@ -298,9 +448,9 @@ class TestStructuredInterviewGeneration:
             llm=StructuredLLM(),
             embedder=embedder,
             interview_id="test-structured-001",
+            use_extended_protocol=False,
         )
 
-        # Каждый вопрос получает свой уникальный ответ
         answers = list(interview.interview.values())
         assert len(answers) == 10
         assert len(set(answers)) == 10
@@ -338,13 +488,14 @@ class TestStructuredInterviewGeneration:
             llm=StructuredLLM(),
             embedder=embedder,
             interview_id="test-structured-002",
+            use_extended_protocol=False,
         )
 
         assert interview.expert_psychologist == "Склонен к риску, низкая эмпатия"
         assert interview.expert_economist == "Ищет краткосрочную выгоду"
 
-    def test_generate_interview_structured_three_calls(self):
-        """generate_interview делает ровно 3 вызова generate_structured."""
+    def test_generate_interview_structured_three_calls_v1(self):
+        """generate_interview v1 делает ровно 3 вызова generate_structured."""
         call_count = 0
 
         class CountingLLM:
@@ -370,6 +521,7 @@ class TestStructuredInterviewGeneration:
             llm=CountingLLM(),
             embedder=embedder,
             interview_id="test-structured-003",
+            use_extended_protocol=False,
         )
 
         assert call_count == 3

@@ -124,6 +124,8 @@ def _print_result(result, metrics) -> None:
 def _create_runner(
     runner_type: str,
     interview_path: str | None = None,
+    interviews_dir: str | None = None,
+    personalities_dir: str | None = None,
 ) -> object:
     """Создать runner указанного типа.
 
@@ -175,12 +177,16 @@ def _create_runner(
         embedder = create_embedding_provider(mock=False, provider=embed_mode)
 
         lib_path = Path(interview_path) if interview_path else None
+        interviews_dir_path = Path(interviews_dir) if interviews_dir else None
+        personalities_dir_path = Path(personalities_dir) if personalities_dir else None
 
         return CognitiveAgentRunner(
             llm_provider=llm,
             embedder=embedder,
             verbose=True,
             interview_library_path=lib_path,
+            interviews_dir=interviews_dir_path,
+            personalities_dir=personalities_dir_path,
         )
 
     raise RuntimeError(f"Unknown runner type: {runner_type}")
@@ -298,6 +304,18 @@ def main() -> None:
         help="Путь к библиотеке интервью (JSONL)",
     )
     parser.add_argument(
+        "--interviews-dir",
+        type=str,
+        default=None,
+        help="Директория с per-personality/per-agent интервью (JSON) для fragment-based retrieval",
+    )
+    parser.add_argument(
+        "--personalities-dir",
+        type=str,
+        default=None,
+        help="Директория с личностями (архетипы JSON) для personality_archetype",
+    )
+    parser.add_argument(
         "--batch",
         action="store_true",
         default=False,
@@ -327,6 +345,18 @@ def main() -> None:
         default="sync",
         choices=["sync", "async"],
         help="Режим симуляции: sync (раундовый) или async (непрерывное время)",
+    )
+    parser.add_argument(
+        "--parallel-agents",
+        action="store_true",
+        default=False,
+        help="Параллельная генерация решений агентами (ускоряет LLM-симуляции)",
+    )
+    parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        default=None,
+        help="Максимум потоков для --parallel-agents (по умолчанию: авто)",
     )
     parser.add_argument(
         "--start-time",
@@ -393,7 +423,12 @@ def main() -> None:
 
     runner_type = args.runner or "cognitive"
     try:
-        runner = _create_runner(runner_type, interview_path=args.interviews)
+        runner = _create_runner(
+            runner_type,
+            interview_path=args.interviews,
+            interviews_dir=args.interviews_dir,
+            personalities_dir=args.personalities_dir,
+        )
     except RuntimeError as exc:
         console.print(f"[red]{exc}[/red]")
         sys.exit(1)
@@ -411,6 +446,8 @@ def _run_sync(args, scenario, runner, governance) -> None:
         governance=governance,
         runner=runner,
         seed=args.seed,
+        parallel_agents=bool(args.parallel_agents),
+        parallel_workers=args.parallel_workers,
     )
 
     console.print(

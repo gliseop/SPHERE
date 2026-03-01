@@ -100,6 +100,9 @@ def launch_simulation_from_config(
     runner_type: str = "cognitive",
     rounds: int = 10,
     variant: str | None = None,
+    *,
+    personalities_dir: Path | None = None,
+    interviews_dir: Path | None = None,
 ) -> dict:
     """Запустить симуляцию на основе JSON-конфига ScenarioConfig."""
     scenario_id = str(scenario_config.get("id", "S1") or "S1")
@@ -180,6 +183,10 @@ def launch_simulation_from_config(
             "--summary-json",
             str(summary_path),
         ]
+        if personalities_dir is not None:
+            cmd.extend(["--personalities-dir", str(personalities_dir)])
+        if interviews_dir is not None:
+            cmd.extend(["--interviews-dir", str(interviews_dir)])
 
         with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
             proc = subprocess.Popen(
@@ -205,6 +212,9 @@ def launch_simulation(
     seed: int = 42,
     runner_type: str = "cognitive",
     rounds: int = 10,
+    *,
+    personalities_dir: Path | None = None,
+    interviews_dir: Path | None = None,
 ) -> dict:
     """Запустить симуляцию как subprocess.
 
@@ -282,6 +292,10 @@ def launch_simulation(
             "--summary-json",
             str(summary_path),
         ]
+        if personalities_dir is not None:
+            cmd.extend(["--personalities-dir", str(personalities_dir)])
+        if interviews_dir is not None:
+            cmd.extend(["--interviews-dir", str(interviews_dir)])
 
         # Важно: не использовать PIPE без чтения stdout/stderr — иначе процесс может
         # зависнуть при заполнении буфера (особенно для verbose-runner-ов).

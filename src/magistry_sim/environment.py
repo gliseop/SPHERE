@@ -214,6 +214,9 @@ class Environment:
         arbiter: Arbiter | None = None,
         world_generator: WorldGenerator | None = None,
         tracer: LLMTracer | None = None,
+        *,
+        parallel_agents: bool = False,
+        parallel_workers: int | None = None,
     ) -> None:
         gov = governance or scenario.governance.mode
         self._scenario = add_governance_agents(scenario, gov)
@@ -227,6 +230,8 @@ class Environment:
         self._arbiter = arbiter
         self._world_generator = world_generator
         self._tracer = tracer
+        self._parallel_agents = bool(parallel_agents)
+        self._parallel_workers = parallel_workers
         self._init_state()
 
     def _init_state(self) -> None:
@@ -308,25 +313,187 @@ class Environment:
                 self._state.event_log.all_events
             )
 
-            for agent_id in agent_ids:
-                all_events = self._state.event_log.all_events
-                prior_events = [
+            if not self._parallel_agents:
+                for agent_id in agent_ids:
+                    all_events = self._state.event_log.all_events
+                    prior_events = [
+                        {
+                            "agent_id": e.agent_id,
+                            "event_type": e.event_type,
+                            "payload": e.payload,
+                        }
+                        for e in all_events[events_before_round:]
+                        if e.round == round_num
+                    ]
+                    self._deliver_observations(agent_id, prior_events)
+                    self._run_agent_turn(agent_id)
+            else:
+                # Параллельная генерация решений агентами в рамках раунда.
+                # Семантика отличается от последовательной: агенты не видят
+                # действия друг друга в этом же раунде, только прошлые раунды.
+                prev_round_events = [
                     {
                         "agent_id": e.agent_id,
                         "event_type": e.event_type,
                         "payload": e.payload,
                     }
-                    for e in all_events[events_before_round:]
-                    if e.round == round_num
+                    for e in self._state.event_log.all_events
+                    if e.round == (round_num - 1)
                 ]
-                self._deliver_observations(agent_id, prior_events)
-                self._run_agent_turn(agent_id)
+                for agent_id in agent_ids:
+                    self._deliver_observations(agent_id, prev_round_events)
+
+                actions_by_agent: dict[str, list[dict]] = {}
+                max_workers = (
+                    int(self._parallel_workers)
+                    if self._parallel_workers is not None
+                    else min(16, max(1, len(agent_ids)))
+                )
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    futures = {
+                        ex.submit(self._generate_actions_only, agent_id): agent_id
+                        for agent_id in agent_ids
+                    }
+                    for fut in as_completed(futures):
+                        aid = futures[fut]
+                        try:
+                            actions_by_agent[aid] = fut.result() or []
+                        except Exception:
+                            actions_by_agent[aid] = []
+
+                for agent_id in agent_ids:
+                    self._apply_actions(
+                        agent_id,
+                        actions_by_agent.get(agent_id, []),
+                    )
 
             self._apply_round_end_effects()
             self._run_world_generator(round_num)
             self._narrate_round(round_num)
 
         return self._build_result()
+
+    def _generate_actions_only(self, agent_id: str) -> list[dict]:
+        """Сгенерировать действия агента (без применения к миру)."""
+        token_state = current_state.set(self._state)
+        token_agent = current_agent_id.set(agent_id)
+        token_runner = current_runner.set(self._runner)
+        try:
+            situation = build_situation(agent_id, self._state)
+            available_tools = list(TOOL_DISPATCH.keys())
+            actions = self._runner.run_turn(
+                agent_id=agent_id,
+                situation=situation,
+                tools=available_tools,
+                state=self._state,
+            )
+            return actions if isinstance(actions, list) else []
+        finally:
+            current_state.reset(token_state)
+            current_agent_id.reset(token_agent)
+            current_runner.reset(token_runner)
+
+    def _apply_actions(self, agent_id: str, actions: list[dict]) -> None:
+        """Применить заранее сгенерированные действия агента."""
+        token_state = current_state.set(self._state)
+        token_agent = current_agent_id.set(agent_id)
+        token_runner = current_runner.set(self._runner)
+
+        self._update_tracing_context(agent_id)
+
+        try:
+            if self._arbiter is not None:
+                for action in actions:
+                    tool_name = action.get("tool", "")
+                    args = action.get("args", {})
+
+                    if tool_name == "perform_action":
+                        description = args.get("description", "")
+                        target = args.get("target", "")
+                        justification = args.get("justification", "")
+
+                        verdict = self._arbiter.evaluate(
+                            agent_id=agent_id,
+                            description=description,
+                            target=target,
+                            justification=justification,
+                            state=self._state,
+                            round_num=self._state.round,
+                            org_description=getattr(
+                                self._scenario, "narrative_context", ""
+                            ),
+                        )
+
+                        if verdict.feasible:
+                            failed_ops: list[str] = []
+                            for op in verdict.state_changes:
+                                op_result = apply_state_op(
+                                    op,
+                                    self._state,
+                                    self._state.round,
+                                    agent_id,
+                                )
+                                if not op_result.success:
+                                    failed_ops.append(op_result.message)
+                            if failed_ops:
+                                self._state.event_log.log(
+                                    round=self._state.round,
+                                    event_type="arbiter_op_failed",
+                                    agent_id=agent_id,
+                                    payload={
+                                        "description": description,
+                                        "target": target,
+                                        "errors": failed_ops,
+                                    },
+                                )
+                            else:
+                                self._state.event_log.log(
+                                    round=self._state.round,
+                                    event_type="arbiter_approved",
+                                    agent_id=agent_id,
+                                    payload={
+                                        "description": description,
+                                        "target": target,
+                                        "justification": justification,
+                                        "narrative": verdict.narrative,
+                                    },
+                                )
+                        else:
+                            self._state.event_log.log(
+                                round=self._state.round,
+                                event_type="arbiter_rejected",
+                                agent_id=agent_id,
+                                payload={
+                                    "description": description,
+                                    "target": target,
+                                    "justification": justification,
+                                    "narrative": verdict.narrative,
+                                },
+                            )
+                    else:
+                        # Fallback на TOOL_DISPATCH (обратная совместимость)
+                        func = TOOL_DISPATCH.get(tool_name)
+                        if func:
+                            try:
+                                func(**args)
+                            except TypeError:
+                                pass
+            else:
+                for action in actions:
+                    tool_name = action.get("tool", "")
+                    args = action.get("args", {})
+                    func = TOOL_DISPATCH.get(tool_name)
+                    if func:
+                        try:
+                            func(**args)
+                        except TypeError:
+                            pass
+        finally:
+            current_state.reset(token_state)
+            current_agent_id.reset(token_agent)
+            current_runner.reset(token_runner)
 
     def _deliver_observations(
         self,
