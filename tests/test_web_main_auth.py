@@ -25,7 +25,7 @@ def viewer_token() -> str:
 
 
 def test_login_success():
-    with patch("web.backend.main.get_user_by_username", return_value=ADMIN):
+    with patch("web.backend.routes.auth.get_user_by_username", return_value=ADMIN):
         r = client.post("/api/auth/login", data={"username": "admin", "password": "secret"})
     assert r.status_code == 200
     assert "access_token" in r.json()
@@ -33,13 +33,13 @@ def test_login_success():
 
 
 def test_login_wrong_password():
-    with patch("web.backend.main.get_user_by_username", return_value=ADMIN):
+    with patch("web.backend.routes.auth.get_user_by_username", return_value=ADMIN):
         r = client.post("/api/auth/login", data={"username": "admin", "password": "wrong"})
     assert r.status_code == 401
 
 
 def test_login_unknown_user():
-    with patch("web.backend.main.get_user_by_username", return_value=None):
+    with patch("web.backend.routes.auth.get_user_by_username", return_value=None):
         r = client.post("/api/auth/login", data={"username": "ghost", "password": "x"})
     assert r.status_code == 401
 
@@ -51,7 +51,7 @@ def test_get_runs_no_auth_returns_401():
 
 def test_get_runs_with_viewer_token():
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
-        with patch("web.backend.main.RESULTS_DIR") as mock_dir:
+        with patch("web.backend.routes.runs.RESULTS_DIR") as mock_dir:
             mock_dir.glob.return_value = []
             r = client.get(
                 "/api/runs",
@@ -74,7 +74,7 @@ def test_create_scenario_admin_gets_201():
     with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
         mock_path = MagicMock()
         mock_path.write_text = MagicMock()
-        with patch("web.backend.main.SCENARIOS_DIR") as mock_dir:
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR") as mock_dir:
             mock_dir.__truediv__ = MagicMock(return_value=mock_path)
             r = client.post(
                 "/api/scenarios",

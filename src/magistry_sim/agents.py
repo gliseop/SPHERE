@@ -490,7 +490,240 @@ ACTION_FORMAT_INSTRUCTIONS = """\
 """
 
 
-class LLMAgentRunner:
+class _ActionParserMixin:
+    """Миксин для парсинга JSON-действий из ответов языковой модели.
+
+    Содержит методы извлечения и валидации JSON-массивов действий
+    из текстового вывода языковой модели. Используется как базовый
+    класс для LLMAgentRunner и CognitiveAgentRunner, устраняя
+    дублирование кода парсинга.
+    """
+
+    def _parse_json_actions(self, text: str) -> list[dict]:
+        """Разобрать JSON-ответ языковой модели в список действий.
+
+        Применяет несколько стратегий извлечения JSON-массива:
+        1. Весь текст как JSON.
+        2. Markdown code fence.
+        3. Поиск сбалансированных скобок [...].
+        4. Жадный regex.
+        5. Единичный объект {tool, args}.
+
+        Args:
+            text: Текст ответа языковой модели.
+
+        Returns:
+            Список действий [{tool, args}].
+        """
+        def _normalize(parsed: list) -> list[dict] | None:
+            """Нормализовать JSON-массив в список действий.
+
+            Returns:
+                list[dict]: Валидные действия (включая пустой список).
+                None: Если массив не похож на список действий.
+            """
+            validated = self._validate_actions(parsed)
+            if validated:
+                return validated
+            if parsed == []:
+                return []
+            return None
+
+        # Попытка 1: весь текст — JSON
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(
+                r"^```(?:json)?\s*", "", cleaned
+            )
+            cleaned = re.sub(r"\s*```\s*$", "", cleaned)
+            cleaned = cleaned.strip()
+
+        try:
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, list):
+                actions = _normalize(parsed)
+                if actions is not None:
+                    return actions
+        except json.JSONDecodeError:
+            pass
+
+        # Попытка 2: markdown code block
+        code_match = re.search(
+            r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL
+        )
+        if code_match:
+            try:
+                parsed = json.loads(code_match.group(1))
+                if isinstance(parsed, list):
+                    actions = _normalize(parsed)
+                    if actions is not None:
+                        return actions
+            except json.JSONDecodeError:
+                pass
+
+        # Попытка 3: сбалансированные скобки
+        saw_empty = False
+        search_from = 0
+        while True:
+            start = text.find("[", search_from)
+            if start == -1:
+                break
+
+            result = self._extract_json_array(text[start:])
+            if result is not None:
+                actions = _normalize(result)
+                if actions:
+                    return actions
+                if actions == []:
+                    saw_empty = True
+            search_from = start + 1
+
+        if saw_empty:
+            return []
+
+        # Попытка 4: жадный regex
+        match = re.search(r"\[.*\]", text, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, list):
+                    actions = _normalize(parsed)
+                    if actions is not None:
+                        return actions
+            except json.JSONDecodeError:
+                pass
+
+        # Попытка 5: единичный объект {tool, args}
+        obj_match = re.search(
+            r'\{\s*"tool"\s*:', text, re.DOTALL
+        )
+        if obj_match:
+            candidate = self._extract_json_object(
+                text, obj_match.start()
+            )
+            if candidate is not None:
+                return self._validate_actions([candidate])
+
+        logger.warning(
+            "Не удалось разобрать действия из ответа LLM: %s",
+            text[:200],
+        )
+        return []
+
+    @staticmethod
+    def _extract_json_array(text: str) -> list | None:
+        """Извлечь JSON-массив из текста с помощью подсчёта скобок.
+
+        Args:
+            text: Исходный текст (начинается с '[').
+
+        Returns:
+            Распарсенный список или None.
+        """
+        start = text.find("[")
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : i + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                        if isinstance(parsed, list):
+                            return parsed
+                    except json.JSONDecodeError:
+                        pass
+                    break
+        return None
+
+    @staticmethod
+    def _extract_json_object(
+        text: str, start: int
+    ) -> dict | None:
+        """Извлечь JSON-объект из текста начиная с позиции start.
+
+        Args:
+            text: Исходный текст.
+            start: Позиция открывающей фигурной скобки.
+
+        Returns:
+            Распарсенный словарь или None.
+        """
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : i + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                        if isinstance(parsed, dict):
+                            return parsed
+                    except json.JSONDecodeError:
+                        pass
+                    break
+        return None
+
+    @staticmethod
+    def _validate_actions(actions: list) -> list[dict]:
+        """Проверить и нормализовать список действий.
+
+        Args:
+            actions: Сырой список из JSON.
+
+        Returns:
+            Список валидных действий.
+        """
+        valid = []
+        for item in actions:
+            if not isinstance(item, dict):
+                continue
+            tool = item.get("tool", "")
+            args = item.get("args", {})
+            if not isinstance(tool, str) or not tool:
+                continue
+            if not isinstance(args, dict):
+                args = {}
+            valid.append({"tool": tool, "args": args})
+        return valid
+
+
+class LLMAgentRunner(_ActionParserMixin):
     """Runner, использующий LLM напрямую (без CrewAI).
 
     Отправляет ситуацию и описание инструментов в LLM,
@@ -596,224 +829,4 @@ class LLMAgentRunner:
 
         response = self._llm.generate(system=system, user=user)
         return _strip_model_artifacts(response.text)
-
-    def _parse_json_actions(self, text: str) -> list[dict]:
-        """Разобрать JSON-ответ LLM в список действий.
-
-        Применяет несколько стратегий извлечения JSON-массива:
-        1. Весь текст как JSON.
-        2. Markdown code fence.
-        3. Поиск сбалансированных скобок [...].
-        4. Жадный regex.
-
-        Args:
-            text: Текст ответа LLM.
-
-        Returns:
-            Список действий [{tool, args}].
-        """
-        def _normalize_actions(parsed: list) -> list[dict] | None:
-            """Нормализовать JSON-массив в список действий.
-
-            Возвращает:
-                list[dict]: Валидные действия (включая пустой список).
-                None: Если массив не похож на список действий.
-            """
-            validated = self._validate_actions(parsed)
-            if validated:
-                return validated
-            if parsed == []:
-                return []
-            return None
-
-        # Попытка 1: весь текст — JSON
-        cleaned = text.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(
-                r"^```(?:json)?\s*", "", cleaned
-            )
-            cleaned = re.sub(r"\s*```\s*$", "", cleaned)
-            cleaned = cleaned.strip()
-
-        try:
-            parsed = json.loads(cleaned)
-            if isinstance(parsed, list):
-                actions = _normalize_actions(parsed)
-                if actions is not None:
-                    return actions
-        except json.JSONDecodeError:
-            pass
-
-        # Попытка 2: markdown code block
-        code_match = re.search(
-            r"```(?:json)?\s*(\[.*?\])\s*```", text, re.DOTALL
-        )
-        if code_match:
-            try:
-                parsed = json.loads(code_match.group(1))
-                if isinstance(parsed, list):
-                    actions = _normalize_actions(parsed)
-                    if actions is not None:
-                        return actions
-            except json.JSONDecodeError:
-                pass
-
-        # Попытка 3: сбалансированные скобки
-        # (ищем все JSON-массивы и пропускаем нерелевантные, например [1])
-        saw_empty_array = False
-        search_from = 0
-        while True:
-            start = text.find("[", search_from)
-            if start == -1:
-                break
-
-            result = self._extract_json_array(text[start:])
-            if result is not None:
-                actions = _normalize_actions(result)
-                if actions:
-                    return actions
-                if actions == []:
-                    saw_empty_array = True
-            search_from = start + 1
-
-        if saw_empty_array:
-            return []
-
-        # Попытка 4: жадный regex
-        match = re.search(r"\[.*\]", text, re.DOTALL)
-        if match:
-            try:
-                parsed = json.loads(match.group())
-                if isinstance(parsed, list):
-                    actions = _normalize_actions(parsed)
-                    if actions is not None:
-                        return actions
-            except json.JSONDecodeError:
-                pass
-
-        # Попытка 5: единичный объект {tool, args}
-        obj_match = re.search(
-            r'\{\s*"tool"\s*:', text, re.DOTALL
-        )
-        if obj_match:
-            candidate = self._extract_json_object(
-                text, obj_match.start()
-            )
-            if candidate is not None:
-                return self._validate_actions([candidate])
-
-        logger.warning(
-            "Не удалось разобрать действия из ответа LLM: %s",
-            text[:200],
-        )
-        return []
-
-    def _extract_json_array(self, text: str) -> list | None:
-        """Извлечь JSON-массив из текста с помощью подсчёта скобок.
-
-        Args:
-            text: Исходный текст.
-
-        Returns:
-            Распарсенный список или None.
-        """
-        start = text.find("[")
-        if start == -1:
-            return None
-
-        depth = 0
-        in_string = False
-        escape_next = False
-        for i in range(start, len(text)):
-            ch = text[i]
-            if escape_next:
-                escape_next = False
-                continue
-            if ch == "\\" and in_string:
-                escape_next = True
-                continue
-            if ch == '"' and not escape_next:
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch == "[":
-                depth += 1
-            elif ch == "]":
-                depth -= 1
-                if depth == 0:
-                    candidate = text[start : i + 1]
-                    try:
-                        parsed = json.loads(candidate)
-                        if isinstance(parsed, list):
-                            return parsed
-                    except json.JSONDecodeError:
-                        pass
-                    break
-        return None
-
-    def _extract_json_object(
-        self, text: str, start: int
-    ) -> dict | None:
-        """Извлечь JSON-объект из текста начиная с позиции start.
-
-        Args:
-            text: Исходный текст.
-            start: Позиция открывающей фигурной скобки.
-
-        Returns:
-            Распарсенный словарь или None.
-        """
-        depth = 0
-        in_string = False
-        escape_next = False
-        for i in range(start, len(text)):
-            ch = text[i]
-            if escape_next:
-                escape_next = False
-                continue
-            if ch == "\\" and in_string:
-                escape_next = True
-                continue
-            if ch == '"' and not escape_next:
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    candidate = text[start : i + 1]
-                    try:
-                        parsed = json.loads(candidate)
-                        if isinstance(parsed, dict):
-                            return parsed
-                    except json.JSONDecodeError:
-                        pass
-                    break
-        return None
-
-    def _validate_actions(self, actions: list) -> list[dict]:
-        """Проверить и нормализовать список действий.
-
-        Args:
-            actions: Сырой список из JSON.
-
-        Returns:
-            Список валидных действий.
-        """
-        valid = []
-        for item in actions:
-            if not isinstance(item, dict):
-                continue
-            tool = item.get("tool", "")
-            args = item.get("args", {})
-            if not isinstance(tool, str) or not tool:
-                continue
-            if not isinstance(args, dict):
-                args = {}
-            valid.append({"tool": tool, "args": args})
-        return valid
 

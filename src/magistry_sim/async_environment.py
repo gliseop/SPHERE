@@ -14,7 +14,7 @@ from magistry_sim.cognitive_runner import CognitiveAgentRunner
 from magistry_sim.context import build_situation
 from magistry_sim.conversation import ChannelType, ConversationManager
 from magistry_sim.document_forge import DocType, DocumentForge
-from magistry_sim.environment import TOOL_DISPATCH, _OBSERVABLE_EVENT_TYPES, format_observation
+from magistry_sim._env_shared import TOOL_DISPATCH, _OBSERVABLE_EVENT_TYPES, format_observation
 from magistry_sim.locations import Location, LocationManager
 from magistry_sim.narrator import WorldNarrator
 from magistry_sim.reputation import (
