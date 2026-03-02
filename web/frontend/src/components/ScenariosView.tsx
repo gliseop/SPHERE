@@ -13,6 +13,13 @@ interface Agent {
   name: string
   role: string
   initial_reputation: number
+  personality_archetype?: string | null
+}
+
+interface PersonalityOption {
+  id: string
+  name?: string
+  has_interview?: boolean
 }
 
 interface Scenario {
@@ -26,6 +33,9 @@ interface Scenario {
   agents: Agent[]
   sim_config?: Record<string, unknown> | null
   runner?: string
+  parallel_agents?: boolean
+  parallel_workers?: number | null
+  parallel_window?: number | null
 }
 
 interface TemplateScenario {
@@ -83,6 +93,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
   const [templateScenarios, setTemplateScenarios] = useState<TemplateScenario[] | null>(null)
   const [governanceModes, setGovernanceModes] = useState<GovernanceModeItem[] | null>(null)
   const [agentTypes, setAgentTypes] = useState<AgentTypeOption[]>(BUILTIN_ROLES)
+  const [personalities, setPersonalities] = useState<PersonalityOption[]>([])
   const [editing, setEditing] = useState<Scenario | null>(null)
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -147,6 +158,23 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
         setTemplateScenarios([])
       })
       .catch(() => setTemplateScenarios([]))
+
+    apiClient.get('/api/personalities')
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setPersonalities(
+            data
+              .filter((x): x is Record<string, unknown> => isRecord(x) && typeof x.id === 'string')
+              .map((x) => ({
+                id: String(x.id),
+                name: typeof x.name === 'string' ? x.name : undefined,
+                has_interview: typeof x.has_interview === 'boolean' ? x.has_interview : false,
+              })),
+          )
+        }
+      })
+      .catch(() => {})
 
     apiClient.get('/api/agent-types')
       .then((r) => r.ok ? r.json() : [])
@@ -588,6 +616,53 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
 
           <div className="form-field">
             <div className="form-field-header">
+              <label>Параллелизация</label>
+            </div>
+            <div className="text-muted" style={{ fontSize: '0.7rem', marginTop: '0.25rem' }}>
+              Параллельная генерация решений агентами. Если не включено, используются переменные окружения.
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem', alignItems: 'end' }}>
+              <div className="form-field" style={{ margin: 0 }}>
+                <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.75rem', textTransform: 'none', letterSpacing: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={editing.parallel_agents ?? false}
+                    onChange={() => setEditing({ ...editing, parallel_agents: !editing.parallel_agents })}
+                  />
+                  <span>Параллельные агенты</span>
+                </label>
+              </div>
+              <div className="form-field" style={{ margin: 0 }}>
+                <label>Потоки</label>
+                <input
+                  className="hud-input"
+                  type="number"
+                  min={1} max={32}
+                  value={editing.parallel_workers ?? ''}
+                  onChange={(e) => setEditing({ ...editing, parallel_workers: e.target.value ? Number(e.target.value) : null })}
+                  placeholder="авто"
+                  disabled={!editing.parallel_agents}
+                  style={{ width: '80px' }}
+                />
+              </div>
+              <div className="form-field" style={{ margin: 0 }}>
+                <label title="Окно батчирования в секундах симулированного времени">Окно (сек)</label>
+                <input
+                  className="hud-input"
+                  type="number"
+                  min={0} max={86400} step={60}
+                  value={editing.parallel_window ?? ''}
+                  onChange={(e) => setEditing({ ...editing, parallel_window: e.target.value ? Number(e.target.value) : null })}
+                  placeholder="0"
+                  disabled={!editing.parallel_agents}
+                  style={{ width: '100px' }}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="form-field">
+            <div className="form-field-header">
               <label>Агенты ({editing.agents.length})</label>
               <button className="btn-clipped success small" onClick={addAgent}>+ Добавить</button>
             </div>
@@ -641,6 +716,27 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                       style={{ width: '70px' }}
                       title="Начальная репутация"
                     />
+                    <select
+                      className="hud-input"
+                      value={agent.personality_archetype ?? ''}
+                      onChange={(e) => {
+                        const val = e.target.value || null
+                        if (!editing) return
+                        const agents = editing.agents.map((a, idx) =>
+                          idx === i ? { ...a, personality_archetype: val } : a,
+                        )
+                        setEditing({ ...editing, agents })
+                      }}
+                      style={{ flex: '0 0 160px' }}
+                      title="Личность (из библиотеки). Пусто = сгенерировать при запуске."
+                    >
+                      <option value="">Авто</option>
+                      {personalities.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name || p.id.slice(0, 8)}{p.has_interview ? '' : ' (нет интервью)'}
+                        </option>
+                      ))}
+                    </select>
                     <button className="btn-clipped danger small" onClick={() => removeAgent(i)}>✕</button>
                   </div>
                 )

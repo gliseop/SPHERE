@@ -84,6 +84,7 @@ class AsyncEnvironment:
         *,
         parallel_agents: bool = False,
         parallel_workers: int | None = None,
+        parallel_window_seconds: float = 0.0,
     ) -> None:
         self._config = config
         self._runner = runner
@@ -126,6 +127,7 @@ class AsyncEnvironment:
         self._last_narrator_date: date | None = None
         self._parallel_agents = bool(parallel_agents)
         self._parallel_workers = parallel_workers
+        self._parallel_window_seconds = max(0.0, float(parallel_window_seconds))
 
         self._init_state()
         self._last_wakeup = {
@@ -347,9 +349,22 @@ class AsyncEnvironment:
                 batch.append((agent_id, wake_time))
                 while True:
                     peek = self.scheduler.peek_time()
-                    if peek is None or peek != wake_time:
+                    if peek is None:
                         break
+                    if self._parallel_window_seconds > 0:
+                        if (peek - wake_time).total_seconds() > self._parallel_window_seconds:
+                            break
+                    else:
+                        if peek != wake_time:
+                            break
                     batch.append(self.scheduler.next())
+
+                if len(batch) > 1:
+                    logger.info(
+                        "Parallel batch: %d agents (window=%.0fs)",
+                        len(batch),
+                        self._parallel_window_seconds,
+                    )
 
                 if wake_time > self.clock.now:
                     self.clock.advance_to(wake_time)

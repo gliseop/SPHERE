@@ -52,14 +52,22 @@ def _maybe_add_parallel_flags(cmd: list[str]) -> None:
     cmd.append("--parallel-agents")
 
     raw_workers = os.environ.get("MAGISTRY_PARALLEL_WORKERS")
-    if not raw_workers:
-        return
-    try:
-        workers = int(raw_workers)
-    except ValueError:
-        return
-    if workers > 0:
-        cmd.extend(["--parallel-workers", str(workers)])
+    if raw_workers:
+        try:
+            workers = int(raw_workers)
+        except ValueError:
+            workers = 0
+        if workers > 0:
+            cmd.extend(["--parallel-workers", str(workers)])
+
+    raw_window = os.environ.get("MAGISTRY_PARALLEL_WINDOW")
+    if raw_window:
+        try:
+            window = float(raw_window)
+        except ValueError:
+            window = 0.0
+        if window > 0:
+            cmd.extend(["--parallel-window", str(window)])
 
 
 def _resolve_time_window(days: int) -> tuple[str, str]:
@@ -129,8 +137,19 @@ def launch_simulation_from_config(
     *,
     personalities_dir: Path | None = None,
     interviews_dir: Path | None = None,
+    parallel_agents: bool | None = None,
+    parallel_workers: int | None = None,
+    parallel_window: float | None = None,
 ) -> dict:
-    """Запустить симуляцию на основе JSON-конфига ScenarioConfig."""
+    """Запустить симуляцию на основе JSON-конфига ScenarioConfig.
+
+    Args:
+        parallel_agents: Включить параллельную генерацию решений.
+            None = определить из env.
+        parallel_workers: Максимум потоков. None = определить из env.
+        parallel_window: Окно батчирования (симулированные секунды).
+            None = определить из env.
+    """
     scenario_id = str(scenario_config.get("id", "S1") or "S1")
     safe_variant = "".join(
         ch if ch.isalnum() or ch in ("_", "-") else "-"
@@ -213,7 +232,17 @@ def launch_simulation_from_config(
             cmd.extend(["--personalities-dir", str(personalities_dir)])
         if interviews_dir is not None:
             cmd.extend(["--interviews-dir", str(interviews_dir)])
-        _maybe_add_parallel_flags(cmd)
+
+        # Параллелизация: явные параметры перекрывают env
+        if parallel_agents is not None:
+            if parallel_agents:
+                cmd.append("--parallel-agents")
+                if parallel_workers is not None and parallel_workers > 0:
+                    cmd.extend(["--parallel-workers", str(parallel_workers)])
+                if parallel_window is not None and parallel_window > 0:
+                    cmd.extend(["--parallel-window", str(parallel_window)])
+        else:
+            _maybe_add_parallel_flags(cmd)
 
         with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
             proc = subprocess.Popen(

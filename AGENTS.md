@@ -14,6 +14,8 @@ MAGISTRY — мета-двигатель для агентной симуляц�
 
 Полная архитектура системы — в [ARCHITECTURE.md](ARCHITECTURE.md).
 
+Подсистема «Персона = Интервью» (цепочка генерации, фрагментный поиск, назначение личностей) — в [docs/persona_interview_design.md](docs/persona_interview_design.md).
+
 ## Структура репозитория
 
 ```

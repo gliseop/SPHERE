@@ -352,6 +352,13 @@ def main() -> None:
         help="Максимум потоков для --parallel-agents (по умолчанию: авто)",
     )
     parser.add_argument(
+        "--parallel-window",
+        type=float,
+        default=0.0,
+        help="Временное окно батчирования агентов (секунды симулированного времени). "
+             "Агенты с wake_time в пределах окна объединяются в батч. 0 = точное совпадение.",
+    )
+    parser.add_argument(
         "--start-time",
         type=str,
         default=None,
@@ -539,6 +546,7 @@ def _run_async(args, scenario, runner) -> None:
         world_generator=world_gen,
         parallel_agents=bool(args.parallel_agents),
         parallel_workers=args.parallel_workers,
+        parallel_window_seconds=args.parallel_window,
     )
 
     console.print(

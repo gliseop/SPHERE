@@ -72,6 +72,9 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
   const [launchGovernance, setLaunchGovernance] = useState('G1')
   const [launchSeed, setLaunchSeed] = useState('')
   const [launchRounds, setLaunchRounds] = useState('25')
+  const [launchParallel, setLaunchParallel] = useState(false)
+  const [launchWorkers, setLaunchWorkers] = useState('')
+  const [launchWindow, setLaunchWindow] = useState('')
   const [launching, setLaunching] = useState(false)
   const [stopping, setStopping] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -173,6 +176,11 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
           seed: launchSeed ? Number(launchSeed) : null,
           runner: 'cognitive',
           rounds: launchRounds ? Number(launchRounds) : 25,
+          ...(launchParallel ? {
+            parallel_agents: true,
+            ...(launchWorkers ? { parallel_workers: Number(launchWorkers) } : {}),
+            ...(launchWindow ? { parallel_window: Number(launchWindow) } : {}),
+          } : {}),
         })
       if (!res.ok) return
       const data = await res.json().catch(() => null) as { run_name?: string } | null
@@ -302,6 +310,24 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                   <label title="Длительность симуляции в днях (временная модель)">Дней</label>
                   <input className="hud-input" type="number" value={launchRounds} onChange={(e) => setLaunchRounds(e.target.value)} placeholder="25" />
                 </div>
+                <div className="form-field">
+                  <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.7rem', textTransform: 'none', letterSpacing: 0 }}>
+                    <input type="checkbox" checked={launchParallel} onChange={() => setLaunchParallel((v) => !v)} />
+                    <span>Параллельно</span>
+                  </label>
+                </div>
+                {launchParallel && (
+                  <>
+                    <div className="form-field">
+                      <label>Потоки</label>
+                      <input className="hud-input" type="number" min={1} max={32} value={launchWorkers} onChange={(e) => setLaunchWorkers(e.target.value)} placeholder="авто" style={{ width: '70px' }} />
+                    </div>
+                    <div className="form-field">
+                      <label title="Окно батчирования (секунды сим. времени)">Окно</label>
+                      <input className="hud-input" type="number" min={0} step={60} value={launchWindow} onChange={(e) => setLaunchWindow(e.target.value)} placeholder="0" style={{ width: '80px' }} />
+                    </div>
+                  </>
+                )}
               </>
             ) : (
               <>
