@@ -20,7 +20,7 @@ class LLMConfig(BaseModel):
     api_key_env: str = "OPENAI_API_KEY"
     provider_order: list[str] = Field(default_factory=lambda: ["Groq"])
     temperature: float = 0.0
-    use_tool_calls: bool = False
+    use_tool_calls: bool = True
     trace_max_chars: int = 0
 
 

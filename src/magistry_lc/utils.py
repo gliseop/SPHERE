@@ -12,6 +12,8 @@ def redact_numbers(obj: object) -> object:
         return {k: redact_numbers(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [redact_numbers(v) for v in obj]
+    if isinstance(obj, bool):
+        return obj
     if isinstance(obj, (int, float)):
         return "<num>"
     return obj

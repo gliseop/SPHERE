@@ -82,6 +82,27 @@ class AgentRunner:
         # Инструкция по действиям.
         max_actions = self.runtime.max_actions_per_turn
         votes_line = f"- Open votes: {vote_ids}\n" if "dao" in agent.capabilities else ""
+
+        # Строим список доступных типов действий на основе capabilities.
+        action_types: list[str] = []
+        if "message" in agent.capabilities:
+            action_types.append("send_message (to_id, text, private) — отправить приватное сообщение агенту (private=true) или публичное в канал/орг (private=false, to_id=chan:*/org:*)")
+            action_types.append("publish (channel_id, text) — опубликовать сообщение в канале")
+        if "work" in agent.capabilities:
+            action_types.append("create_work_item (work_type, title, description, participants) — создать дело/задачу")
+            action_types.append("add_work_note (work_id, text) — добавить заметку к делу")
+            action_types.append("submit_work_proposal (work_id, text) — подать предложение по делу")
+        if "dao" in agent.capabilities:
+            action_types.append("nominate_position_change (target_agent_id, new_title, reason) — номинировать на должность")
+            action_types.append("cast_vote (vote_id, choice: yes/no/abstain) — проголосовать")
+            action_types.append("respond_nomination (vote_id, accept: true/false) — принять/отклонить номинацию")
+        if "audit" in agent.capabilities:
+            action_types.append("add_work_note (work_id, text) — добавить аудиторскую заметку")
+        action_types.append("perform (description, target_id) — свободное действие (когда нет подходящего типа выше)")
+        action_types.append("request_entity (kind: org/chan, slug, description) — запросить создание организации/канала")
+        action_types.append("noop — пропустить ход")
+        actions_block = "\n".join(f"  - {a}" for a in action_types)
+
         return (
             f"Раунд (tick): {state.tick}\n"
             f"Ты: {agent.name} ({agent.agent_id}).\n"
@@ -95,11 +116,14 @@ class AgentRunner:
             "Наблюдения (последние события, доступные тебе):\n"
             f"{facts_text}\n\n"
             f"Память:\n{mem_text}\n\n"
+            "Доступные типы действий:\n"
+            f"{actions_block}\n\n"
             "Сгенерируй действия на этот тик.\n"
             f"Правила:\n"
             f"- максимум {max_actions} действий\n"
+            "- ПРЕДПОЧИТАЙ структурированные действия (send_message, add_work_note и др.) вместо perform\n"
+            "- perform используй ТОЛЬКО когда нет подходящего структурированного типа\n"
             "- не выдумывай новые ID; если нужна новая организация/канал — используй request_entity\n"
-            "- для свободных действий используй perform (description + target_id)\n"
         )
 
     async def _render_memory(
@@ -176,6 +200,8 @@ class AgentRunner:
         )
 
         raw = resp.data
+        if isinstance(raw, dict):
+            raw = raw.get("actions", [])
         if not isinstance(raw, list):
             return []
 

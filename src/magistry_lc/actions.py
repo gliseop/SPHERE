@@ -250,7 +250,14 @@ def actions_json_schema(*, max_actions: int) -> dict[str, Any]:
     ]
 
     return {
-        "type": "array",
-        "maxItems": max_actions,
-        "items": {"oneOf": one_of},
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "actions": {
+                "type": "array",
+                "maxItems": max_actions,
+                "items": {"oneOf": one_of},
+            },
+        },
+        "required": ["actions"],
     }
