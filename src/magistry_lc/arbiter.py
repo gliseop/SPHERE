@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -46,6 +47,7 @@ from .ops import (
     SendMessageOp,
     SetVoteConsentOp,
     SubmitWorkProposalOp,
+    StateOp,
 )
 from .state import WorldState
 
@@ -57,7 +59,7 @@ class ActionResult:
     action_index: int
     approved: bool
     reason: str
-    ops: list[object]
+    ops: list[StateOp]
 
 
 class _PerformOpModel(BaseModel):
@@ -196,13 +198,85 @@ class Arbiter:
         state: WorldState,
         agent_id: str,
         actions: list[Action],
+        journal_yaml: str | None = None,
     ) -> list[ActionResult]:
         """Преобразовать Action[] в список результатов с ops."""
+        journal_yaml = journal_yaml or state.journal_yaml()
         results: list[ActionResult] = []
         for idx, act in enumerate(actions):
-            res = await self._arbitrate_one(state=state, agent_id=agent_id, action_index=idx, action=act)
+            res = await self._arbitrate_one(
+                state=state,
+                agent_id=agent_id,
+                action_index=idx,
+                action=act,
+                journal_yaml=journal_yaml,
+            )
             results.append(res)
         return results
+
+    async def arbitrate_tick(
+        self,
+        *,
+        state: WorldState,
+        proposed: dict[str, list[Action]],
+        journal_yaml: str,
+    ) -> dict[str, list[ActionResult]]:
+        """Арбитраж всех действий тика с параллельным LLM только для `perform`.
+
+        Важно: ID-аллокатор используется только на детерминированной фазе
+        (конвертация LLM-ops в StateOp), чтобы не терять воспроизводимость.
+        """
+        arbitration: dict[str, list[ActionResult | None]] = {}
+        perform_meta: list[tuple[str, int, PerformAction, set[str]]] = []
+
+        for aid in sorted(proposed.keys()):
+            arbitration[aid] = []
+            agent = state.agents.get(aid)
+            caps = set(agent.capabilities) if agent is not None else set()
+            for idx, act in enumerate(proposed[aid]):
+                if isinstance(act, PerformAction):
+                    arbitration[aid].append(None)
+                    perform_meta.append((aid, idx, act, caps))
+                else:
+                    arbitration[aid].append(
+                        await self._arbitrate_one(
+                            state=state,
+                            agent_id=aid,
+                            action_index=idx,
+                            action=act,
+                            journal_yaml=journal_yaml,
+                        )
+                    )
+
+        async def _decide(m: tuple[str, int, PerformAction, set[str]]) -> _PerformArbiterOutput:
+            aid, idx, act, caps = m
+            return await self._decide_perform_llm(
+                state=state,
+                agent_id=aid,
+                agent_caps=caps,
+                action=act,
+                journal_yaml=journal_yaml,
+            )
+
+        decisions = await asyncio.gather(*[_decide(m) for m in perform_meta])
+
+        # Конвертация perform-решений → StateOp делается строго детерминированно.
+        for meta, decision in zip(perform_meta, decisions, strict=True):
+            aid, idx, act, caps = meta
+            res = self._convert_perform_decision(
+                state=state,
+                agent_id=aid,
+                agent_caps=caps,
+                action_index=idx,
+                decision=decision,
+            )
+            arbitration[aid][idx] = res
+
+        # Убираем None (на всякий случай) и приводим тип.
+        out: dict[str, list[ActionResult]] = {}
+        for aid, items in arbitration.items():
+            out[aid] = [r for r in items if r is not None]  # type: ignore[truthy-bool]
+        return out
 
     async def _arbitrate_one(
         self,
@@ -211,12 +285,25 @@ class Arbiter:
         agent_id: str,
         action_index: int,
         action: Action,
+        journal_yaml: str,
     ) -> ActionResult:
+        agent = state.agents.get(agent_id)
+        if agent is None:
+            return ActionResult(action_index, False, f"unknown agent_id: {agent_id}", [])
+
+        def _require(cap: str) -> str | None:
+            if cap in agent.capabilities:
+                return None
+            return f"missing_capability:{cap}"
+
         # Structured actions: deterministic translation + anti-phantoms.
         if isinstance(action, NoopAction):
             return ActionResult(action_index, True, "noop", [])
 
         if isinstance(action, SendMessageAction):
+            missing = _require("message")
+            if missing:
+                return ActionResult(action_index, False, missing, [])
             if not state.registry.exists(action.to_id):
                 return ActionResult(action_index, False, f"unknown to_id: {action.to_id}", [])
             return ActionResult(
@@ -234,6 +321,9 @@ class Arbiter:
             )
 
         if isinstance(action, PublishAction):
+            missing = _require("message")
+            if missing:
+                return ActionResult(action_index, False, missing, [])
             if not state.registry.exists(action.channel_id):
                 return ActionResult(action_index, False, f"unknown channel_id: {action.channel_id}", [])
             return ActionResult(
@@ -251,6 +341,9 @@ class Arbiter:
             )
 
         if isinstance(action, CreateWorkItemAction):
+            missing = _require("work")
+            if missing:
+                return ActionResult(action_index, False, missing, [])
             wid = self.id_alloc.next_id(EntityKind.WORK_ITEM, tick=state.tick)
             return ActionResult(
                 action_index,
@@ -269,6 +362,9 @@ class Arbiter:
             )
 
         if isinstance(action, AddWorkNoteAction):
+            missing = _require("work")
+            if missing:
+                return ActionResult(action_index, False, missing, [])
             if action.work_id not in state.work_items:
                 return ActionResult(action_index, False, f"unknown work_id: {action.work_id}", [])
             return ActionResult(
@@ -279,6 +375,9 @@ class Arbiter:
             )
 
         if isinstance(action, SubmitWorkProposalAction):
+            missing = _require("work")
+            if missing:
+                return ActionResult(action_index, False, missing, [])
             if action.work_id not in state.work_items:
                 return ActionResult(action_index, False, f"unknown work_id: {action.work_id}", [])
             return ActionResult(
@@ -309,12 +408,17 @@ class Arbiter:
             )
 
         if isinstance(action, NominatePositionChangeAction):
+            missing = _require("dao")
+            if missing:
+                return ActionResult(action_index, False, missing, [])
             # Только DAO: создаём голосование, затем цель должна дать consent.
             if action.target_agent_id not in state.agents:
                 return ActionResult(action_index, False, f"unknown target_agent_id: {action.target_agent_id}", [])
             target = state.agents[action.target_agent_id]
             if not target.internal:
                 return ActionResult(action_index, False, "cannot nominate external agent", [])
+            if not target.wants_promotion:
+                return ActionResult(action_index, False, "target_declines_promotion", [])
 
             vote_id = self.id_alloc.next_id(EntityKind.VOTE, tick=state.tick)
             voters = self.dao.eligible_voters(state)
@@ -338,6 +442,9 @@ class Arbiter:
             )
 
         if isinstance(action, CastVoteAction):
+            missing = _require("dao")
+            if missing:
+                return ActionResult(action_index, False, missing, [])
             if action.vote_id not in state.votes:
                 return ActionResult(action_index, False, f"unknown vote_id: {action.vote_id}", [])
             return ActionResult(
@@ -348,6 +455,9 @@ class Arbiter:
             )
 
         if isinstance(action, RespondNominationAction):
+            missing = _require("dao")
+            if missing:
+                return ActionResult(action_index, False, missing, [])
             if action.vote_id not in state.votes:
                 return ActionResult(action_index, False, f"unknown vote_id: {action.vote_id}", [])
             return ActionResult(
@@ -358,67 +468,134 @@ class Arbiter:
             )
 
         if isinstance(action, PerformAction):
-            return await self._arbitrate_perform(state=state, agent_id=agent_id, action_index=action_index, action=action)
+            return await self._arbitrate_perform(
+                state=state,
+                agent_id=agent_id,
+                agent_caps=set(agent.capabilities),
+                action_index=action_index,
+                action=action,
+                journal_yaml=journal_yaml,
+            )
 
         return ActionResult(action_index, False, f"unsupported action: {action.type}", [])
 
-    async def _arbitrate_perform(
+    async def _decide_perform_llm(
         self,
         *,
         state: WorldState,
         agent_id: str,
-        action_index: int,
+        agent_caps: set[str],
         action: PerformAction,
-    ) -> ActionResult:
-        # Антифантом: если задан target_id — он должен существовать.
+        journal_yaml: str,
+    ) -> _PerformArbiterOutput:
+        """Вызвать LLM для `perform` и вернуть structured-решение без конвертации в ops."""
         target_id = action.target_id.strip()
         if target_id and not state.registry.exists(target_id):
-            return ActionResult(action_index, False, f"unknown target_id: {target_id}", [])
+            return _PerformArbiterOutput(approved=False, reason=f"unknown target_id: {target_id}", ops=[])
 
         system = (
             "Ты — арбитр симуляции MAGISTRY-LC.\n"
             "На вход: YAML-журнал мира и свободное действие агента.\n"
             "Твоя задача: либо отклонить действие с причиной, либо выдать список StateOp,\n"
             "которые детерминированно изменят мир.\n"
-            f"Политика должностей: только через DAO (vote + consent). Не меняй должности напрямую.\n"
+            "Политика должностей: только через DAO (vote + consent). Не меняй должности напрямую.\n"
             "Нельзя выдумывать новых агентов. Нельзя писать приватно неизвестным ID.\n"
+            f"Actor capabilities: {sorted(agent_caps)}\n"
             "Ответ: только JSON по схеме.\n"
         )
         user = (
             "YAML JOURNAL:\n"
-            f"{state.journal_yaml()}\n\n"
-            f"ACTION:\n"
+            f"{journal_yaml}\n\n"
+            "ACTION:\n"
             f"- actor_id: {agent_id}\n"
             f"- description: {action.description}\n"
             f"- target_id: {target_id}\n"
         )
-        schema = _perform_output_schema()
+
         resp = await self.llm.generate_structured(
             role="arbiter",
             name="perform",
             tick=state.tick,
             system=system,
             user=user,
-            schema=schema,
+            schema=_perform_output_schema(),
             temperature=self.temperature,
         )
         try:
-            parsed = _PerformArbiterOutput.model_validate(resp.data)
+            return _PerformArbiterOutput.model_validate(resp.data)
         except Exception as exc:
-            return ActionResult(action_index, False, f"arbiter_parse_error:{exc}", [])
-        if not parsed.approved:
-            return ActionResult(action_index, False, parsed.reason or "rejected", [])
+            return _PerformArbiterOutput(approved=False, reason=f"arbiter_parse_error:{exc}", ops=[])
 
-        ops: list[object] = []
-        for item in parsed.ops:
+    def _convert_perform_decision(
+        self,
+        *,
+        state: WorldState,
+        agent_id: str,
+        agent_caps: set[str],
+        action_index: int,
+        decision: _PerformArbiterOutput,
+    ) -> ActionResult:
+        if not decision.approved:
+            return ActionResult(action_index, False, decision.reason or "rejected", [])
+
+        ops: list[StateOp] = []
+        for item in decision.ops:
             try:
-                ops.extend(self._op_from_llm(agent_id=agent_id, state=state, op_type=item.op_type, args=item.args))
-            except Exception:
-                continue
+                parsed_ops = self._op_from_llm(agent_id=agent_id, state=state, op_type=item.op_type, args=item.args)
+            except Exception as exc:
+                return ActionResult(
+                    action_index,
+                    False,
+                    f"perform_op_invalid:{item.op_type}:{exc.__class__.__name__}:{exc}",
+                    [],
+                )
+            for op in parsed_ops:
+                missing = self._missing_capability_for_op(op, agent_caps)
+                if missing:
+                    return ActionResult(action_index, False, f"missing_capability:{missing}", [])
+                ops.append(op)
 
-        return ActionResult(action_index, True, parsed.reason or "approved", ops)
+        return ActionResult(action_index, True, decision.reason or "approved", ops)
 
-    def _op_from_llm(self, *, agent_id: str, state: WorldState, op_type: str, args: dict[str, Any]) -> list[object]:
+    async def _arbitrate_perform(
+        self,
+        *,
+        state: WorldState,
+        agent_id: str,
+        agent_caps: set[str],
+        action_index: int,
+        action: PerformAction,
+        journal_yaml: str,
+    ) -> ActionResult:
+        decision = await self._decide_perform_llm(
+            state=state,
+            agent_id=agent_id,
+            agent_caps=agent_caps,
+            action=action,
+            journal_yaml=journal_yaml,
+        )
+        return self._convert_perform_decision(
+            state=state,
+            agent_id=agent_id,
+            agent_caps=agent_caps,
+            action_index=action_index,
+            decision=decision,
+        )
+
+    @staticmethod
+    def _missing_capability_for_op(op: StateOp, caps: set[str]) -> str | None:
+        """Вернуть недостающую capability для op (или None)."""
+        if isinstance(op, SendMessageOp) and "message" not in caps:
+            return "message"
+        if isinstance(op, (CreateWorkItemOp, AddWorkNoteOp, SubmitWorkProposalOp)) and "work" not in caps:
+            return "work"
+        if isinstance(op, (OpenVoteOp, CastVoteOp, SetVoteConsentOp)) and "dao" not in caps:
+            return "dao"
+        if isinstance(op, ModifyReputationOp) and "audit" not in caps:
+            return "audit"
+        return None
+
+    def _op_from_llm(self, *, agent_id: str, state: WorldState, op_type: str, args: dict[str, Any]) -> list[StateOp]:
         """Сконвертировать LLM-op в реальные ops."""
         if op_type == "noop":
             return []
@@ -483,6 +660,8 @@ class Arbiter:
             target_agent_id = str(args.get("target_agent_id") or "")
             if target_agent_id not in state.agents:
                 raise ValueError("unknown target_agent_id")
+            if not state.agents[target_agent_id].wants_promotion:
+                raise ValueError("target_declines_promotion")
             vote_id = self.id_alloc.next_id(EntityKind.VOTE, tick=state.tick)
             voters = self.dao.eligible_voters(state)
             closes_tick = state.tick + self.governance.vote_duration_ticks
@@ -526,4 +705,3 @@ class Arbiter:
             ]
 
         raise ValueError(f"unsupported op_type: {op_type}")
-

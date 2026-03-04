@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .config import AgentConfig, ChannelConfig, OrgConfig, ScenarioConfig, WorkItemConfig
+from .config import AgentConfig, ChannelConfig, OrgConfig, RuntimeConfig, ScenarioConfig, WorkItemConfig
 from .llm import LLMCaller
+from .persona import PersonaArtifact, PersonaGenerator
 
 
 class _ComposeAgent(BaseModel):
@@ -116,6 +118,7 @@ class WorldComposer:
 
     llm: LLMCaller
     temperature: float = 0.0
+    generate_personas: bool = True
 
     async def compose(
         self,
@@ -164,24 +167,42 @@ class WorldComposer:
             description=out.description or description,
             seed=seed,
             ticks=ticks,
+            runtime=RuntimeConfig(language=language),
         )
-        cfg.runtime.language = language
 
-        cfg.agents = [
-            AgentConfig(
+        persona_gen = PersonaGenerator(llm=self.llm, temperature=self.temperature)
+
+        async def _build_persona(a: _ComposeAgent) -> PersonaArtifact:
+            if not self.generate_personas:
+                return PersonaArtifact(persona_id=a.agent_id, summary=a.persona or "")
+            artifact = await persona_gen.generate(
                 agent_id=a.agent_id,
                 name=a.name,
-                internal=a.internal,
-                persona=a.persona,
-                initial_title=a.initial_title,
-                wants_promotion=a.wants_promotion,
-                capabilities=list(a.capabilities),
+                internal=bool(a.internal),
+                persona_hint=a.persona or "",
+                scenario_description=cfg.description,
+                language=language,
             )
-            for a in out.agents
-        ]
+            artifact.persona_id = a.agent_id
+            return artifact
+
+        personas = await asyncio.gather(*[_build_persona(a) for a in out.agents])
+
+        cfg.agents = []
+        for a, persona in zip(out.agents, personas, strict=True):
+            cfg.agents.append(
+                AgentConfig(
+                    agent_id=a.agent_id,
+                    name=a.name,
+                    internal=a.internal,
+                    persona=persona,
+                    initial_title=a.initial_title,
+                    wants_promotion=a.wants_promotion,
+                    capabilities=list(a.capabilities),
+                )
+            )
 
         cfg.world.channels = [ChannelConfig.model_validate(x) for x in out.world.channels]
         cfg.world.orgs = [OrgConfig.model_validate(x) for x in out.world.orgs]
         cfg.world.work_items = [WorkItemConfig.model_validate(x) for x in out.world.work_items]
         return cfg
-

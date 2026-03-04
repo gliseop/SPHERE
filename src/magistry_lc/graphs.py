@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
+from pathlib import Path
 from typing import TypedDict
 
 from .actions import Action
@@ -33,6 +34,7 @@ def build_world_graph(
     gather_actions_node: Callable[[WorldGraphState], Awaitable[dict]],
     apply_actions_node: Callable[[WorldGraphState], Awaitable[dict]],
     debug: bool = False,
+    checkpoint_path: str | Path | None = None,
 ):
     """Собрать LangGraph для одного тика.
 
@@ -55,4 +57,22 @@ def build_world_graph(
     graph.set_entry_point("gather_actions")
     graph.add_edge("gather_actions", "apply_actions")
     graph.add_edge("apply_actions", END)
-    return graph.compile(debug=debug)
+    checkpointer = None
+    if checkpoint_path is not None:
+        try:
+            from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore
+
+            p = Path(checkpoint_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if hasattr(SqliteSaver, "from_conn_string"):
+                checkpointer = SqliteSaver.from_conn_string(str(p))
+            else:
+                checkpointer = SqliteSaver(str(p))
+        except Exception:
+            checkpointer = None
+
+    try:
+        return graph.compile(checkpointer=checkpointer, debug=debug)
+    except TypeError:
+        # Старые версии LangGraph могут не поддерживать checkpointer в compile().
+        return graph.compile(debug=debug)

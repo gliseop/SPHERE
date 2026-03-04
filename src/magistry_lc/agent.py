@@ -9,11 +9,15 @@ from typing import Iterable
 from pydantic import TypeAdapter, ValidationError
 
 from .actions import Action, ActionType, actions_json_schema
+from .config import MemoryConfig
 from .config import RuntimeConfig
 from .events import Event
-from .ids import INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
+from .ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from .llm import LLMCaller
+from .memory import AgentMemory
 from .state import AgentState, WorldState
+
+from magistry_sim.llm.embeddings import EmbeddingProvider
 
 
 _WS_RE = re.compile(r"\s+")
@@ -34,12 +38,21 @@ def _norm(text: str) -> str:
     return _WS_RE.sub(" ", text.strip())
 
 
+def _truncate(text: str, max_chars: int) -> str:
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max(0, max_chars - 1)].rstrip() + "…"
+
+
 @dataclass(slots=True)
 class AgentRunner:
     """Runner одного агента."""
 
     llm: LLMCaller
     runtime: RuntimeConfig
+    memory: MemoryConfig
+    embedder: EmbeddingProvider | None = None
     temperature: float = 0.0
 
     def _build_system(self, agent: AgentState) -> str:
@@ -58,10 +71,13 @@ class AgentRunner:
         state: WorldState,
         visible_events: list[Event],
     ) -> str:
-        # Антифантомы: агенту явно показываем допустимые ID.
-        agent_ids = ", ".join(sorted(state.agents.keys()))
+        # Антифантомы: показываем только те ID, которые агенту допустимо использовать напрямую.
+        agent_ids = ", ".join(sorted(state.agents.keys())) or "(нет)"
         work_ids = ", ".join(sorted(state.work_items.keys())) or "(нет)"
-        chan_ids = ", ".join(sorted(state.registry.list_ids()))  # compact enough for MVP
+        channel_ids = ", ".join(state.registry.list_ids(EntityKind.CHANNEL)) or "(нет)"
+        org_ids = ", ".join(state.registry.list_ids(EntityKind.ORG)) or "(нет)"
+        open_votes = [vid for vid, v in state.votes.items() if v.status == "open"]
+        vote_ids = ", ".join(sorted(open_votes)) or "(нет)"
 
         # Для MVP даём события как короткие факты.
         facts = []
@@ -70,16 +86,11 @@ class AgentRunner:
             facts.append(f"- [{ev.event_type}] {_redact_numbers(ev.payload)}")
         facts_text = "\n".join(facts) if facts else "- (нет)"
 
-        # Память: summary + последние факты.
-        mem = []
-        if agent.memory_summary:
-            mem.append(f"Сводка памяти: {agent.memory_summary}")
-        if agent.memory_events:
-            mem.append("Последние факты:\n" + "\n".join(f"- {x}" for x in agent.memory_events[-20:]))
-        mem_text = "\n\n".join(mem) if mem else "(пусто)"
+        mem_text = self._render_memory(agent=agent, state=state, visible_events=visible_events)
 
         # Инструкция по действиям.
         max_actions = self.runtime.max_actions_per_turn
+        votes_line = f"- Open votes: {vote_ids}\n" if "dao" in agent.capabilities else ""
         return (
             f"Раунд (tick): {state.tick}\n"
             f"Ты: {agent.name} ({agent.agent_id}).\n"
@@ -87,7 +98,9 @@ class AgentRunner:
             "Доступные сущности (используй только эти ID):\n"
             f"- Agents: {agent_ids}\n"
             f"- Work items: {work_ids}\n"
-            f"- Registry: {chan_ids}\n\n"
+            f"- Channels: {channel_ids}\n"
+            f"- Orgs: {org_ids}\n"
+            f"{votes_line}\n"
             "Наблюдения (последние события, доступные тебе):\n"
             f"{facts_text}\n\n"
             f"Память:\n{mem_text}\n\n"
@@ -97,6 +110,37 @@ class AgentRunner:
             "- не выдумывай новые ID; если нужна новая организация/канал — используй request_entity\n"
             "- для свободных действий используй perform (description + target_id)\n"
         )
+
+    def _render_memory(self, *, agent: AgentState, state: WorldState, visible_events: list[Event]) -> str:
+        mem: AgentMemory | None = agent.memory
+        if mem is None:
+            return "(пусто)"
+
+        parts: list[str] = []
+        if agent.persona.summary.strip():
+            parts.append("Персона (кратко): " + _truncate(agent.persona.summary, 420))
+
+        if mem.summary.strip():
+            parts.append("Сводка (рабочая память):\n" + _truncate(mem.summary, 900))
+
+        if mem.working:
+            recent = mem.working[-10:]
+            lines = "\n".join(f"- (t{e.tick}) {_truncate(e.text, 220)}" for e in recent)
+            parts.append("Последние записи:\n" + lines)
+
+        # Hybrid retrieval: по последним наблюдениям как query.
+        query_text = "\n".join(
+            f"{ev.event_type} {_redact_numbers(ev.payload)}" for ev in visible_events[-15:]
+        )
+        retrieved = mem.retrieve(query_text=query_text, tick=state.tick, cfg=self.memory, embedder=self.embedder)
+        if retrieved:
+            lines = []
+            for d in retrieved:
+                rep = f" x{d.repeats}" if d.repeats > 1 else ""
+                lines.append(f"- [{d.kind}{rep}] {_truncate(d.text, 220)}")
+            parts.append("Релевантные факты (долгосрочная память):\n" + "\n".join(lines))
+
+        return "\n\n".join(parts) if parts else "(пусто)"
 
     async def propose_actions(
         self,

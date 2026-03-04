@@ -47,7 +47,15 @@ class WorldGenerator:
         """Сгенерировать внешние события на основе нормализованных событий раунда."""
         compact = []
         for ev in recent_events[-200:]:
-            compact.append({"event_type": ev.event_type, "actor_id": ev.actor_id, "payload": ev.payload})
+            # World-gen видит только public/internal события (без приватных 1:1 сообщений).
+            if PUBLIC_AUDIENCE not in ev.audience and INTERNAL_AUDIENCE not in ev.audience:
+                continue
+            payload = dict(ev.payload or {})
+            # Доп. защита: даже если приватное сообщение ошибочно помечено internal/public — не передаём текст.
+            if ev.event_type == "message_sent" and bool(payload.get("private", True)):
+                payload.pop("text", None)
+                payload["text_redacted"] = True
+            compact.append({"event_type": ev.event_type, "actor_id": ev.actor_id, "payload": payload})
 
         system = (
             "Ты — генератор внешних событий мира для симуляции организационных процессов.\n"
@@ -85,4 +93,3 @@ class WorldGenerator:
                 )
             )
         return out
-

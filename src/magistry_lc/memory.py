@@ -1,0 +1,272 @@
+"""Память агента (working buffer + hybrid long-term retrieval).
+
+Цель: контролировать рост контекста и обеспечить обратную связь.
+Архитектура соответствует плану greenfield:
+- "рабочая память" хранит последние события дословно и суммаризирует старые;
+- "долгосрочная память" — гибридный индекс embeddings + BM25 с дедупом.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+from dataclasses import dataclass, field
+from typing import Any, Literal
+
+from magistry_sim.bm25 import BM25Like, build_bm25
+from magistry_sim.llm.embeddings import EmbeddingProvider
+
+from .config import MemoryConfig
+from .llm import LLMCaller
+
+
+MemoryKind = Literal[
+    "persona",
+    "interview",
+    "summary",
+    "observation",
+    "result",
+    "reflection",
+]
+
+
+_WS_RE = re.compile(r"\s+")
+
+
+def _norm_text(text: str) -> str:
+    return _WS_RE.sub(" ", text.strip())
+
+
+def _tokenize(text: str) -> list[str]:
+    return [t for t in re.split(r"[^A-Za-zА-Яа-я0-9_]+", text.lower()) if t]
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    if len(a) != len(b) or not a:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+@dataclass(slots=True)
+class WorkingEntry:
+    tick: int
+    text: str
+
+
+@dataclass(slots=True)
+class MemoryDoc:
+    doc_id: str
+    created_tick: int
+    last_seen_tick: int
+    kind: MemoryKind
+    importance: float
+    text: str
+    embedding: list[float] = field(default_factory=list)
+    repeats: int = 1
+    meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class AgentMemory:
+    """Память конкретного агента."""
+
+    agent_id: str
+    summary: str = ""
+    working: list[WorkingEntry] = field(default_factory=list)
+    docs: list[MemoryDoc] = field(default_factory=list)
+
+    _doc_counter: int = 0
+    _bm25_corpus: list[list[str]] = field(default_factory=list)
+    _bm25: BM25Like | None = None
+    _bm25_dirty: bool = False
+
+    def add_working(self, *, tick: int, text: str) -> None:
+        text = _norm_text(text)
+        if not text:
+            return
+        self.working.append(WorkingEntry(tick=tick, text=text))
+
+    def add_doc(
+        self,
+        *,
+        tick: int,
+        kind: MemoryKind,
+        importance: float,
+        text: str,
+        cfg: MemoryConfig,
+        embedder: EmbeddingProvider | None,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        text = _norm_text(text)
+        if not text:
+            return
+
+        embedding: list[float] = []
+        if embedder is not None:
+            try:
+                embedding = list(embedder.embed(text))
+            except Exception:
+                embedding = []
+
+        # Дедуп: если semantic-слишком похоже на уже существующую запись — не добавляем новую.
+        if embedding and self.docs:
+            best_sim = 0.0
+            best_idx: int | None = None
+            for i, d in enumerate(self.docs):
+                if not d.embedding:
+                    continue
+                sim = _cosine_similarity(embedding, d.embedding)
+                if sim > best_sim:
+                    best_sim = sim
+                    best_idx = i
+            if best_idx is not None and best_sim >= cfg.dedup_cosine_threshold:
+                d = self.docs[best_idx]
+                d.last_seen_tick = tick
+                d.repeats += 1
+                if importance > d.importance:
+                    d.importance = importance
+                return
+
+        self._doc_counter += 1
+        doc_id = f"mem:{self.agent_id}:{self._doc_counter}"
+        doc = MemoryDoc(
+            doc_id=doc_id,
+            created_tick=tick,
+            last_seen_tick=tick,
+            kind=kind,
+            importance=float(importance),
+            text=text,
+            embedding=embedding,
+            meta=dict(meta or {}),
+        )
+        self.docs.append(doc)
+        self._bm25_corpus.append(_tokenize(text))
+        self._bm25_dirty = True
+        self._enforce_caps(cfg)
+
+    def _enforce_caps(self, cfg: MemoryConfig) -> None:
+        while len(self.docs) > cfg.long_term_max_docs:
+            # Удаляем наименее важную и наиболее старую запись.
+            idx = min(
+                range(len(self.docs)),
+                key=lambda i: (self.docs[i].importance, self.docs[i].last_seen_tick),
+            )
+            self.docs.pop(idx)
+            self._bm25_corpus.pop(idx)
+            self._bm25_dirty = True
+
+    def _rebuild_bm25_if_dirty(self) -> None:
+        if self._bm25_dirty and self._bm25_corpus:
+            self._bm25 = build_bm25(self._bm25_corpus)
+            self._bm25_dirty = False
+
+    async def maybe_summarize_working(
+        self,
+        *,
+        llm: LLMCaller,
+        language: str,
+        cfg: MemoryConfig,
+        tick: int,
+        temperature: float,
+    ) -> None:
+        """Суммаризировать старую часть working buffer в `summary`."""
+        if len(self.working) <= cfg.working_max_entries:
+            return
+
+        batch_size = min(cfg.working_summarize_batch, len(self.working))
+        if batch_size <= 0:
+            return
+        batch = self.working[:batch_size]
+        self.working = self.working[batch_size:]
+
+        prev = self.summary.strip()
+        lines = "\n".join(f"- (t{e.tick}) {e.text}" for e in batch)
+        user = (
+            "Обнови сводку рабочей памяти агента.\n"
+            "Требования:\n"
+            "- Пиши кратко: 8–15 пунктов.\n"
+            "- Только факты/решения/обязательства, без художественности.\n"
+            "- Не добавляй новых сущностей/ID.\n\n"
+            f"Язык: {language!r}\n\n"
+            f"Текущая сводка:\n{prev or '(пусто)'}\n\n"
+            f"Новые записи для сжатия:\n{lines}\n"
+        )
+        resp = await llm.generate(
+            role="memory",
+            name=self.agent_id,
+            tick=tick,
+            system="Ты — модуль суммаризации памяти агента.",
+            user=user,
+            temperature=temperature,
+        )
+        new_summary = _norm_text(resp.text)
+        if new_summary:
+            self.summary = new_summary
+
+    def retrieve(
+        self,
+        *,
+        query_text: str,
+        tick: int,
+        cfg: MemoryConfig,
+        embedder: EmbeddingProvider | None,
+    ) -> list[MemoryDoc]:
+        """Достать top-k документов по гибридному скорингу."""
+        if not self.docs:
+            return []
+
+        query_text = _norm_text(query_text)
+        q_emb: list[float] = []
+        if embedder is not None and query_text:
+            try:
+                q_emb = list(embedder.embed(query_text))
+            except Exception:
+                q_emb = []
+
+        self._rebuild_bm25_if_dirty()
+        bm25_raw = []
+        if self._bm25 is not None and query_text:
+            bm25_raw = list(self._bm25.get_scores(_tokenize(query_text)))
+        else:
+            bm25_raw = [0.0] * len(self.docs)
+
+        # Нормализация BM25 в [0, 1] через min-max.
+        bm25_max = max(bm25_raw) if bm25_raw else 0.0
+        bm25_min = min(bm25_raw) if bm25_raw else 0.0
+        bm25_range = bm25_max - bm25_min
+        if bm25_range > 0:
+            bm25_norm = [(s - bm25_min) / bm25_range for s in bm25_raw]
+        else:
+            bm25_norm = [0.0] * len(self.docs)
+
+        w = cfg.weights
+        scored: list[tuple[float, MemoryDoc]] = []
+        for i, doc in enumerate(self.docs):
+            # Recency: экспоненциальный decay по "последнему появлению".
+            age = max(0, tick - doc.last_seen_tick)
+            recency = cfg.recency_decay ** age
+
+            cosine = 0.0
+            if q_emb and doc.embedding:
+                cosine = _cosine_similarity(q_emb, doc.embedding)
+            cosine_norm = (cosine + 1.0) / 2.0
+
+            importance_norm = min(1.0, max(0.0, doc.importance) / 10.0)
+            bm25 = bm25_norm[i] if i < len(bm25_norm) else 0.0
+
+            score = (
+                w.recency * recency
+                + w.vector * cosine_norm
+                + w.bm25 * bm25
+                + w.importance * importance_norm
+            )
+            scored.append((float(score), doc))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [d for _, d in scored[: cfg.retrieval_top_k]]
+

@@ -67,19 +67,29 @@ MAGISTRY/
 │   ├── validation.py           # Валидация конфигураций
 │   └── cli.py                  # Интерфейс командной строки
 ├── src/magistry_lc/            # Greenfield-движок (LangChain/LangGraph)
-│   ├── config.py               # ScenarioConfig (LC), Runtime/Governance/LLM
+│   ├── __init__.py             # Пакет
+│   ├── cli.py                  # CLI `magistry-lc`
+│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory
+│   ├── scenario.py             # Load/save YAML/JSON сценариев
 │   ├── ids.py                  # Типизированные ID и аудитории (aud:*)
 │   ├── entities.py             # EntityRegistry + EntityRecord (антифантомы)
-│   ├── actions.py              # Action[] (structured + perform)
+│   ├── id_alloc.py             # Детерминированное выделение новых ID
 │   ├── state.py                # WorldState (agents/work_items/votes)
+│   ├── persona.py              # PersonaArtifact/Library/Generator (биография + интервью)
+│   ├── memory.py               # Память агента (buffer + hybrid retrieval)
+│   ├── actions.py              # Action[] (structured + perform)
+│   ├── agent.py                # AgentRunner (1 LLM-вызов на ход)
 │   ├── ops.py                  # Детерминированные StateOp -> Event
-│   ├── arbiter.py              # Hybrid arbiter (rules + YAML-journal LLM for perform)
+│   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM perform)
 │   ├── dao.py                  # DAO vote closure + position policy
 │   ├── engine.py               # WorldEngine (параллельные ходы + детерминированный apply)
-│   ├── worldgen.py             # WorldGenerator (внешние события без утечки промптов)
-│   ├── composer.py             # WorldComposer (LLM → ScenarioConfig)
+│   ├── worldgen.py             # WorldGenerator (external events, без приватных утечек)
+│   ├── composer.py             # WorldComposer (LLM → ScenarioConfig + persona enrichment)
 │   ├── oracle.py               # ViolationOracle (чанкинг по events.jsonl)
-│   └── cli.py                  # CLI `magistry-lc`
+│   ├── events.py               # EventLog (JSONL) — "истина" мира
+│   ├── tracing.py              # TraceLog (JSONL) — prompts/responses отдельно
+│   ├── llm.py                  # LLMCaller (обёртка провайдера + trace)
+│   └── graphs.py               # LangGraph (tick graph + SqliteSaver checkpoints)
 ├── web/
 │   ├── backend/
 │   │   ├── main.py             # FastAPI-сервер (REST + WebSocket, ~2500 строк)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .config import GovernanceConfig
-from .ops import ChangePositionOp, CloseVoteOp
+from .ops import ChangePositionOp, CloseVoteOp, StateOp
 from .state import Vote, WorldState
 
 
@@ -31,12 +31,12 @@ class DaoEngine:
         Returns:
             Список ops (CloseVoteOp и, если прошло, ChangePositionOp).
         """
-        ops: list[object] = []
+        ops: list[StateOp] = []
         for vote_id in sorted(state.votes.keys()):
             vote = state.votes[vote_id]
             if not self.should_close_vote(vote, tick=state.tick):
                 continue
-            result = self._compute_result(vote)
+            result = self._compute_result(state, vote)
             ops.append(CloseVoteOp(vote_id=vote_id, result=result))
             if result == "passed":
                 ops.append(
@@ -49,7 +49,13 @@ class DaoEngine:
                 )
         return ops
 
-    def _compute_result(self, vote: Vote) -> str:
+    def _compute_result(self, state: WorldState, vote: Vote) -> str:
+        target = state.agents.get(vote.target_agent_id)
+        if target is None:
+            return "canceled"
+        if not target.wants_promotion:
+            return "canceled"
+
         # Consent gate.
         if self.cfg.require_consent and vote.target_consented is not True:
             return "canceled"
@@ -65,4 +71,3 @@ class DaoEngine:
         if (yes / denom) >= self.cfg.pass_threshold and yes > no:
             return "passed"
         return "failed"
-

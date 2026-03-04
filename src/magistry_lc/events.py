@@ -82,17 +82,16 @@ class EventLog:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def iter_events(self) -> Iterable[Event]:
-        """Итерировать события из файла."""
+        """Прочитать события из файла.
+
+        Возвращает всегда один тип (list[Event]) и не держит файл открытым во время итерации.
+        """
         if not self.path.exists():
             return []
-
-        def _gen() -> Iterable[Event]:
-            with self.path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    yield Event.model_validate_json(line)
-
-        return _gen()
-
+        events: list[Event] = []
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            events.append(Event.model_validate_json(line))
+        return events

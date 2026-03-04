@@ -66,6 +66,8 @@ magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_ru
 magistry-lc compose --description-file docs/chapter_1.md --out scenarios/lc_composed.yaml
 ```
 
+Примечание: `compose` дополнительно обогащает персон (биография + интервью), поэтому делает несколько LLM-вызовов (примерно 1 на агента).
+
 Чанкинг-оракул по `events.jsonl` (LLM):
 
 ```bash

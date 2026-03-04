@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .ids import EntityKind, ensure_kind, parse_typed_id
+from .persona import PersonaArtifact
 
 
 class LLMConfig(BaseModel):
@@ -21,6 +22,68 @@ class LLMConfig(BaseModel):
     temperature: float = 0.0
     use_tool_calls: bool = False
     trace_max_chars: int = 0
+
+
+class MemoryWeights(BaseModel):
+    """Веса гибридного retrieval (embeddings + BM25 + recency + importance)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recency: float = 0.3
+    vector: float = 0.3
+    bm25: float = 0.2
+    importance: float = 0.2
+
+    @field_validator("recency", "vector", "bm25", "importance")
+    @classmethod
+    def _validate_non_negative(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("weight must be >= 0")
+        return v
+
+
+class MemoryConfig(BaseModel):
+    """Настройки памяти агентов."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Working buffer (аналог ConversationSummaryBufferMemory).
+    working_max_entries: int = 40
+    working_summarize_batch: int = 20
+
+    # Long-term hybrid index.
+    long_term_max_docs: int = 800
+    retrieval_top_k: int = 12
+    dedup_cosine_threshold: float = 0.92
+    recency_decay: float = 0.995
+    weights: MemoryWeights = Field(default_factory=MemoryWeights)
+
+    # Embeddings provider config (по умолчанию: mock для воспроизводимости в тестах).
+    embeddings_mock: bool = True
+    embeddings_model: str | None = None
+    embeddings_base_url: str | None = None
+    embeddings_api_key_env: str = "OPENAI_API_KEY"
+
+    @field_validator("working_max_entries", "working_summarize_batch", "long_term_max_docs", "retrieval_top_k")
+    @classmethod
+    def _validate_positive_int(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("value must be > 0")
+        return v
+
+    @field_validator("dedup_cosine_threshold")
+    @classmethod
+    def _validate_cosine_threshold(cls, v: float) -> float:
+        if not (0.0 < v <= 1.0):
+            raise ValueError("dedup_cosine_threshold must be in (0, 1]")
+        return v
+
+    @field_validator("recency_decay")
+    @classmethod
+    def _validate_recency_decay(cls, v: float) -> float:
+        if not (0.0 < v <= 1.0):
+            raise ValueError("recency_decay must be in (0, 1]")
+        return v
 
 
 class RuntimeConfig(BaseModel):
@@ -81,10 +144,20 @@ class AgentConfig(BaseModel):
     agent_id: str
     name: str
     internal: bool = True
-    persona: str = ""
+    persona: PersonaArtifact = Field(default_factory=PersonaArtifact)
     capabilities: list[str] = Field(default_factory=list)
     initial_title: str = "специалист"
     wants_promotion: bool = True
+
+    @field_validator("persona", mode="before")
+    @classmethod
+    def _coerce_persona(cls, v):
+        # Backward compatibility: allow `persona: "..."` string.
+        if v is None:
+            return {}
+        if isinstance(v, str):
+            return {"summary": v}
+        return v
 
     @field_validator("agent_id")
     @classmethod
@@ -172,6 +245,7 @@ class ScenarioConfig(BaseModel):
     ticks: int = 25
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     governance: GovernanceConfig = Field(default_factory=GovernanceConfig)
 

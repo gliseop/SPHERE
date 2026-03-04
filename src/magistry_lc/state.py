@@ -7,6 +7,8 @@ from typing import Any
 
 from .entities import EntityRegistry
 from .ids import EntityKind
+from .memory import AgentMemory
+from .persona import PersonaArtifact
 
 
 @dataclass(slots=True)
@@ -19,15 +21,18 @@ class AgentState:
     agent_id: str
     name: str
     internal: bool
-    persona: str = ""
+    persona: PersonaArtifact = field(default_factory=PersonaArtifact)
     capabilities: list[str] = field(default_factory=list)
 
     reputation: float = 0.0  # clamp >= 0
     title: str = "специалист"
     wants_promotion: bool = True
 
-    memory_summary: str = ""
-    memory_events: list[str] = field(default_factory=list)  # recent facts (deduped)
+    memory: AgentMemory | None = None
+
+    def __post_init__(self) -> None:
+        if self.memory is None:
+            self.memory = AgentMemory(agent_id=self.agent_id)
 
 
 @dataclass(slots=True)
@@ -162,4 +167,3 @@ class WorldState:
             # Фолбэк: JSON-подобный текст. В runtime лучше установить pyyaml.
             return str(data)
         return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
-
