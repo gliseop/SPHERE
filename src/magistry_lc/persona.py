@@ -272,8 +272,33 @@ class PersonaGenerator:
         biography_excerpt: str,
         questions: list[str],
         max_chunk: int = 10,
+        max_structured_calls: int = 12,
     ) -> list[str]:
+        structured_calls = 0
+
+        async def _answer_one(q: str) -> str:
+            user = (
+                "Ответь на вопрос интервью персоны. 2–6 предложений.\n"
+                f"Язык: {language!r}\n\n"
+                f"Persona summary:\n{persona_summary}\n\n"
+                f"Biography excerpt:\n{biography_excerpt}\n\n"
+                f"Вопрос:\n{q}\n"
+            )
+            try:
+                resp = await self.llm.generate(
+                    role="persona_interview",
+                    name=agent_id,
+                    tick=0,
+                    system="Ты — генератор интервью персоны.",
+                    user=user,
+                    temperature=self.temperature,
+                )
+                return (resp.text or "").strip()
+            except Exception:
+                return ""
+
         async def _try_batch(qs: list[str]) -> list[str]:
+            nonlocal structured_calls
             q_lines = "\n".join(f"{i+1}. {q}" for i, q in enumerate(qs))
             system = (
                 "Ты — генератор интервью персоны (MAGISTRY-LC).\n"
@@ -286,6 +311,7 @@ class PersonaGenerator:
                 f"Biography excerpt:\n{biography_excerpt}\n\n"
                 f"Вопросы:\n{q_lines}\n"
             )
+            structured_calls += 1
             resp = await self.llm.generate_structured(
                 role="persona_interview",
                 name=agent_id,
@@ -312,6 +338,9 @@ class PersonaGenerator:
 
         while queue:
             qs = queue.pop(0)
+            if structured_calls >= max_structured_calls:
+                out.extend([await _answer_one(q) for q in qs])
+                continue
             try:
                 out.extend(await _try_batch(qs))
                 continue
@@ -319,23 +348,7 @@ class PersonaGenerator:
                 pass
 
             if len(qs) <= 1:
-                q = qs[0] if qs else ""
-                user = (
-                    "Ответь на вопрос интервью персоны. 2–6 предложений.\n"
-                    f"Язык: {language!r}\n\n"
-                    f"Persona summary:\n{persona_summary}\n\n"
-                    f"Biography excerpt:\n{biography_excerpt}\n\n"
-                    f"Вопрос:\n{q}\n"
-                )
-                resp = await self.llm.generate(
-                    role="persona_interview",
-                    name=agent_id,
-                    tick=0,
-                    system="Ты — генератор интервью персоны.",
-                    user=user,
-                    temperature=self.temperature,
-                )
-                out.append((resp.text or "").strip())
+                out.append(await _answer_one(qs[0] if qs else ""))
                 continue
 
             mid = max(1, len(qs) // 2)

@@ -21,9 +21,10 @@ from magistry_lc.entities import EntityRecord, EntityRegistry
 from magistry_lc.events import Event
 from magistry_lc.id_alloc import IdAllocator
 from magistry_lc.ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
+from magistry_lc.journal import WorldJournal
 from magistry_lc.llm import LLMCaller
 from magistry_lc.memory import AgentMemory
-from magistry_lc.state import AgentState, WorldState
+from magistry_lc.state import AgentState, WorkItem, WorldState
 from magistry_lc.tracing import TraceLog
 from magistry_lc.worldgen import WorldGenerator
 
@@ -189,3 +190,51 @@ def test_langgraph_world_graph_supports_checkpoint_path(tmp_path: Path) -> None:
     state = WorldState(tick=0, registry=EntityRegistry())
     out = asyncio.run(app.ainvoke({"world": state, "events_history": []}))
     assert isinstance(out, dict)
+
+
+def test_world_journal_tracks_history_and_caps() -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    journal = WorldJournal.from_state(
+        state=state,
+        store_max_work_items=3,
+        store_max_votes=3,
+        history_max_entries=5,
+    )
+
+    ev1 = Event(
+        tick=0,
+        event_type="arbiter_approved",
+        actor_id="agent:off_1",
+        payload={"action_index": 0, "reason": "ok", "action": "noop", "ops": []},
+        audience=[INTERNAL_AUDIENCE],
+    )
+    ev2 = Event(
+        tick=0,
+        event_type="message_sent",
+        actor_id="agent:off_1",
+        payload={"to_id": "agent:off_2", "private": True, "text": "hi"},
+        audience=["agent:off_1", "agent:off_2"],
+    )
+    journal.apply_events(state=state, events=[ev1, ev2])
+
+    d = journal.to_dict()
+    assert len(d["history"]) == 2
+    assert d["history"][0]["type"] == "arbiter_approved"
+    assert d["history"][1]["type"] == "message_sent"
+
+    for i in range(5):
+        wid = f"work:w{i}"
+        state.work_items[wid] = WorkItem(work_id=wid, work_type="t", title=f"T{i}")
+        journal.apply_events(
+            state=state,
+            events=[
+                Event(
+                    tick=0,
+                    event_type="work_item_created",
+                    actor_id="agent:off_1",
+                    payload={"work_id": wid, "work_type": "t", "title": f"T{i}", "description": "", "participants": []},
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            ],
+        )
+    assert len(journal.work_items) <= 3

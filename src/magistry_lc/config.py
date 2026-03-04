@@ -62,12 +62,16 @@ class MemoryConfig(BaseModel):
     importance_threshold: float = 5.0
     importance_by_event: dict[str, float] = Field(
         default_factory=lambda: {
+            "arbiter_approved": 6.0,
             "arbiter_rejected": 8.0,
             "arbiter_op_failed": 8.0,
+            "entity_created": 5.0,
             "position_changed": 8.0,
             "vote_opened": 7.0,
+            "vote_cast": 5.0,
             "vote_closed": 7.0,
             "message_sent": 6.0,
+            "reputation_modified": 6.0,
             "work_item_created": 5.0,
             "work_note_added": 5.0,
             "work_proposal_submitted": 5.0,

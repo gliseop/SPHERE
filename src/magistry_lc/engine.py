@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -66,18 +67,30 @@ class WorldEngine:
         journal = WorldJournal.from_state(state=state)
 
         # Memory: embeddings provider (по умолчанию mock — без ключей API).
-        api_key = os.getenv(self.cfg.memory.embeddings_api_key_env) or None
+        env_key = self.cfg.memory.embeddings_api_key_env
+        api_key = os.getenv(env_key) or None
         embedder: EmbeddingProvider | None = None
-        try:
-            embedder = create_embedding_provider(
-                mock=bool(self.cfg.memory.embeddings_mock),
-                model_name=self.cfg.memory.embeddings_model,
-                api_key=api_key,
-                base_url=self.cfg.memory.embeddings_base_url or self.cfg.llm.base_url,
+        if not self.cfg.memory.embeddings_mock and not api_key:
+            logger.warning(
+                "Embeddings enabled (embeddings_mock=false) but %s is not set; embeddings disabled (BM25-only).",
+                env_key,
             )
-        except Exception as exc:
-            logger.warning("Embeddings disabled (%s): %s", exc.__class__.__name__, exc)
-            embedder = None
+        else:
+            if self.cfg.memory.embeddings_mock and api_key:
+                logger.warning(
+                    "Embeddings in mock mode (embeddings_mock=true) while %s is set; set embeddings_mock=false to use real embeddings.",
+                    env_key,
+                )
+            try:
+                embedder = create_embedding_provider(
+                    mock=bool(self.cfg.memory.embeddings_mock),
+                    model_name=self.cfg.memory.embeddings_model,
+                    api_key=api_key,
+                    base_url=self.cfg.memory.embeddings_base_url or self.cfg.llm.base_url,
+                )
+            except Exception as exc:
+                logger.warning("Embeddings disabled (%s): %s", exc.__class__.__name__, exc)
+                embedder = None
 
         embed_cache: dict[str, list[float]] = {}
 
@@ -253,8 +266,6 @@ class WorldEngine:
 
     def _agent_order(self, *, state: WorldState, tick: int) -> list[str]:
         """Детерминированный порядок агентов на тик (использует seed)."""
-        import random
-
         order = sorted(state.agents.keys())
         rnd = random.Random(int(self.cfg.seed) + int(tick))
         rnd.shuffle(order)

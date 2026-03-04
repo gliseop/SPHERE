@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterable
 from typing import TypeVar
 
@@ -15,6 +16,20 @@ from .deps import EmbeddingProvider
 
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
+_EMBED_WARN_LIMIT = 3
+_embed_warn_count = 0
+
+
+def _warn_embeddings_once(message: str, *args: object) -> None:
+    global _embed_warn_count
+    if _embed_warn_count >= _EMBED_WARN_LIMIT:
+        return
+    _embed_warn_count += 1
+    logger.warning(message, *args)
+    if _embed_warn_count == _EMBED_WARN_LIMIT:
+        logger.warning("Further embeddings warnings suppressed.")
 
 
 def _chunks(items: list[T], size: int) -> Iterable[list[T]]:
@@ -36,10 +51,22 @@ async def embed_texts(
     for batch in _chunks(texts, batch_size):
         try:
             vecs = await asyncio.to_thread(embedder.embed_batch, list(batch))
-        except Exception:
+        except Exception as exc:
+            total_chars = sum(len(t) for t in batch)
+            _warn_embeddings_once(
+                "Embeddings batch failed (%s): texts=%d chars=%d",
+                exc.__class__.__name__,
+                len(batch),
+                total_chars,
+            )
             vecs = []
 
         if len(vecs) != len(batch):
+            _warn_embeddings_once(
+                "Embeddings provider returned mismatched batch size: expected=%d got=%d",
+                len(batch),
+                len(vecs),
+            )
             out.extend([[] for _ in batch])
             continue
         out.extend([list(v) for v in vecs])

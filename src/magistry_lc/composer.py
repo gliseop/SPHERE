@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import AgentConfig, ChannelConfig, OrgConfig, RuntimeConfig, ScenarioConfig, WorkItemConfig
+from .ids import EntityKind, ensure_kind, make_id
 from .llm import LLMCaller
 from .persona import PersonaArtifact, PersonaGenerator
 
@@ -112,6 +113,16 @@ def _compose_schema() -> dict[str, Any]:
     }
 
 
+def _normalize_typed_id(raw_id: str, kind: EntityKind) -> str:
+    raw_id = (raw_id or "").strip()
+    if not raw_id:
+        raise ValueError("id must be non-empty")
+    if ":" not in raw_id:
+        return make_id(kind, raw_id)
+    ensure_kind(raw_id, kind)
+    return raw_id
+
+
 @dataclass(slots=True)
 class WorldComposer:
     """Сгенерировать ScenarioConfig из текстового описания."""
@@ -162,6 +173,14 @@ class WorldComposer:
         )
         out = _ComposeOutput.model_validate(resp.data)
 
+        agents = []
+        for a in out.agents:
+            agents.append(
+                a.model_copy(
+                    update={"agent_id": _normalize_typed_id(a.agent_id, EntityKind.AGENT)}
+                )
+            )
+
         cfg = ScenarioConfig(
             title=out.title,
             description=out.description or description,
@@ -186,10 +205,10 @@ class WorldComposer:
             artifact.persona_id = a.agent_id
             return artifact
 
-        personas = await asyncio.gather(*[_build_persona(a) for a in out.agents])
+        personas = await asyncio.gather(*[_build_persona(a) for a in agents])
 
         cfg.agents = []
-        for a, persona in zip(out.agents, personas, strict=True):
+        for a, persona in zip(agents, personas, strict=True):
             cfg.agents.append(
                 AgentConfig(
                     agent_id=a.agent_id,
@@ -202,7 +221,33 @@ class WorldComposer:
                 )
             )
 
-        cfg.world.channels = [ChannelConfig.model_validate(x) for x in out.world.channels]
-        cfg.world.orgs = [OrgConfig.model_validate(x) for x in out.world.orgs]
-        cfg.world.work_items = [WorkItemConfig.model_validate(x) for x in out.world.work_items]
+        cfg.world.channels = [
+            ChannelConfig.model_validate(
+                {**x, "channel_id": _normalize_typed_id(str(x.get("channel_id") or ""), EntityKind.CHANNEL)}
+            )
+            for x in out.world.channels
+        ]
+        cfg.world.orgs = [
+            OrgConfig.model_validate(
+                {**x, "org_id": _normalize_typed_id(str(x.get("org_id") or ""), EntityKind.ORG)}
+            )
+            for x in out.world.orgs
+        ]
+        cfg.world.work_items = []
+        for x in out.world.work_items:
+            participants_raw = x.get("participants") or []
+            participants = [
+                _normalize_typed_id(str(pid or ""), EntityKind.AGENT)
+                for pid in participants_raw
+                if str(pid or "").strip()
+            ]
+            cfg.world.work_items.append(
+                WorkItemConfig.model_validate(
+                    {
+                        **x,
+                        "work_id": _normalize_typed_id(str(x.get("work_id") or ""), EntityKind.WORK_ITEM),
+                        "participants": participants,
+                    }
+                )
+            )
         return cfg
