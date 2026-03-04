@@ -30,6 +30,7 @@ pip install -e ".[dev,search]"
 - `dev` — pytest, pytest-asyncio, rank-bm25 (для тестов)
 - `search` — rank-bm25 (для гибридного поиска)
 - `stats` — scipy (для статистического анализа пакетных прогонов)
+- `lc` — зависимости greenfield-движка MAGISTRY-LC (LangChain/LangGraph + YAML)
 
 ### Настройка переменных окружения
 
@@ -99,6 +100,32 @@ magistry-sim --scenario S0 --batch --batch-runs 10 --batch-modes G0,G2,G3 --outp
 ```
 
 Полный список аргументов CLI — в [cli_reference.md](./cli_reference.md).
+
+## MAGISTRY-LC (greenfield)
+
+Установите extra-зависимости:
+
+```bash
+pip install -e ".[lc]"
+```
+
+Минимальный запуск:
+
+```bash
+magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
+```
+
+Сгенерировать сценарий из описания (LLM):
+
+```bash
+magistry-lc compose --description "Кумовство при найме" --out scenarios/lc_composed.yaml
+```
+
+Чанкинг-оракул по `events.jsonl` (LLM):
+
+```bash
+magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
+```
 
 ## Запуск веб-интерфейса
 

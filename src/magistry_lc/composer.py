@@ -1,0 +1,187 @@
+"""WorldComposer: генерация сценария из текстового описания."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from .config import AgentConfig, ChannelConfig, OrgConfig, ScenarioConfig, WorkItemConfig
+from .llm import LLMCaller
+
+
+class _ComposeAgent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    name: str
+    internal: bool
+    persona: str = ""
+    initial_title: str = "специалист"
+    wants_promotion: bool = True
+    capabilities: list[str] = Field(default_factory=list)
+
+
+class _ComposeWorld(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    channels: list[dict[str, Any]] = Field(default_factory=list)
+    orgs: list[dict[str, Any]] = Field(default_factory=list)
+    work_items: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class _ComposeOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    description: str = ""
+    agents: list[_ComposeAgent]
+    world: _ComposeWorld = Field(default_factory=_ComposeWorld)
+
+
+def _compose_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "title": {"type": "string"},
+            "description": {"type": "string"},
+            "agents": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "agent_id": {"type": "string"},
+                        "name": {"type": "string"},
+                        "internal": {"type": "boolean"},
+                        "persona": {"type": "string"},
+                        "initial_title": {"type": "string"},
+                        "wants_promotion": {"type": "boolean"},
+                        "capabilities": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["agent_id", "name", "internal"],
+                },
+            },
+            "world": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "channels": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {"channel_id": {"type": "string"}, "title": {"type": "string"}},
+                            "required": ["channel_id"],
+                        },
+                    },
+                    "orgs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {"org_id": {"type": "string"}, "title": {"type": "string"}},
+                            "required": ["org_id"],
+                        },
+                    },
+                    "work_items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "work_id": {"type": "string"},
+                                "work_type": {"type": "string"},
+                                "title": {"type": "string"},
+                                "description": {"type": "string"},
+                                "participants": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["work_id", "work_type", "title"],
+                        },
+                    },
+                },
+                "required": [],
+            },
+        },
+        "required": ["title", "agents"],
+    }
+
+
+@dataclass(slots=True)
+class WorldComposer:
+    """Сгенерировать ScenarioConfig из текстового описания."""
+
+    llm: LLMCaller
+    temperature: float = 0.0
+
+    async def compose(
+        self,
+        *,
+        description: str,
+        ticks: int,
+        seed: int,
+        language: str,
+    ) -> ScenarioConfig:
+        """Сгенерировать сценарий.
+
+        Args:
+            description: Текстовая постановка ситуации.
+            ticks: Длина прогона.
+            seed: Зерно.
+            language: Язык симуляции.
+        """
+        system = (
+            "Ты — генератор сценариев для симуляции организационных процессов (MAGISTRY-LC).\n"
+            "Сгенерируй состав мира и агентов из описания.\n"
+            "Жёсткие требования:\n"
+            "- Используй только типизированные ID: agent:*, org:*, chan:*, work:*.\n"
+            "- Вторичные агенты должны появляться по ситуации (не фиксированным числом).\n"
+            "- Не используй числовые параметры личности (greed/fear/honesty/etc). Только текст.\n"
+            "- Должности и репутация применимы только к internal=true.\n"
+            f"- Пиши на языке: {language!r}.\n"
+            "Ответ: строго JSON по схеме.\n"
+        )
+        user = (
+            f"Описание:\n{description}\n\n"
+            f"Параметры:\n- ticks: {ticks}\n- seed: {seed}\n"
+        )
+        resp = await self.llm.generate_structured(
+            role="composer",
+            name="world_composer",
+            tick=0,
+            system=system,
+            user=user,
+            schema=_compose_schema(),
+            temperature=self.temperature,
+        )
+        out = _ComposeOutput.model_validate(resp.data)
+
+        cfg = ScenarioConfig(
+            title=out.title,
+            description=out.description or description,
+            seed=seed,
+            ticks=ticks,
+        )
+        cfg.runtime.language = language
+
+        cfg.agents = [
+            AgentConfig(
+                agent_id=a.agent_id,
+                name=a.name,
+                internal=a.internal,
+                persona=a.persona,
+                initial_title=a.initial_title,
+                wants_promotion=a.wants_promotion,
+                capabilities=list(a.capabilities),
+            )
+            for a in out.agents
+        ]
+
+        cfg.world.channels = [ChannelConfig.model_validate(x) for x in out.world.channels]
+        cfg.world.orgs = [OrgConfig.model_validate(x) for x in out.world.orgs]
+        cfg.world.work_items = [WorkItemConfig.model_validate(x) for x in out.world.work_items]
+        return cfg
+

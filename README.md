@@ -39,6 +39,39 @@ magistry-sim --scenario S0 --runner cognitive
 magistry-sim --scenario S1 --mode async --runner cognitive --governance G2
 ```
 
+### MAGISTRY-LC (greenfield на LangChain/LangGraph)
+
+MAGISTRY-LC — новая ветка движка “с нуля” с упором на:
+- антифантомы (EntityRegistry + строгие ID),
+- управление контекстом,
+- YAML-journal арбитра,
+- политика должностей через DAO (vote + consent),
+- чанкинг оракула.
+
+Установка extra-зависимостей:
+
+```bash
+pip install -e ".[lc]"
+```
+
+Минимальный запуск:
+
+```bash
+magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
+```
+
+Генерация сценария из описания (LLM):
+
+```bash
+magistry-lc compose --description-file docs/chapter_1.md --out scenarios/lc_composed.yaml
+```
+
+Чанкинг-оракул по `events.jsonl` (LLM):
+
+```bash
+magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
+```
+
 ### Запуск веб-интерфейса
 
 ```bash

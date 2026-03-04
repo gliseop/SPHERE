@@ -66,6 +66,20 @@ MAGISTRY/
 │   ├── batch.py                # BatchRunner — пакетные прогоны
 │   ├── validation.py           # Валидация конфигураций
 │   └── cli.py                  # Интерфейс командной строки
+├── src/magistry_lc/            # Greenfield-движок (LangChain/LangGraph)
+│   ├── config.py               # ScenarioConfig (LC), Runtime/Governance/LLM
+│   ├── ids.py                  # Типизированные ID и аудитории (aud:*)
+│   ├── entities.py             # EntityRegistry + EntityRecord (антифантомы)
+│   ├── actions.py              # Action[] (structured + perform)
+│   ├── state.py                # WorldState (agents/work_items/votes)
+│   ├── ops.py                  # Детерминированные StateOp -> Event
+│   ├── arbiter.py              # Hybrid arbiter (rules + YAML-journal LLM for perform)
+│   ├── dao.py                  # DAO vote closure + position policy
+│   ├── engine.py               # WorldEngine (параллельные ходы + детерминированный apply)
+│   ├── worldgen.py             # WorldGenerator (внешние события без утечки промптов)
+│   ├── composer.py             # WorldComposer (LLM → ScenarioConfig)
+│   ├── oracle.py               # ViolationOracle (чанкинг по events.jsonl)
+│   └── cli.py                  # CLI `magistry-lc`
 ├── web/
 │   ├── backend/
 │   │   ├── main.py             # FastAPI-сервер (REST + WebSocket, ~2500 строк)
@@ -131,6 +145,12 @@ pytest -k "test_cognitive"                # по паттерну
 magistry-sim --scenario S0                # синхронный режим
 magistry-sim --scenario S1 --mode async   # асинхронный режим
 magistry-sim --list-scenarios             # список сценариев
+
+# MAGISTRY-LC (greenfield)
+pip install -e ".[lc]"
+magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
+magistry-lc compose --description "Короткое описание" --out scenarios/lc_composed.yaml
+magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
 
 # Веб-интерфейс
 cd web && bash start.sh                   # сервер + фронтенд

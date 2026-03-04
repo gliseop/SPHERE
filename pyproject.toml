@@ -19,9 +19,11 @@ dependencies = [
 search = ["rank-bm25>=0.2.2"]
 stats = ["scipy>=1.12"]
 dev = ["pytest>=9.0", "pytest-asyncio>=0.23", "rank-bm25>=0.2.2"]
+lc = ["langgraph>=0.2", "langchain-core>=0.2", "pyyaml>=6.0"]
 
 [project.scripts]
 magistry-sim = "magistry_sim.cli:main"
+magistry-lc = "magistry_lc.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
