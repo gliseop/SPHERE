@@ -191,12 +191,158 @@ def _persona_schema() -> dict[str, Any]:
     }
 
 
+def _persona_core_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "summary": {"type": "string"},
+            "biography": {"type": "string"},
+        },
+        "required": ["summary", "biography"],
+    }
+
+
+def _interview_answers_schema(*, n: int) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "answers": {
+                "type": "array",
+                "minItems": int(n),
+                "maxItems": int(n),
+                "items": {"type": "string"},
+            }
+        },
+        "required": ["answers"],
+    }
+
+
 @dataclass(slots=True)
 class PersonaGenerator:
     """LLM-генератор артефактов персоны."""
 
     llm: "LLMCaller"
     temperature: float = 0.0
+
+    async def _generate_core(
+        self,
+        *,
+        agent_id: str,
+        name: str,
+        internal: bool,
+        persona_hint: str,
+        scenario_description: str,
+        language: str,
+    ) -> PersonaArtifact:
+        system = (
+            "Ты — генератор персоны агента для симуляции организационных процессов (MAGISTRY-LC).\n"
+            "Сгенерируй:\n"
+            "- краткую сводку (summary) 3–6 предложений;\n"
+            "- биографию (biography) 1000–2000 слов.\n"
+            "Важно:\n"
+            "- Не используй числовые параметры личности (greed/fear/honesty/etc). Только текст.\n"
+            "- Не выдумывай новых ID/сущностей мира; описывай человека и мотивации.\n"
+            f"- Пиши на языке: {language!r}.\n"
+            "Ответ: строго JSON по схеме.\n"
+        )
+        user = (
+            f"Сценарий:\n{scenario_description}\n\n"
+            f"Агент:\n- agent_id: {agent_id}\n- name: {name}\n- internal: {internal}\n\n"
+            f"Подсказка/черновик персоны:\n{persona_hint}\n"
+        )
+        resp = await self.llm.generate_structured(
+            role="persona",
+            name=agent_id,
+            tick=0,
+            system=system,
+            user=user,
+            schema=_persona_core_schema(),
+            temperature=self.temperature,
+        )
+        return PersonaArtifact.model_validate(resp.data)
+
+    async def _generate_interview_answers(
+        self,
+        *,
+        agent_id: str,
+        language: str,
+        persona_summary: str,
+        biography_excerpt: str,
+        questions: list[str],
+        max_chunk: int = 10,
+    ) -> list[str]:
+        async def _try_batch(qs: list[str]) -> list[str]:
+            q_lines = "\n".join(f"{i+1}. {q}" for i, q in enumerate(qs))
+            system = (
+                "Ты — генератор интервью персоны (MAGISTRY-LC).\n"
+                "Дай ответы на вопросы, каждый ответ 2–6 предложений.\n"
+                f"Пиши на языке: {language!r}.\n"
+                "Ответ: строго JSON по схеме.\n"
+            )
+            user = (
+                f"Persona summary:\n{persona_summary}\n\n"
+                f"Biography excerpt:\n{biography_excerpt}\n\n"
+                f"Вопросы:\n{q_lines}\n"
+            )
+            resp = await self.llm.generate_structured(
+                role="persona_interview",
+                name=agent_id,
+                tick=0,
+                system=system,
+                user=user,
+                schema=_interview_answers_schema(n=len(qs)),
+                temperature=self.temperature,
+            )
+            data = resp.data
+            answers = data.get("answers") if isinstance(data, dict) else None
+            if not isinstance(answers, list) or len(answers) != len(qs):
+                raise ValueError("invalid interview answers")
+            cleaned = [(a or "").strip() for a in answers]
+            if any(not a for a in cleaned):
+                raise ValueError("empty interview answer")
+            return cleaned
+
+        out: list[str] = []
+        queue: list[list[str]] = []
+        size = max(1, int(max_chunk))
+        for i in range(0, len(questions), size):
+            queue.append(questions[i : i + size])
+
+        while queue:
+            qs = queue.pop(0)
+            try:
+                out.extend(await _try_batch(qs))
+                continue
+            except Exception:
+                pass
+
+            if len(qs) <= 1:
+                q = qs[0] if qs else ""
+                user = (
+                    "Ответь на вопрос интервью персоны. 2–6 предложений.\n"
+                    f"Язык: {language!r}\n\n"
+                    f"Persona summary:\n{persona_summary}\n\n"
+                    f"Biography excerpt:\n{biography_excerpt}\n\n"
+                    f"Вопрос:\n{q}\n"
+                )
+                resp = await self.llm.generate(
+                    role="persona_interview",
+                    name=agent_id,
+                    tick=0,
+                    system="Ты — генератор интервью персоны.",
+                    user=user,
+                    temperature=self.temperature,
+                )
+                out.append((resp.text or "").strip())
+                continue
+
+            mid = max(1, len(qs) // 2)
+            queue.insert(0, qs[mid:])
+            queue.insert(0, qs[:mid])
+
+        return out
 
     async def generate(
         self,
@@ -227,14 +373,68 @@ class PersonaGenerator:
             f"Подсказка/черновик персоны:\n{persona_hint}\n\n"
             f"Вопросы интервью:\n{questions}\n"
         )
-        resp = await self.llm.generate_structured(
-            role="persona",
-            name=agent_id,
-            tick=0,
-            system=system,
-            user=user,
-            schema=_persona_schema(),
-            temperature=self.temperature,
-        )
-        artifact = PersonaArtifact.model_validate(resp.data)
-        return artifact
+        artifact: PersonaArtifact | None = None
+        try:
+            resp = await self.llm.generate_structured(
+                role="persona",
+                name=agent_id,
+                tick=0,
+                system=system,
+                user=user,
+                schema=_persona_schema(),
+                temperature=self.temperature,
+            )
+            artifact = PersonaArtifact.model_validate(resp.data)
+        except Exception:
+            artifact = None
+
+        summary = (artifact.summary if artifact else "").strip()
+        biography = (artifact.biography if artifact else "").strip()
+
+        if not summary or not biography:
+            try:
+                core = await self._generate_core(
+                    agent_id=agent_id,
+                    name=name,
+                    internal=internal,
+                    persona_hint=persona_hint,
+                    scenario_description=scenario_description,
+                    language=language,
+                )
+                summary = (core.summary or summary).strip()
+                biography = (core.biography or biography).strip()
+            except Exception:
+                pass
+
+        if not summary:
+            summary = (persona_hint or f"{name}").strip()
+        if not biography:
+            biography = (persona_hint or summary).strip()
+
+        answers: list[str] = []
+        if artifact and len(artifact.interview) >= len(INTERVIEW_QUESTIONS_V2):
+            answers = [
+                (qa.answer or "").strip()
+                for qa in artifact.interview[: len(INTERVIEW_QUESTIONS_V2)]
+            ]
+            if any(not a for a in answers):
+                answers = []
+
+        if not answers:
+            excerpt = biography[:1600].strip()
+            answers = await self._generate_interview_answers(
+                agent_id=agent_id,
+                language=language,
+                persona_summary=summary,
+                biography_excerpt=excerpt,
+                questions=list(INTERVIEW_QUESTIONS_V2),
+            )
+
+        interview: list[InterviewQA] = []
+        for q, a in zip(INTERVIEW_QUESTIONS_V2, answers, strict=False):
+            a = (a or "").strip()
+            if not a:
+                continue
+            interview.append(InterviewQA(question=q, answer=a))
+
+        return PersonaArtifact(summary=summary, biography=biography, interview=interview)

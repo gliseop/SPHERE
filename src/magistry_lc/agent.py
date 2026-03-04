@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Iterable
@@ -17,21 +18,12 @@ from .llm import LLMCaller
 from .memory import AgentMemory
 from .state import AgentState, WorldState
 
-from magistry_sim.llm.embeddings import EmbeddingProvider
+from .deps import EmbeddingProvider
+from .utils import redact_numbers
 
 
 _WS_RE = re.compile(r"\s+")
 _ACTION_ADAPTER = TypeAdapter(Action)
-
-
-def _redact_numbers(obj):
-    if isinstance(obj, dict):
-        return {k: _redact_numbers(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_redact_numbers(v) for v in obj]
-    if isinstance(obj, (int, float)):
-        return "<num>"
-    return obj
 
 
 def _norm(text: str) -> str:
@@ -70,6 +62,7 @@ class AgentRunner:
         agent: AgentState,
         state: WorldState,
         visible_events: list[Event],
+        mem_text: str,
     ) -> str:
         # Антифантомы: показываем только те ID, которые агенту допустимо использовать напрямую.
         agent_ids = ", ".join(sorted(state.agents.keys())) or "(нет)"
@@ -83,10 +76,8 @@ class AgentRunner:
         facts = []
         for ev in visible_events[-50:]:
             # не показываем сырые числа репутации и т.п.
-            facts.append(f"- [{ev.event_type}] {_redact_numbers(ev.payload)}")
+            facts.append(f"- [{ev.event_type}] {redact_numbers(ev.payload)}")
         facts_text = "\n".join(facts) if facts else "- (нет)"
-
-        mem_text = self._render_memory(agent=agent, state=state, visible_events=visible_events)
 
         # Инструкция по действиям.
         max_actions = self.runtime.max_actions_per_turn
@@ -111,7 +102,9 @@ class AgentRunner:
             "- для свободных действий используй perform (description + target_id)\n"
         )
 
-    def _render_memory(self, *, agent: AgentState, state: WorldState, visible_events: list[Event]) -> str:
+    async def _render_memory(
+        self, *, agent: AgentState, state: WorldState, visible_events: list[Event]
+    ) -> str:
         mem: AgentMemory | None = agent.memory
         if mem is None:
             return "(пусто)"
@@ -130,9 +123,21 @@ class AgentRunner:
 
         # Hybrid retrieval: по последним наблюдениям как query.
         query_text = "\n".join(
-            f"{ev.event_type} {_redact_numbers(ev.payload)}" for ev in visible_events[-15:]
+            f"{ev.event_type} {redact_numbers(ev.payload)}" for ev in visible_events[-15:]
         )
-        retrieved = mem.retrieve(query_text=query_text, tick=state.tick, cfg=self.memory, embedder=self.embedder)
+        query_embedding: list[float] | None = None
+        if self.embedder is not None and query_text.strip():
+            try:
+                vecs = await asyncio.to_thread(self.embedder.embed_batch, [query_text])
+                query_embedding = list(vecs[0]) if vecs else []
+            except Exception:
+                query_embedding = None
+        retrieved = mem.retrieve(
+            query_text=query_text,
+            query_embedding=query_embedding,
+            tick=state.tick,
+            cfg=self.memory,
+        )
         if retrieved:
             lines = []
             for d in retrieved:
@@ -152,7 +157,13 @@ class AgentRunner:
         """Сгенерировать список действий агента на тик."""
         schema = actions_json_schema(max_actions=self.runtime.max_actions_per_turn)
         system = self._build_system(agent)
-        user = self._build_user(agent=agent, state=state, visible_events=visible_events)
+        mem_text = await self._render_memory(agent=agent, state=state, visible_events=visible_events)
+        user = self._build_user(
+            agent=agent,
+            state=state,
+            visible_events=visible_events,
+            mem_text=mem_text,
+        )
 
         resp = await self.llm.generate_structured(
             role="agent",

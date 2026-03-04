@@ -13,10 +13,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from magistry_sim.bm25 import BM25Like, build_bm25
-from magistry_sim.llm.embeddings import EmbeddingProvider
-
 from .config import MemoryConfig
+from .deps import BM25Like, build_bm25
 from .llm import LLMCaller
 
 
@@ -80,10 +78,10 @@ class AgentMemory:
     working: list[WorkingEntry] = field(default_factory=list)
     docs: list[MemoryDoc] = field(default_factory=list)
 
-    _doc_counter: int = 0
-    _bm25_corpus: list[list[str]] = field(default_factory=list)
-    _bm25: BM25Like | None = None
-    _bm25_dirty: bool = False
+    doc_counter: int = 0
+    bm25_corpus: list[list[str]] = field(default_factory=list)
+    bm25: BM25Like | None = None
+    bm25_dirty: bool = False
 
     def add_working(self, *, tick: int, text: str) -> None:
         text = _norm_text(text)
@@ -99,28 +97,23 @@ class AgentMemory:
         importance: float,
         text: str,
         cfg: MemoryConfig,
-        embedder: EmbeddingProvider | None,
+        embedding: list[float] | None = None,
         meta: dict[str, Any] | None = None,
     ) -> None:
         text = _norm_text(text)
         if not text:
             return
 
-        embedding: list[float] = []
-        if embedder is not None:
-            try:
-                embedding = list(embedder.embed(text))
-            except Exception:
-                embedding = []
+        emb = list(embedding or [])
 
         # Дедуп: если semantic-слишком похоже на уже существующую запись — не добавляем новую.
-        if embedding and self.docs:
+        if emb and self.docs:
             best_sim = 0.0
             best_idx: int | None = None
             for i, d in enumerate(self.docs):
                 if not d.embedding:
                     continue
-                sim = _cosine_similarity(embedding, d.embedding)
+                sim = _cosine_similarity(emb, d.embedding)
                 if sim > best_sim:
                     best_sim = sim
                     best_idx = i
@@ -132,8 +125,8 @@ class AgentMemory:
                     d.importance = importance
                 return
 
-        self._doc_counter += 1
-        doc_id = f"mem:{self.agent_id}:{self._doc_counter}"
+        self.doc_counter += 1
+        doc_id = f"mem:{self.agent_id}:{self.doc_counter}"
         doc = MemoryDoc(
             doc_id=doc_id,
             created_tick=tick,
@@ -141,12 +134,12 @@ class AgentMemory:
             kind=kind,
             importance=float(importance),
             text=text,
-            embedding=embedding,
+            embedding=emb,
             meta=dict(meta or {}),
         )
         self.docs.append(doc)
-        self._bm25_corpus.append(_tokenize(text))
-        self._bm25_dirty = True
+        self.bm25_corpus.append(_tokenize(text))
+        self.bm25_dirty = True
         self._enforce_caps(cfg)
 
     def _enforce_caps(self, cfg: MemoryConfig) -> None:
@@ -157,13 +150,13 @@ class AgentMemory:
                 key=lambda i: (self.docs[i].importance, self.docs[i].last_seen_tick),
             )
             self.docs.pop(idx)
-            self._bm25_corpus.pop(idx)
-            self._bm25_dirty = True
+            self.bm25_corpus.pop(idx)
+            self.bm25_dirty = True
 
     def _rebuild_bm25_if_dirty(self) -> None:
-        if self._bm25_dirty and self._bm25_corpus:
-            self._bm25 = build_bm25(self._bm25_corpus)
-            self._bm25_dirty = False
+        if self.bm25_dirty and self.bm25_corpus:
+            self.bm25 = build_bm25(self.bm25_corpus)
+            self.bm25_dirty = False
 
     async def maybe_summarize_working(
         self,
@@ -212,26 +205,21 @@ class AgentMemory:
         self,
         *,
         query_text: str,
+        query_embedding: list[float] | None,
         tick: int,
         cfg: MemoryConfig,
-        embedder: EmbeddingProvider | None,
     ) -> list[MemoryDoc]:
         """Достать top-k документов по гибридному скорингу."""
         if not self.docs:
             return []
 
         query_text = _norm_text(query_text)
-        q_emb: list[float] = []
-        if embedder is not None and query_text:
-            try:
-                q_emb = list(embedder.embed(query_text))
-            except Exception:
-                q_emb = []
+        q_emb = list(query_embedding or [])
 
         self._rebuild_bm25_if_dirty()
         bm25_raw = []
-        if self._bm25 is not None and query_text:
-            bm25_raw = list(self._bm25.get_scores(_tokenize(query_text)))
+        if self.bm25 is not None and query_text:
+            bm25_raw = list(self.bm25.get_scores(_tokenize(query_text)))
         else:
             bm25_raw = [0.0] * len(self.docs)
 
@@ -269,4 +257,3 @@ class AgentMemory:
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [d for _, d in scored[: cfg.retrieval_top_k]]
-

@@ -14,19 +14,21 @@ from .agent import AgentRunner, event_visible_to_agent
 from .arbiter import Arbiter, ActionResult
 from .config import ScenarioConfig
 from .dao import DaoEngine
+from .embeddings import embed_texts_cached
 from .entities import EntityRecord, EntityRegistry
 from .events import Event, EventLog
 from .id_alloc import IdAllocator
 from .ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE, make_id
+from .journal import WorldJournal
 from .llm import LLMCaller, create_llm_provider
 from .ops import CreateEntityOp, StateOp
 from .persona import chunk_text
 from .state import AgentState, WorkItem, WorldState
 from .tracing import TraceLog
-
-from magistry_sim.llm.protocols import LLMProvider
-from magistry_sim.llm.embeddings import EmbeddingProvider, create_embedding_provider
+from .utils import redact_numbers
 from .worldgen import WorldGenerator
+
+from .deps import EmbeddingProvider, LLMProvider, create_embedding_provider
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,7 @@ class WorldEngine:
         event_log = EventLog(self.artifacts.events_path)
 
         state = self._init_state(event_log=event_log)
+        journal = WorldJournal.from_state(state=state)
 
         # Memory: embeddings provider (по умолчанию mock — без ключей API).
         api_key = os.getenv(self.cfg.memory.embeddings_api_key_env) or None
@@ -75,6 +78,8 @@ class WorldEngine:
         except Exception as exc:
             logger.warning("Embeddings disabled (%s): %s", exc.__class__.__name__, exc)
             embedder = None
+
+        embed_cache: dict[str, list[float]] = {}
 
         dao = DaoEngine(cfg=self.cfg.governance)
         id_alloc = IdAllocator()
@@ -91,40 +96,51 @@ class WorldEngine:
         for aid, agent in state.agents.items():
             # Bootstrap persona into long-term memory index.
             if agent.memory is not None:
+                docs_to_add: list[tuple[str, float, str, dict]] = []
                 if agent.persona.summary.strip():
-                    agent.memory.add_doc(
-                        tick=state.tick,
-                        kind="persona",
-                        importance=9.0,
-                        text=agent.persona.summary,
-                        cfg=self.cfg.memory,
-                        embedder=embedder,
-                        meta={"source": "scenario", "part": "summary"},
+                    docs_to_add.append(
+                        ("persona", 9.0, agent.persona.summary, {"source": "scenario", "part": "summary"})
                     )
                 for i, chunk in enumerate(chunk_text(agent.persona.biography, max_chars=900)):
-                    agent.memory.add_doc(
-                        tick=state.tick,
-                        kind="persona",
-                        importance=8.0,
-                        text=chunk,
-                        cfg=self.cfg.memory,
-                        embedder=embedder,
-                        meta={"source": "scenario", "part": "biography", "chunk": i},
+                    docs_to_add.append(
+                        ("persona", 8.0, chunk, {"source": "scenario", "part": "biography", "chunk": i})
                     )
                 for i, qa in enumerate(agent.persona.interview):
                     q = (qa.question or "").strip()
                     a = (qa.answer or "").strip()
                     if not q or not a:
                         continue
-                    agent.memory.add_doc(
-                        tick=state.tick,
-                        kind="interview",
-                        importance=7.0,
-                        text=f"Q: {q}\nA: {a}",
-                        cfg=self.cfg.memory,
-                        embedder=embedder,
-                        meta={"source": "scenario", "part": "interview", "index": i},
+                    docs_to_add.append(
+                        (
+                            "interview",
+                            7.0,
+                            f"Q: {q}\nA: {a}",
+                            {"source": "scenario", "part": "interview", "index": i},
+                        )
                     )
+
+                if docs_to_add:
+                    texts = [t for _, _, t, _ in docs_to_add]
+                    embeddings = [[] for _ in texts]
+                    if embedder is not None:
+                        embeddings = await embed_texts_cached(
+                            embedder,
+                            texts,
+                            cache=embed_cache,
+                            batch_size=self.cfg.memory.embeddings_batch_size,
+                        )
+                    for (kind, importance, text, meta), emb in zip(
+                        docs_to_add, embeddings, strict=False
+                    ):
+                        agent.memory.add_doc(
+                            tick=state.tick,
+                            kind=kind,  # type: ignore[arg-type]
+                            importance=importance,
+                            text=text,
+                            cfg=self.cfg.memory,
+                            embedding=emb,
+                            meta=meta,
+                        )
             runners[aid] = AgentRunner(
                 llm=llm,
                 runtime=self.cfg.runtime,
@@ -159,6 +175,7 @@ class WorldEngine:
                         proposed=gs["proposed"],
                         event_log=event_log,
                         agent_order=agent_order,
+                        journal_yaml=journal.to_yaml(),
                     )
                     return {"tick_events": tick_events}
 
@@ -173,6 +190,7 @@ class WorldEngine:
 
         for tick in range(self.cfg.ticks):
             state.tick = tick
+            journal.set_tick(tick)
             logger.info("tick=%s", tick)
 
             agent_order = self._agent_order(state=state, tick=tick)
@@ -196,6 +214,7 @@ class WorldEngine:
                     proposed=proposed,
                     event_log=event_log,
                     agent_order=agent_order,
+                    journal_yaml=journal.to_yaml(),
                 )
 
             # DAO: закрытие голосований и применение position_change.
@@ -203,7 +222,13 @@ class WorldEngine:
             tick_events.extend(self._apply_ops(state=state, ops=dao_ops, event_log=event_log, origin="dao"))
 
             # Обновить память агентов (feedback loop).
-            await self._update_agent_memory(state=state, tick_events=tick_events, llm=llm, embedder=embedder)
+            await self._update_agent_memory(
+                state=state,
+                tick_events=tick_events,
+                llm=llm,
+                embedder=embedder,
+                embed_cache=embed_cache,
+            )
 
             # Внешние события мира (без утечки промптов).
             if self.cfg.runtime.enable_worldgen and (tick % self.cfg.runtime.worldgen_every_ticks == 0):
@@ -215,6 +240,8 @@ class WorldEngine:
                 if extra:
                     event_log.extend(extra)
                     tick_events.extend(extra)
+
+            journal.apply_events(state=state, events=tick_events)
 
             events_history.extend(tick_events)
             # Ограничиваем историю для памяти.
@@ -345,11 +372,9 @@ class WorldEngine:
         proposed: dict[str, list[Action]],
         event_log: EventLog,
         agent_order: list[str],
+        journal_yaml: str,
     ) -> list[Event]:
         tick_events: list[Event] = []
-
-        # YAML-журнал строим один раз на тик и переиспользуем во всех `perform`.
-        journal_yaml = state.journal_yaml()
 
         # Сначала — арбитраж (LLM только для perform), без изменения state.
         arbitration = await arbiter.arbitrate_tick(state=state, proposed=proposed, journal_yaml=journal_yaml)
@@ -419,16 +444,8 @@ class WorldEngine:
         tick_events: list[Event],
         llm: LLMCaller,
         embedder: EmbeddingProvider | None,
+        embed_cache: dict[str, list[float]],
     ) -> None:
-        def _redact_numbers(obj):
-            if isinstance(obj, dict):
-                return {k: _redact_numbers(v) for k, v in obj.items()}
-            if isinstance(obj, list):
-                return [_redact_numbers(v) for v in obj]
-            if isinstance(obj, (int, float)):
-                return "<num>"
-            return obj
-
         def _event_to_text(ev: Event, agent_id: str) -> str:
             if ev.event_type == "message_sent":
                 to_id = str(ev.payload.get("to_id") or "")
@@ -443,7 +460,7 @@ class WorldEngine:
             if ev.event_type == "arbiter_rejected":
                 return f"Арбитр отклонил действие: {ev.payload.get('reason','')}"
             if ev.event_type == "arbiter_op_failed":
-                return f"Операция провалилась: {_redact_numbers(ev.payload.get('error',{}))}"
+                return f"Операция провалилась: {redact_numbers(ev.payload.get('error',{}))}"
             if ev.event_type == "vote_opened":
                 return f"Открыто голосование {ev.payload.get('vote_id','')} за {ev.payload.get('target_agent_id','')} -> {ev.payload.get('new_title','')}"
             if ev.event_type == "vote_closed":
@@ -454,27 +471,23 @@ class WorldEngine:
                 return f"Внешнее событие: {ev.payload.get('description','')}"
 
             # Фолбэк: тип события + компактный payload (без чисел).
-            payload = _redact_numbers(ev.payload or {})
+            payload = redact_numbers(ev.payload or {})
             return f"{ev.event_type}: {payload}"
 
         def _importance_for_event(ev: Event) -> float:
-            if ev.event_type in ("arbiter_rejected", "arbiter_op_failed", "position_changed"):
-                return 8.0
-            if ev.event_type in ("vote_opened", "vote_closed"):
-                return 7.0
-            if ev.event_type == "message_sent":
-                return 6.0
-            if ev.event_type in ("work_item_created", "work_note_added", "work_proposal_submitted"):
-                return 5.0
-            if ev.event_type == "world_event":
-                return 5.0
-            return 3.0
+            return float(
+                self.cfg.memory.importance_by_event.get(
+                    ev.event_type, self.cfg.memory.importance_default
+                )
+            )
+
+        docs_to_embed: list[tuple[str, float, str, str, dict]] = []
 
         for aid, agent in state.agents.items():
+            if agent.memory is None:
+                continue
             visible = [ev for ev in tick_events if event_visible_to_agent(ev, aid, internal=agent.internal)]
             for ev in visible:
-                if agent.memory is None:
-                    continue
                 text = _event_to_text(ev, aid)
                 if not text:
                     continue
@@ -482,25 +495,53 @@ class WorldEngine:
 
                 importance = _importance_for_event(ev)
                 kind = "result" if ev.actor_id == aid else "observation"
-                if importance >= 5.0:
-                    agent.memory.add_doc(
-                        tick=state.tick,
-                        kind=kind,  # type: ignore[arg-type]
-                        importance=importance,
-                        text=text,
-                        cfg=self.cfg.memory,
-                        embedder=embedder,
-                        meta={"event_type": ev.event_type},
+                if importance >= self.cfg.memory.importance_threshold:
+                    docs_to_embed.append(
+                        (
+                            aid,
+                            importance,
+                            kind,
+                            text,
+                            {"event_type": ev.event_type},
+                        )
                     )
 
-            if agent.memory is not None:
-                await agent.memory.maybe_summarize_working(
-                    llm=llm,
-                    language=self.cfg.runtime.language,
-                    cfg=self.cfg.memory,
-                    tick=state.tick,
-                    temperature=self.cfg.llm.temperature,
+        if docs_to_embed:
+            texts = [t for _, _, _, t, _ in docs_to_embed]
+            embeddings = [[] for _ in texts]
+            if embedder is not None:
+                embeddings = await embed_texts_cached(
+                    embedder,
+                    texts,
+                    cache=embed_cache,
+                    batch_size=self.cfg.memory.embeddings_batch_size,
                 )
+            for (aid, importance, kind, text, meta), emb in zip(
+                docs_to_embed, embeddings, strict=False
+            ):
+                mem = state.agents[aid].memory
+                if mem is None:
+                    continue
+                mem.add_doc(
+                    tick=state.tick,
+                    kind=kind,  # type: ignore[arg-type]
+                    importance=importance,
+                    text=text,
+                    cfg=self.cfg.memory,
+                    embedding=emb,
+                    meta=meta,
+                )
+
+        for agent in state.agents.values():
+            if agent.memory is None:
+                continue
+            await agent.memory.maybe_summarize_working(
+                llm=llm,
+                language=self.cfg.runtime.language,
+                cfg=self.cfg.memory,
+                tick=state.tick,
+                temperature=self.cfg.llm.temperature,
+            )
 
 
 def default_artifacts(out_dir: str | Path) -> RunArtifacts:

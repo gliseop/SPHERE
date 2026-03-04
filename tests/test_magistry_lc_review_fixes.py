@@ -4,6 +4,8 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
+
 from magistry_sim.llm.providers import MockLLMProvider
 
 from magistry_lc.actions import (
@@ -13,13 +15,14 @@ from magistry_lc.actions import (
     SendMessageAction,
 )
 from magistry_lc.arbiter import Arbiter
-from magistry_lc.config import GovernanceConfig
+from magistry_lc.config import GovernanceConfig, MemoryConfig
 from magistry_lc.dao import DaoEngine
 from magistry_lc.entities import EntityRecord, EntityRegistry
 from magistry_lc.events import Event
 from magistry_lc.id_alloc import IdAllocator
 from magistry_lc.ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from magistry_lc.llm import LLMCaller
+from magistry_lc.memory import AgentMemory
 from magistry_lc.state import AgentState, WorldState
 from magistry_lc.tracing import TraceLog
 from magistry_lc.worldgen import WorldGenerator
@@ -138,3 +141,51 @@ def test_worldgen_does_not_receive_private_message_text(tmp_path: Path) -> None:
     assert INTERNAL_AUDIENCE not in user_payload  # worldgen input uses normalized json, not audience tokens
     assert PUBLIC_AUDIENCE not in user_payload
 
+
+def test_memory_summarizes_working_buffer(tmp_path: Path) -> None:
+    mem = AgentMemory(agent_id="agent:off_1")
+    cfg = MemoryConfig(working_max_entries=2, working_summarize_batch=2)
+
+    for t in range(4):
+        mem.add_working(tick=t, text=f"e{t}")
+
+    mock = MockLLMProvider(responses={"Обнови сводку рабочей памяти агента.": "- one\n- two\n"})
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    llm = LLMCaller(provider=mock, trace=trace)
+
+    asyncio.run(
+        mem.maybe_summarize_working(
+            llm=llm,
+            language="ru",
+            cfg=cfg,
+            tick=10,
+            temperature=0.0,
+        )
+    )
+
+    assert mem.summary == "- one - two"
+    assert len(mem.working) == 2
+
+
+def test_langgraph_world_graph_supports_checkpoint_path(tmp_path: Path) -> None:
+    pytest.importorskip("langgraph")
+
+    from magistry_lc.entities import EntityRegistry
+    from magistry_lc.graphs import build_world_graph
+
+    async def _gather(gs: dict) -> dict:
+        return {"proposed": {}}
+
+    async def _apply(gs: dict) -> dict:
+        return {"tick_events": []}
+
+    app = build_world_graph(
+        gather_actions_node=_gather,
+        apply_actions_node=_apply,
+        debug=False,
+        checkpoint_path=tmp_path / "langgraph.sqlite",
+    )
+
+    state = WorldState(tick=0, registry=EntityRegistry())
+    out = asyncio.run(app.ainvoke({"world": state, "events_history": []}))
+    assert isinstance(out, dict)

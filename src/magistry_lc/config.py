@@ -58,11 +58,29 @@ class MemoryConfig(BaseModel):
     recency_decay: float = 0.995
     weights: MemoryWeights = Field(default_factory=MemoryWeights)
 
+    importance_default: float = 3.0
+    importance_threshold: float = 5.0
+    importance_by_event: dict[str, float] = Field(
+        default_factory=lambda: {
+            "arbiter_rejected": 8.0,
+            "arbiter_op_failed": 8.0,
+            "position_changed": 8.0,
+            "vote_opened": 7.0,
+            "vote_closed": 7.0,
+            "message_sent": 6.0,
+            "work_item_created": 5.0,
+            "work_note_added": 5.0,
+            "work_proposal_submitted": 5.0,
+            "world_event": 5.0,
+        }
+    )
+
     # Embeddings provider config (по умолчанию: mock для воспроизводимости в тестах).
     embeddings_mock: bool = True
     embeddings_model: str | None = None
     embeddings_base_url: str | None = None
     embeddings_api_key_env: str = "OPENAI_API_KEY"
+    embeddings_batch_size: int = 64
 
     @field_validator("working_max_entries", "working_summarize_batch", "long_term_max_docs", "retrieval_top_k")
     @classmethod
@@ -71,12 +89,38 @@ class MemoryConfig(BaseModel):
             raise ValueError("value must be > 0")
         return v
 
+    @field_validator("embeddings_batch_size")
+    @classmethod
+    def _validate_embeddings_batch_size(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("embeddings_batch_size must be > 0")
+        return v
+
     @field_validator("dedup_cosine_threshold")
     @classmethod
     def _validate_cosine_threshold(cls, v: float) -> float:
         if not (0.0 < v <= 1.0):
             raise ValueError("dedup_cosine_threshold must be in (0, 1]")
         return v
+
+    @field_validator("importance_default", "importance_threshold")
+    @classmethod
+    def _validate_importance(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("importance must be >= 0")
+        return float(v)
+
+    @field_validator("importance_by_event")
+    @classmethod
+    def _validate_importance_by_event(cls, v: dict[str, float]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for key, value in (v or {}).items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError("importance_by_event keys must be non-empty strings")
+            if value < 0.0:
+                raise ValueError("importance_by_event values must be >= 0")
+            out[key] = float(value)
+        return out
 
     @field_validator("recency_decay")
     @classmethod

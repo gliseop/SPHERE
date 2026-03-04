@@ -13,10 +13,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from magistry_sim.llm.protocols import LLMProvider, LLMResponse, StructuredLLMResponse
-from magistry_sim.llm.providers import OpenAICompatibleProvider
-
 from .config import LLMConfig
+from .deps import LLMProvider, LLMResponse, OpenAICompatibleProvider, StructuredLLMResponse
 from .tracing import TraceLog, TraceSpan
 
 
@@ -101,4 +99,3 @@ class LLMCaller:
         finally:
             span.duration_ms = (time.monotonic() - started) * 1000.0
             self.trace.append(span)
-

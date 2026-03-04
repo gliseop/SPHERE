@@ -89,6 +89,10 @@ MAGISTRY/
 │   ├── events.py               # EventLog (JSONL) — "истина" мира
 │   ├── tracing.py              # TraceLog (JSONL) — prompts/responses отдельно
 │   ├── llm.py                  # LLMCaller (обёртка провайдера + trace)
+│   ├── deps.py                 # Явная интеграция с magistry_sim (BM25/LLM/embeddings)
+│   ├── embeddings.py           # Async batch embeddings + cache
+│   ├── journal.py              # Инкрементальный YAML-журнал мира для арбитра
+│   ├── utils.py                # Мелкие утилиты (например, redact_numbers)
 │   └── graphs.py               # LangGraph (tick graph + SqliteSaver checkpoints)
 ├── web/
 │   ├── backend/
