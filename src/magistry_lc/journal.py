@@ -328,13 +328,29 @@ class WorldJournal:
             }
 
         if t == "message_sent":
-            return {
+            private = bool(p.get("private", True))
+            text = str(p.get("text") or "")
+            entry = {
                 "tick": int(ev.tick),
                 "type": t,
                 "from_id": ev.actor_id,
                 "to_id": str(p.get("to_id") or ""),
-                "private": bool(p.get("private", True)),
-                "text": self._truncate(str(p.get("text") or ""), 240),
+                "private": private,
+            }
+            if private:
+                # Приватные сообщения не должны утекать в контекст арбитра.
+                entry["text"] = "<redacted>"
+                entry["text_len"] = len(text)
+            else:
+                entry["text"] = self._truncate(text, 240)
+            return entry
+
+        if t == "world_event":
+            return {
+                "tick": int(ev.tick),
+                "type": t,
+                "actor_id": ev.actor_id,
+                "description": self._truncate(str(p.get("description") or ""), 280),
             }
 
         if t in ("work_note_added", "work_proposal_submitted"):

@@ -238,3 +238,82 @@ def test_world_journal_tracks_history_and_caps() -> None:
             ],
         )
     assert len(journal.work_items) <= 3
+
+
+def test_world_journal_redacts_private_messages_and_tracks_world_events() -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    journal = WorldJournal.from_state(state=state, history_max_entries=10)
+
+    journal.apply_events(
+        state=state,
+        events=[
+            Event(
+                tick=0,
+                event_type="message_sent",
+                actor_id="agent:off_1",
+                payload={"to_id": "agent:off_2", "private": True, "text": "SECRET"},
+                audience=["agent:off_1", "agent:off_2"],
+            ),
+            Event(
+                tick=0,
+                event_type="world_event",
+                actor_id=None,
+                payload={"description": "Storm"},
+                audience=[INTERNAL_AUDIENCE],
+            ),
+        ],
+    )
+
+    yaml_text = journal.to_yaml()
+    assert "SECRET" not in yaml_text
+
+    d = journal.to_dict()
+    assert any(e.get("type") == "world_event" for e in d["history"])
+
+
+def test_composer_normalizes_or_falls_back_on_invalid_ids(tmp_path: Path) -> None:
+    from magistry_lc.composer import WorldComposer
+
+    mock = MockLLMProvider(
+        structured_responses={
+            "compose-bad-ids": {
+                "title": "t",
+                "description": "d",
+                "agents": [
+                    {"agent_id": "", "name": "A", "internal": True, "persona": "p"},
+                    {"agent_id": "off_1", "name": "B", "internal": True, "persona": "p"},
+                    {"agent_id": "agent:off_1", "name": "C", "internal": True, "persona": "p"},
+                ],
+                "world": {
+                    "channels": [{"channel_id": "public", "title": "public"}],
+                    "orgs": [{"org_id": "", "title": "o"}],
+                    "work_items": [
+                        {
+                            "work_id": "",
+                            "work_type": "task",
+                            "title": "w",
+                            "description": "",
+                            "participants": ["off_1", "agent:off_1", ""],
+                        }
+                    ],
+                },
+            }
+        }
+    )
+
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    llm = LLMCaller(provider=mock, trace=trace)
+    composer = WorldComposer(llm=llm, temperature=0.0, generate_personas=False)
+    cfg = asyncio.run(composer.compose(description="compose-bad-ids", ticks=1, seed=1, language="ru"))
+
+    agent_ids = [a.agent_id for a in cfg.agents]
+    assert len(agent_ids) == len(set(agent_ids))
+    assert all(aid.startswith("agent:") for aid in agent_ids)
+
+    assert all(ch.channel_id.startswith("chan:") for ch in cfg.world.channels)
+    assert all(o.org_id.startswith("org:") for o in cfg.world.orgs)
+    assert all(w.work_id.startswith("work:") for w in cfg.world.work_items)
+
+    known_agents = set(agent_ids)
+    for w in cfg.world.work_items:
+        assert all(pid in known_agents for pid in w.participants)

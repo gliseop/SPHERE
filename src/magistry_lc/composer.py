@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from .config import AgentConfig, ChannelConfig, OrgConfig, RuntimeConfig, ScenarioConfig, WorkItemConfig
-from .ids import EntityKind, ensure_kind, make_id
+from .ids import EntityKind, ParsedId, ensure_kind, make_id, parse_typed_id
 from .llm import LLMCaller
 from .persona import PersonaArtifact, PersonaGenerator
 
@@ -57,7 +57,7 @@ def _compose_schema() -> dict[str, Any]:
                     "type": "object",
                     "additionalProperties": False,
                     "properties": {
-                        "agent_id": {"type": "string"},
+                        "agent_id": {"type": "string", "minLength": 1},
                         "name": {"type": "string"},
                         "internal": {"type": "boolean"},
                         "persona": {"type": "string"},
@@ -77,7 +77,10 @@ def _compose_schema() -> dict[str, Any]:
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
-                            "properties": {"channel_id": {"type": "string"}, "title": {"type": "string"}},
+                            "properties": {
+                                "channel_id": {"type": "string", "minLength": 1},
+                                "title": {"type": "string"},
+                            },
                             "required": ["channel_id"],
                         },
                     },
@@ -86,7 +89,7 @@ def _compose_schema() -> dict[str, Any]:
                         "items": {
                             "type": "object",
                             "additionalProperties": False,
-                            "properties": {"org_id": {"type": "string"}, "title": {"type": "string"}},
+                            "properties": {"org_id": {"type": "string", "minLength": 1}, "title": {"type": "string"}},
                             "required": ["org_id"],
                         },
                     },
@@ -96,11 +99,14 @@ def _compose_schema() -> dict[str, Any]:
                             "type": "object",
                             "additionalProperties": False,
                             "properties": {
-                                "work_id": {"type": "string"},
+                                "work_id": {"type": "string", "minLength": 1},
                                 "work_type": {"type": "string"},
                                 "title": {"type": "string"},
                                 "description": {"type": "string"},
-                                "participants": {"type": "array", "items": {"type": "string"}},
+                                "participants": {
+                                    "type": "array",
+                                    "items": {"type": "string", "minLength": 1},
+                                },
                             },
                             "required": ["work_id", "work_type", "title"],
                         },
@@ -113,14 +119,49 @@ def _compose_schema() -> dict[str, Any]:
     }
 
 
-def _normalize_typed_id(raw_id: str, kind: EntityKind) -> str:
+def _try_normalize_typed_id(raw_id: str, kind: EntityKind) -> str | None:
     raw_id = (raw_id or "").strip()
     if not raw_id:
-        raise ValueError("id must be non-empty")
+        return None
     if ":" not in raw_id:
-        return make_id(kind, raw_id)
-    ensure_kind(raw_id, kind)
+        try:
+            return make_id(kind, raw_id)
+        except Exception:
+            return None
+    try:
+        ensure_kind(raw_id, kind)
+    except Exception:
+        return None
     return raw_id
+
+
+def _normalize_or_fallback(*, raw_id: str, kind: EntityKind, fallback: str) -> str:
+    normalized = _try_normalize_typed_id(raw_id, kind)
+    if normalized is not None:
+        return normalized
+    return make_id(kind, fallback)
+
+
+def _unique_id(entity_id: str, kind: EntityKind, used: set[str]) -> str:
+    """Убедиться, что typed ID уникален (добавляет суффикс при необходимости)."""
+    try:
+        ensure_kind(entity_id, kind)
+    except Exception:
+        entity_id = make_id(kind, "auto")
+
+    if entity_id not in used:
+        used.add(entity_id)
+        return entity_id
+
+    parsed: ParsedId = parse_typed_id(entity_id)
+    base = parsed.slug
+    n = 2
+    while True:
+        cand = make_id(kind, f"{base}_{n}")
+        if cand not in used:
+            used.add(cand)
+            return cand
+        n += 1
 
 
 @dataclass(slots=True)
@@ -173,13 +214,21 @@ class WorldComposer:
         )
         out = _ComposeOutput.model_validate(resp.data)
 
-        agents = []
-        for a in out.agents:
-            agents.append(
-                a.model_copy(
-                    update={"agent_id": _normalize_typed_id(a.agent_id, EntityKind.AGENT)}
-                )
+        agents: list[_ComposeAgent] = []
+        used_agents: set[str] = set()
+        agent_id_map: dict[str, str] = {}
+        for i, a in enumerate(out.agents):
+            raw = str(a.agent_id or "")
+            normalized = _normalize_or_fallback(
+                raw_id=raw, kind=EntityKind.AGENT, fallback=f"auto_{i+1}"
             )
+            final_id = _unique_id(normalized, EntityKind.AGENT, used_agents)
+            raw_str = raw.strip()
+            if raw_str and raw_str not in agent_id_map:
+                agent_id_map[raw_str] = final_id
+            if normalized not in agent_id_map:
+                agent_id_map[normalized] = final_id
+            agents.append(a.model_copy(update={"agent_id": final_id}))
 
         cfg = ScenarioConfig(
             title=out.title,
@@ -221,31 +270,56 @@ class WorldComposer:
                 )
             )
 
-        cfg.world.channels = [
-            ChannelConfig.model_validate(
-                {**x, "channel_id": _normalize_typed_id(str(x.get("channel_id") or ""), EntityKind.CHANNEL)}
+        used_channels: set[str] = set()
+        channels = []
+        for i, x in enumerate(out.world.channels):
+            raw_id = str(x.get("channel_id") or "")
+            normalized = _normalize_or_fallback(
+                raw_id=raw_id, kind=EntityKind.CHANNEL, fallback=f"auto_{i+1}"
             )
-            for x in out.world.channels
-        ]
-        cfg.world.orgs = [
-            OrgConfig.model_validate(
-                {**x, "org_id": _normalize_typed_id(str(x.get("org_id") or ""), EntityKind.ORG)}
+            final_id = _unique_id(normalized, EntityKind.CHANNEL, used_channels)
+            channels.append(ChannelConfig.model_validate({**x, "channel_id": final_id}))
+        cfg.world.channels = channels
+
+        used_orgs: set[str] = set()
+        orgs = []
+        for i, x in enumerate(out.world.orgs):
+            raw_id = str(x.get("org_id") or "")
+            normalized = _normalize_or_fallback(
+                raw_id=raw_id, kind=EntityKind.ORG, fallback=f"auto_{i+1}"
             )
-            for x in out.world.orgs
-        ]
+            final_id = _unique_id(normalized, EntityKind.ORG, used_orgs)
+            orgs.append(OrgConfig.model_validate({**x, "org_id": final_id}))
+        cfg.world.orgs = orgs
+
         cfg.world.work_items = []
+        used_work_items: set[str] = set()
         for x in out.world.work_items:
             participants_raw = x.get("participants") or []
-            participants = [
-                _normalize_typed_id(str(pid or ""), EntityKind.AGENT)
-                for pid in participants_raw
-                if str(pid or "").strip()
-            ]
+            participants: list[str] = []
+            for pid in participants_raw:
+                raw_pid = str(pid or "").strip()
+                if not raw_pid:
+                    continue
+                normalized_pid = _try_normalize_typed_id(raw_pid, EntityKind.AGENT)
+                if normalized_pid is None:
+                    continue
+                final_pid = agent_id_map.get(raw_pid) or agent_id_map.get(normalized_pid) or normalized_pid
+                if final_pid in used_agents and final_pid not in participants:
+                    participants.append(final_pid)
+
+            raw_work_id = str(x.get("work_id") or "")
+            normalized_work_id = _normalize_or_fallback(
+                raw_id=raw_work_id,
+                kind=EntityKind.WORK_ITEM,
+                fallback=f"auto_{len(cfg.world.work_items)+1}",
+            )
+            final_work_id = _unique_id(normalized_work_id, EntityKind.WORK_ITEM, used_work_items)
             cfg.world.work_items.append(
                 WorkItemConfig.model_validate(
                     {
                         **x,
-                        "work_id": _normalize_typed_id(str(x.get("work_id") or ""), EntityKind.WORK_ITEM),
+                        "work_id": final_work_id,
                         "participants": participants,
                     }
                 )
