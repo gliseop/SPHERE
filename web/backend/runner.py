@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import subprocess
-import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -141,116 +140,9 @@ def launch_simulation_from_config(
         parallel_window: Окно батчирования (симулированные секунды).
             None = определить из env.
     """
-    scenario_id = str(scenario_config.get("id", "S1") or "S1")
-    safe_variant = "".join(
-        ch if ch.isalnum() or ch in ("_", "-") else "-"
-        for ch in (variant or "custom")
+    raise RuntimeError(
+        "Запуск через web/backend/runner отключён: legacy launcher magistry_sim удалён."
     )
-    if runner_type == "mock":
-        raise RuntimeError("mock runner is not supported; use cognitive")
-    if runner_type in ("cognitive", "llm") and not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY is not set; LLM runner requires it")
-
-    run_name = f"{scenario_id}_{governance}_seed{seed}_{safe_variant}_d{int(rounds)}_{runner_type}"
-
-    with _active_lock:
-        running_count = 0
-        finished = []
-        for name, proc in _active.items():
-            if proc.poll() is None:
-                running_count += 1
-            else:
-                finished.append(name)
-        for name in finished:
-            del _active[name]
-
-        if running_count >= _MAX_RUNNING:
-            raise TooManyRunsError(
-                f"Превышен лимит одновременных прогонов ({running_count}/{_MAX_RUNNING})"
-            )
-
-        if run_name in _active:
-            proc = _active[run_name]
-            raise RuntimeError(f"Прогон {run_name} уже запущен (PID {proc.pid})")
-
-        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-
-        jsonl_path = _RESULTS_DIR / f"{run_name}_events.jsonl"
-        summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
-        stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
-        stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
-        scenario_path = _RESULTS_DIR / f"{run_name}_scenario.json"
-
-        start_iso, end_iso = _resolve_time_window(rounds)
-        scenario_config_with_time = dict(scenario_config)
-        scenario_config_with_time["start_time"] = start_iso
-        scenario_config_with_time["end_time"] = end_iso
-
-        try:
-            scenario_path.write_text(
-                json.dumps(scenario_config_with_time, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError:
-            _logger.exception("Failed to write scenario JSON for run %s", run_name)
-
-        _write_names_json_from_config(run_name, scenario_config_with_time, governance)
-
-        cmd = [
-            sys.executable,
-            "-m",
-            "magistry_sim.cli",
-            "--scenario-json",
-            str(scenario_path),
-            "--governance",
-            governance,
-            "--seed",
-            str(seed),
-            "--runner",
-            runner_type,
-            "--mode",
-            "async",
-            "--start-time",
-            start_iso,
-            "--end-time",
-            end_iso,
-            "--jsonl",
-            str(jsonl_path),
-            "--summary-json",
-            str(summary_path),
-        ]
-        if personalities_dir is not None:
-            cmd.extend(["--personalities-dir", str(personalities_dir)])
-        if interviews_dir is not None:
-            cmd.extend(["--interviews-dir", str(interviews_dir)])
-
-        # Параллелизация: явные параметры перекрывают env
-        if parallel_agents is not None:
-            if parallel_agents:
-                cmd.append("--parallel-agents")
-                if parallel_workers is not None and parallel_workers > 0:
-                    cmd.extend(["--parallel-workers", str(parallel_workers)])
-                if parallel_window is not None and parallel_window > 0:
-                    cmd.extend(["--parallel-window", str(parallel_window)])
-        else:
-            _maybe_add_parallel_flags(cmd)
-
-        with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(_PROJECT_ROOT),
-                stdout=stdout,
-                stderr=stderr,
-            )
-        _active[run_name] = proc
-
-    return {
-        "run_name": run_name,
-        "pid": proc.pid,
-        "stdout_log": stdout_path.name,
-        "stderr_log": stderr_path.name,
-        "scenario_json": scenario_path.name,
-    }
 
 
 def launch_simulation(
@@ -278,90 +170,9 @@ def launch_simulation(
     Raises:
         RuntimeError: Если прогон с таким именем уже запущен.
     """
-    if runner_type == "mock":
-        raise RuntimeError("mock runner is not supported; use cognitive")
-    if runner_type in ("cognitive", "llm") and not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY is not set; LLM runner requires it")
-
-    run_name = f"{scenario}_{governance}_seed{seed}_d{int(rounds)}_{runner_type}"
-
-    with _active_lock:
-        running_count = 0
-        finished = []
-        for name, proc in _active.items():
-            if proc.poll() is None:
-                running_count += 1
-            else:
-                finished.append(name)
-        for name in finished:
-            del _active[name]
-
-        if running_count >= _MAX_RUNNING:
-            raise TooManyRunsError(
-                f"Превышен лимит одновременных прогонов ({running_count}/{_MAX_RUNNING})"
-            )
-
-        # Проверить, не запущен ли уже
-        if run_name in _active:
-            proc = _active[run_name]
-            raise RuntimeError(f"Прогон {run_name} уже запущен (PID {proc.pid})")
-
-        _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-
-        jsonl_path = _RESULTS_DIR / f"{run_name}_events.jsonl"
-        summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
-        stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
-        stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
-
-        _write_names_json(run_name, scenario, governance)
-
-        start_iso, end_iso = _resolve_time_window(rounds)
-        cmd = [
-            sys.executable,
-            "-m",
-            "magistry_sim.cli",
-            "--scenario",
-            scenario,
-            "--governance",
-            governance,
-            "--seed",
-            str(seed),
-            "--runner",
-            runner_type,
-            "--mode",
-            "async",
-            "--start-time",
-            start_iso,
-            "--end-time",
-            end_iso,
-            "--jsonl",
-            str(jsonl_path),
-            "--summary-json",
-            str(summary_path),
-        ]
-        if personalities_dir is not None:
-            cmd.extend(["--personalities-dir", str(personalities_dir)])
-        if interviews_dir is not None:
-            cmd.extend(["--interviews-dir", str(interviews_dir)])
-        _maybe_add_parallel_flags(cmd)
-
-        # Важно: не использовать PIPE без чтения stdout/stderr — иначе процесс может
-        # зависнуть при заполнении буфера (особенно для verbose-runner-ов).
-        with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(_PROJECT_ROOT),
-                stdout=stdout,
-                stderr=stderr,
-            )
-        _active[run_name] = proc
-
-    return {
-        "run_name": run_name,
-        "pid": proc.pid,
-        "stdout_log": stdout_path.name,
-        "stderr_log": stderr_path.name,
-    }
+    raise RuntimeError(
+        "Запуск через web/backend/runner отключён: legacy launcher magistry_sim удалён."
+    )
 
 
 def _discover_external_runs() -> list[dict]:

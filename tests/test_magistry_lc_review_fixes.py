@@ -76,6 +76,38 @@ def test_arbiter_enforces_message_capability(tmp_path: Path) -> None:
     assert "missing_capability:message" in res[0].reason
 
 
+def test_arbiter_rejects_private_message_to_non_agent_target(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    act = SendMessageAction(
+        type=ActionType.SEND_MESSAGE,
+        to_id="chan:public",
+        text="hi",
+        private=True,
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert "private_message_requires_agent_target" in res[0].reason
+
+
+def test_arbiter_rejects_public_message_to_non_channel_target(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    act = SendMessageAction(
+        type=ActionType.SEND_MESSAGE,
+        to_id="agent:off_2",
+        text="hi",
+        private=False,
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert "public_message_requires_chan_or_org_target" in res[0].reason
+
+
 def test_arbiter_blocks_nomination_when_target_declines_promotion(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"], off_2_wants_promotion=False)
     arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())

@@ -147,3 +147,23 @@ class TestStopExternalRun:
     def test_stop_unknown_returns_none(self, results_dir: Path):
         """Остановка несуществующего прогона возвращает None."""
         assert runner.stop_simulation("ghost") is None
+
+
+class TestLaunchSimulationDisabled:
+    """Тесты для отключённых legacy-launch функций."""
+
+    def test_launch_simulation_from_config_disabled(self):
+        """launch_simulation_from_config возвращает явную ошибку миграции."""
+        with pytest.raises(RuntimeError, match="legacy launcher magistry_sim удалён"):
+            runner.launch_simulation_from_config(
+                scenario_config={"id": "S1", "agents": []},
+                governance="G1",
+            )
+
+    def test_launch_simulation_disabled(self):
+        """launch_simulation возвращает явную ошибку миграции."""
+        with pytest.raises(RuntimeError, match="legacy launcher magistry_sim удалён"):
+            runner.launch_simulation(
+                scenario="S1",
+                governance="G1",
+            )

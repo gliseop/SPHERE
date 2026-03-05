@@ -2,71 +2,14 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, HTTPException
 
 from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User
-from web.backend.settings import RESULTS_DIR, SCENARIOS_DIR
-from web.backend.validators import (
-    validate_run_name,
-    validate_scenario_id,
-)
+from web.backend.settings import RESULTS_DIR
+from web.backend.validators import validate_run_name
 
 router = APIRouter(tags=["run-control"])
-
-
-def _prepare_existing_personalities(
-    config_agents: list,
-    run_personalities_dir: Path,
-    run_interviews_dir: Path,
-) -> tuple[set[str], set[str]]:
-    """Копировать файлы личностей/интервью для агентов с назначенным архетипом.
-
-    Файлы копируются как {agent_id}.json, чтобы cognitive_runner нашёл их
-    по agent_id (через personality_archetype = agent_id).
-
-    Args:
-        config_agents: Список агентов из ScenarioConfig (AgentProfile или dict).
-        run_personalities_dir: Директория личностей для данного прогона.
-        run_interviews_dir: Директория интервью для данного прогона.
-
-    Returns:
-        Кортеж (need_generation, copied): множества agent_id для генерации
-        и скопированных агентов соответственно.
-    """
-    need_generation: set[str] = set()
-    copied: set[str] = set()
-    run_personalities_dir.mkdir(parents=True, exist_ok=True)
-    run_interviews_dir.mkdir(parents=True, exist_ok=True)
-
-    for agent in config_agents:
-        agent_id = agent.id if hasattr(agent, "id") else agent.get("id", "")
-        archetype = (
-            agent.personality_archetype
-            if hasattr(agent, "personality_archetype")
-            else agent.get("personality_archetype")
-        )
-        if not archetype or not agent_id:
-            need_generation.add(agent_id)
-            continue
-
-        pers_src = PERSONALITIES_DIR / f"{archetype}.json"
-        itv_src = INTERVIEWS_DIR / f"{archetype}.json"
-        if not pers_src.exists():
-            need_generation.add(agent_id)
-            continue
-
-        pers_dst = run_personalities_dir / f"{agent_id}.json"
-        itv_dst = run_interviews_dir / f"{agent_id}.json"
-        shutil.copy2(pers_src, pers_dst)
-        if itv_src.exists():
-            shutil.copy2(itv_src, itv_dst)
-        copied.add(agent_id)
-
-    return need_generation, copied
 
 
 @router.post("/api/scenarios/{scenario_id}/run", status_code=202)

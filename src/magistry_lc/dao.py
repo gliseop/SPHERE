@@ -25,7 +25,7 @@ class DaoEngine:
         """Нужно ли закрыть голосование на текущем тике."""
         return vote.status == "open" and tick >= vote.closes_tick
 
-    def close_votes(self, state: WorldState) -> list[object]:
+    def close_votes(self, state: WorldState) -> list[StateOp]:
         """Закрыть голосования, срок которых истёк.
 
         Returns:

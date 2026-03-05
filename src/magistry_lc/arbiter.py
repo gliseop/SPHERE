@@ -306,6 +306,9 @@ class Arbiter:
                 return ActionResult(action_index, False, missing, [])
             if not state.registry.exists(action.to_id):
                 return ActionResult(action_index, False, f"unknown to_id: {action.to_id}", [])
+            target_error = self._validate_message_target(to_id=action.to_id, private=bool(action.private))
+            if target_error:
+                return ActionResult(action_index, False, target_error, [])
             return ActionResult(
                 action_index,
                 True,
@@ -595,6 +598,16 @@ class Arbiter:
             return "audit"
         return None
 
+    @staticmethod
+    def _validate_message_target(*, to_id: str, private: bool) -> str | None:
+        """Проверить совместимость private-флага и типа цели сообщения."""
+        target_kind = parse_typed_id(to_id).kind
+        if private and target_kind != EntityKind.AGENT:
+            return f"private_message_requires_agent_target:{to_id}"
+        if not private and target_kind not in (EntityKind.CHANNEL, EntityKind.ORG):
+            return f"public_message_requires_chan_or_org_target:{to_id}"
+        return None
+
     def _op_from_llm(self, *, agent_id: str, state: WorldState, op_type: str, args: dict[str, Any]) -> list[StateOp]:
         """Сконвертировать LLM-op в реальные ops."""
         if op_type == "noop":
@@ -604,6 +617,12 @@ class Arbiter:
             to_id = str(args.get("to_id") or "")
             if not to_id or not state.registry.exists(to_id):
                 raise ValueError("unknown to_id")
+            target_error = self._validate_message_target(
+                to_id=to_id,
+                private=bool(args.get("private", True)),
+            )
+            if target_error:
+                raise ValueError(target_error)
             return [
                 SendMessageOp(
                     from_id=agent_id,
