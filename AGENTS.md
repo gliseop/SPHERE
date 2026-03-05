@@ -6,7 +6,7 @@ MAGISTRY — мета-двигатель для агентной симуляц�
 
 ### Теоретическая база
 
-[docs/chapter_1.md](docs/chapter_1.md) — первая глава ВКР, содержащая обзор литературы и обоснование подхода. Глава охватывает проблему принципала-агента в иерархических организациях (Йенсен, Меклинг), четыре категории подходов к снижению агентских издержек (институциональные, технологические, поведенческие, децентрализованные), эволюцию агентного моделирования от детерминированных правил к БЯМ-агентам, а также формулирует исследовательский пробел — отсутствие инструмента для экспериментальной оценки гибридных управленческих механизмов в среде с адаптивными агентами.
+[chapter_1.md](chapter_1.md) — первая глава ВКР, содержащая обзор литературы и обоснование подхода. Глава охватывает проблему принципала-агента в иерархических организациях (Йенсен, Меклинг), четыре категории подходов к снижению агентских издержек (институциональные, технологические, поведенческие, децентрализованные), эволюцию агентного моделирования от детерминированных правил к БЯМ-агентам, а также формулирует исследовательский пробел — отсутствие инструмента для экспериментальной оценки гибридных управленческих механизмов в среде с адаптивными агентами. Раздел 1.6 описывает архитектуру предлагаемой гибридной системы (ИИ-аудитор, репутационный механизм, коллегиальное рассмотрение), включая границы применимости и обоснование проектных решений.
 
 [docs/2411.10109v1.pdf](docs/2411.10109v1.pdf) — Park J.S. et al. «Generative Agent Simulations of 1,000 People» (2024). Ключевая статья, определяющая архитектуру когнитивного агента в MAGISTRY. Авторы показали, что генеративные агенты на основе двухчасовых интервью достигают нормализованной точности 0,85 в воспроизведении индивидуального поведения (GSS). Из статьи заимствованы: приоритет текстового описания над числовыми параметрами, механизм экспертной рефлексии, система нарративных интервью с гибридным поиском по фрагментам (fragment-based retrieval).
 
@@ -20,53 +20,7 @@ MAGISTRY — мета-двигатель для агентной симуляц�
 
 ```
 MAGISTRY/
-├── src/magistry_sim/           # Движок симуляции (Python 3.12+)
-│   ├── config.py               # ScenarioConfig, AgentProfile, Capability, ResourcePool
-│   ├── enums.py                # GovernanceMode (G0–G3), ScenarioId (S0–S6)
-│   ├── scenarios.py            # Реализованные сценарии S0–S2
-│   ├── environment.py          # Синхронная среда (раундовая)
-│   ├── async_environment.py    # Асинхронная среда (непрерывное время)
-│   ├── state.py                # WorldState — глобальное состояние мира
-│   ├── state_ops.py            # StateOp — атомарные операции над состоянием
-│   ├── cases.py                # Case, Proposal, Note, Vote (свободная модель)
-│   ├── agents.py               # AgentRunner, MockAgentRunner, LLMAgentRunner
-│   ├── cognitive_runner.py     # CognitiveAgentRunner — когнитивный цикл Park et al.
-│   ├── memory.py               # MemoryStream — поток памяти с гибридным поиском
-│   ├── reflection.py           # Рефлексия — обобщения высшего уровня
-│   ├── planning.py             # Стратегическое и тактическое планирование
-│   ├── bm25.py                 # Собственная реализация BM25
-│   ├── personality.py          # HEXACO, DarkTriad, NeutralizationTechnique
-│   ├── interviews.py           # 30 вопросов, 8 доменов, InterviewFragmentIndex
-│   ├── persona_generator.py    # Параллельная генерация персон через LLM
-│   ├── biography.py            # Генерация биографий агентов
-│   ├── context.py              # build_situation — ситуационные сводки
-│   ├── tools/
-│   │   ├── actions.py          # open_case, submit_proposal, resolve_case,
-│   │   │                       # add_note, file_report, cast_vote, move_to
-│   │   └── communication.py    # talk_to, talk_to_threaded
-│   ├── arbiter.py              # LLM-арбитр свободных действий
-│   ├── document_forge.py       # Генерация документов ГОСТ-формата
-│   ├── conversation.py         # ConversationManager, Thread, ChannelType
-│   ├── world_rules.py          # Правила мира для арбитра
-│   ├── sim_clock.py            # SimClock, WorkSchedule
-│   ├── scheduler.py            # Scheduler — приоритетная очередь пробуждений
-│   ├── locations.py            # Location, LocationManager
-│   ├── narrator.py             # WorldNarrator — нарративные описания
-│   ├── world_generator.py      # WorldGenerator — генерация начального мира
-│   ├── event_generator.py      # Генерация внешних событий
-│   ├── llm.py                  # LLMProvider, create_provider, кеш
-│   ├── tracing.py              # LLMTracer — журнал промптов
-│   ├── graph.py                # Социальный граф (NetworkX)
-│   ├── resources.py            # Ресурсы агентов, лимиты
-│   ├── events.py               # EventLog (JSONL)
-│   ├── metrics.py              # Матрица ошибок, сводные метрики
-│   ├── statistics.py           # Статистический анализ батчей
-│   ├── oracle.py               # Оракул — определение нарушений
-│   ├── reputation.py           # Социальный капитал, заморозка
-│   ├── batch.py                # BatchRunner — пакетные прогоны
-│   ├── validation.py           # Валидация конфигураций
-│   └── cli.py                  # Интерфейс командной строки
-├── src/magistry_lc/            # Greenfield-движок (LangChain/LangGraph)
+├── src/magistry_lc/            # Движок симуляции (LangChain/LangGraph)
 │   ├── __init__.py             # Пакет
 │   ├── cli.py                  # CLI `magistry-lc`
 │   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory
@@ -88,19 +42,29 @@ MAGISTRY/
 │   ├── oracle.py               # ViolationOracle (чанкинг по events.jsonl)
 │   ├── events.py               # EventLog (JSONL) — "истина" мира
 │   ├── tracing.py              # TraceLog (JSONL) — prompts/responses отдельно
-│   ├── llm.py                  # LLMCaller (обёртка провайдера + trace)
-│   ├── deps.py                 # Явная интеграция с magistry_sim (BM25/LLM/embeddings)
+│   ├── llm/                    # LLM-провайдеры и утилиты (пакет)
+│   │   ├── __init__.py         # Реэкспорт: LLMProvider, EmbeddingProvider, create_provider и др.
+│   │   ├── protocols.py        # Протоколы LLMProvider, LLMResponse, StructuredLLMResponse
+│   │   ├── providers.py        # OpenAICompatibleProvider, MockLLMProvider
+│   │   ├── embeddings.py       # EmbeddingProvider, OpenAIEmbeddingProvider, MockEmbeddingProvider
+│   │   ├── cache.py            # LLMCache
+│   │   ├── caller.py           # LLMCaller (обёртка провайдера + trace)
+│   │   ├── _utils.py           # LLMCallError и вспомогательные функции
+│   │   └── _debug_logger.py    # Отладочное логирование LLM-вызовов
+│   ├── bm25.py                 # Собственная реализация BM25 (гибридный поиск)
 │   ├── embeddings.py           # Async batch embeddings + cache
 │   ├── journal.py              # Инкрементальный YAML-журнал мира для арбитра
 │   ├── utils.py                # Мелкие утилиты (например, redact_numbers)
 │   └── graphs.py               # LangGraph (tick graph + SqliteSaver checkpoints)
 ├── web/
 │   ├── backend/
-│   │   ├── main.py             # FastAPI-сервер (REST + WebSocket, ~2500 строк)
+│   │   ├── main.py             # FastAPI-сервер (точка входа, WebSocket)
+│   │   ├── routes/             # REST-эндпоинты (auth, runs, scenarios, ai и др.)
 │   │   ├── auth.py             # JWT-аутентификация, роли
 │   │   ├── database.py         # SQLite через aiosqlite
 │   │   ├── runner.py           # Фоновый запуск симуляций
 │   │   ├── graph_state.py      # Построение графа для визуализации
+│   │   ├── constants.py        # Enum-значения (GovernanceMode, ScenarioId)
 │   │   └── manage_users.py     # CLI управления пользователями
 │   └── frontend/
 │       └── src/
@@ -108,7 +72,7 @@ MAGISTRY/
 │           ├── components/     # SimGraph, EventFeed, AgentPanel и др.
 │           ├── hooks/          # useAuth, useSimulation
 │           └── utils/          # apiClient, payload, time
-├── tests/                      # 55+ тестовых файлов
+├── tests/                      # Тесты (8 файлов: движок, эмбеддинги, веб)
 ├── data/
 │   ├── agent_types/            # Шаблоны типов агентов (JSON)
 │   ├── personalities/          # Архетипы личности (JSON)
@@ -126,24 +90,23 @@ MAGISTRY/
 
 При работе с кодом необходимо соблюдать следующие принципы:
 
-1. **Движок не знает предметной области.** Ядро оперирует абстракциями (дело, предложение, полномочие, ресурс). Никаких `if case_type == "procurement"` в движке. Специфика — в конфигурации сценариев.
+1. **Движок не знает предметной области.** Ядро оперирует абстракциями (действие, полномочие, сущность). Специфика — в конфигурации сценариев (YAML).
 
-2. **Полномочия вместо ролей.** Агент определяется набором полномочий (`Capability`), а не жёсткой ролью. Один агент может открывать дела, подавать предложения и голосовать одновременно.
+2. **Полномочия вместо ролей.** Агент определяется набором полномочий (`message`, `work`, `dao`, `audit`), а не жёсткой ролью. Арбитр проверяет полномочия при каждом действии.
 
-3. **Агенты максимально свободны.** Агент — автономная сущность, которая живёт в мире: наблюдает, запоминает, планирует и действует исходя из собственных целей и личности. Агент не ограничен фиксированным набором действий — он может предпринять любое действие в рамках физики мира (полномочия, ресурсы, локации, расписание, социальный граф). Встроенные инструменты (`open_case`, `talk_to` и т.д.) — быстрый путь для типовых операций; произвольные действия оцениваются LLM-арбитром. Среда обеспечивает физику, но не диктует поведение.
+3. **Агенты максимально свободны.** Агент — автономная сущность с собственными целями и личностью. Структурированные действия (`send_message`, `add_work_note`, `submit_proposal`) — типовой путь; произвольные действия оцениваются LLM-арбитром. Среда обеспечивает физику, но не диктует поведение.
 
-4. **Числовые параметры скрыты от LLM.** Значения `greed`, `fear`, `honesty`, HEXACO, Dark Triad переводятся в текстовые описания. LLM видит только текст, а не числа.
+4. **Текстовые описания вместо числовых параметров.** Личность агента задаётся биографией и текстовой характеристикой, а не числовыми шкалами (обосновано в [chapter_1.md](chapter_1.md), раздел 1.4, по результатам Park et al. [28]).
 
-5. **Когнитивный цикл по Park et al.** Наблюдение → память → рефлексия → планирование → действие. Не упрощать этот цикл.
+5. **Антифантомная защита.** `EntityRegistry` блокирует действия, адресованные несуществующим сущностям. Все ID типизированы (`agent:`, `chan:`, `org:`, `work:`).
 
-6. **Две среды исполнения.** `Environment` (синхронная, раундовая) для простых сценариев; `AsyncEnvironment` (асинхронная, непрерывное время) для реалистичных. Обе должны поддерживаться.
-
-7. **Свободная модель дел.** `case_type` и `stage` — произвольные строки. Никаких `CASE_REGISTRY` или `CaseSchema`.
+6. **Детерминированный apply.** Агенты ходят параллельно, но результаты применяются к состоянию мира последовательно и детерминированно.
 
 ## Стек и зависимости
 
-- Python 3.12+, Pydantic 2.0+, NetworkX 3.0+, OpenAI 1.0+, Rich 13.7+
-- Дополнительно: rank-bm25 0.2.2+ (для гибридного поиска)
+- Python 3.12+, Pydantic 2.0+, OpenAI 1.0+, Rich 13.7+
+- LangChain/LangGraph: langgraph 0.2+, langchain-core 0.2+, PyYAML 6.0+
+- Дополнительно: rank-bm25 0.2.2+ (гибридный поиск в памяти)
 - Веб: FastAPI 0.115+, aiosqlite, PyJWT; React 19, D3.js 7, Vite
 - Тесты: pytest 9.0+, pytest-asyncio 0.23+
 
@@ -152,15 +115,10 @@ MAGISTRY/
 ```bash
 # Тесты
 pytest                                    # все тесты
-pytest tests/test_environment.py          # конкретный модуль
-pytest -k "test_cognitive"                # по паттерну
+pytest tests/test_magistry_lc_smoke.py    # конкретный модуль
+pytest -k "test_arbiter"                  # по паттерну
 
-# CLI-симуляция
-magistry-sim --scenario S0                # синхронный режим
-magistry-sim --scenario S1 --mode async   # асинхронный режим
-magistry-sim --list-scenarios             # список сценариев
-
-# MAGISTRY-LC (greenfield)
+# MAGISTRY-LC
 pip install -e ".[lc]"
 magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
 magistry-lc compose --description "Короткое описание" --out scenarios/lc_composed.yaml
@@ -168,9 +126,6 @@ magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc
 
 # Веб-интерфейс
 cd web && bash start.sh                   # сервер + фронтенд
-
-# Пакетный запуск
-magistry-sim --scenario S0 --batch --batch-runs 10 --batch-modes G0,G2,G3
 ```
 
 ## Соглашения по коду
@@ -198,8 +153,8 @@ magistry-sim --scenario S0 --batch --batch-runs 10 --batch-modes G0,G2,G3
 
 | Что изменилось | Какой документ обновить | Приоритет |
 |---|---|---|
-| Добавлен/удалён/переименован файл в `src/magistry_sim/` | `AGENTS.md` (дерево файлов, строки 19–93) | Обязательный |
-| Новый модуль в `src/magistry_sim/` | `ARCHITECTURE.md` (раздел 17), `AGENTS.md` (дерево), `docs/architecture_guide.md` | Обязательный |
+| Добавлен/удалён/переименован файл в `src/magistry_lc/` | `AGENTS.md` (дерево файлов) | Обязательный |
+| Новый модуль в `src/magistry_lc/` | `AGENTS.md` (дерево) | Обязательный |
 | Устранён технический долг из таблицы | `AGENTS.md` (раздел «Техническое состояние») — удалить или обновить строку | Обязательный |
 | Появился новый технический долг | `AGENTS.md` (раздел «Техническое состояние») — добавить строку | Обязательный |
 | Новый инструмент агента | `ARCHITECTURE.md` (раздел 6), `docs/simulation_engine.md` | Обязательный |
@@ -216,53 +171,28 @@ magistry-sim --scenario S0 --batch --batch-runs 10 --batch-modes G0,G2,G3
 
 | Задача | Ключевые файлы |
 |---|---|
-| Добавить новый тип дела | `scenarios.py`, `config.py` (Need, Capability) |
-| Добавить инструмент агента | `tools/actions.py`, `environment.py` (TOOL_DISPATCH), `context.py` |
-| Изменить когнитивный цикл | `cognitive_runner.py`, `memory.py`, `reflection.py`, `planning.py` |
-| Добавить тип личности | `personality.py`, `interviews.py`, `persona_generator.py` |
-| Добавить режим управления | `enums.py`, `scenarios.py` (add_governance_agents), `environment.py` |
-| Добавить сценарий | `scenarios.py`, `enums.py` (ScenarioId) |
-| Добавить REST-эндпоинт | `web/backend/main.py` |
+| Добавить сценарий | `scenarios/` (YAML), `config.py` |
+| Изменить арбитра | `arbiter.py`, `journal.py`, `ops.py` |
+| Изменить агентский цикл | `agent.py`, `memory.py`, `actions.py` |
+| Добавить LLM-провайдера | `llm/providers.py`, `llm/__init__.py` |
+| Изменить генерацию мира | `worldgen.py`, `composer.py` |
+| Добавить REST-эндпоинт | `web/backend/routes/` |
 | Добавить WebSocket-событие | `web/backend/main.py`, `events.py` |
 | Добавить React-компонент | `web/frontend/src/components/` |
-| Изменить ситуационную сводку | `context.py` (build_situation) |
-| Добавить метрику | `metrics.py`, `oracle.py` |
-| Изменить арбитра | `arbiter.py`, `world_rules.py`, `state_ops.py` |
-| Добавить тип документа | `document_forge.py` (DocType, _GOST_INSTRUCTIONS) |
-| Добавить локацию | `locations.py`, конфигурация сценария |
-| Изменить генерацию мира | `world_generator.py`, `narrator.py`, `event_generator.py` |
+| Изменить оракула | `oracle.py` |
+| Изменить DAO-голосование | `dao.py`, `ops.py` |
 
 ## Известные особенности
 
-- **Крупный `main.py`**: `web/backend/main.py` (~2500 строк) содержит все REST-эндпоинты, WebSocket-обработчики и middleware в одном файле. При рефакторинге учитывать, что множество компонентов зависят от общего состояния приложения.
-- **Два `conftest.py`**: корневой `tests/conftest.py` содержит основные фикстуры; отдельных конфигураций для подкаталогов нет.
-- **Асинхронный режим**: `AsyncEnvironment` использует `asyncio.run()` из CLI, но в веб-интерфейсе запускается через фоновый поток (`runner.py`).
-- **Зависимость от OpenAI**: для запуска когнитивного агента требуется `OPENAI_API_KEY`. Тесты используют `MockLLMProvider` и не требуют ключа.
-- **Эмбеддинги**: генерируются через OpenAI-совместимый API (требуется `OPENAI_API_KEY`). Тесты используют `MockEmbeddingProvider`.
+- **Зависимость от OpenAI-совместимого API**: для запуска симуляции требуется `OPENAI_API_KEY` (или совместимый эндпоинт, например OpenRouter). Тесты используют `MockLLMProvider` и не требуют ключа.
+- **Эмбеддинги**: поддерживаются mock-режим и реальные провайдеры через OpenAI-совместимый API. Тесты используют `MockEmbeddingProvider`.
+- **Веб-интерфейс**: ряд эндпоинтов, зависевших от удалённого `magistry_sim`, возвращают HTTP 501 (заглушки).
 
 ## Техническое состояние кодовой базы
 
-Этот раздел фиксирует устаревшие компоненты и направления рефакторинга. При работе с перечисленными модулями следует учитывать их статус.
+### Завершённые миграции
 
-### Устаревшие компоненты
-
-| Компонент | Описание | Статус |
-|-----------|---------|--------|
-| `CrewAIAgentRunner`, `_build_crewai_tools` (`agents.py`) | Runner на CrewAI и обвязка. Заменён `CognitiveAgentRunner` | Удалён |
-| `--runner crewai` (`cli.py`, `runner.py`) | Путь запуска CrewAI runner | Удалён |
-| `scenarios_v4.py`, `test_scenarios_v4.py` | Шаблоны сценариев, не интегрированные в основной `scenarios.py` | Удалён |
-| `TOOL_DISPATCH` (`environment.py`) | Фиксированный набор из 8 инструментов. Целевая модель — произвольные действия через Arbiter + `perform_action`. В `AsyncEnvironment` переход уже начался: `talk_to_threaded` и `create_document` обрабатываются вне `TOOL_DISPATCH` | Переходный период |
-| `talk_to` (`tools/communication.py`) | Синхронная однорепликовая версия. В async-режиме заменена на `talk_to_threaded` (многорепликовые диалоги через `ConversationManager`) | Частично устаревший |
-
-### Требует рефакторинга
-
-| Компонент | Проблема | Рекомендация |
-|-----------|----------|-------------|
-| `web/backend/main.py` (~2575 строк) | Монолит: 65 эндпоинтов, Pydantic-модели, валидация, WebSocket, конфигурация | Разделить на `routes/`, `models.py`, `websocket.py`, `validators.py` |
-| `agents.py` (~820 строк) | Три runner'а в одном файле (`MockAgentRunner`, `LLMAgentRunner`, протокол `AgentRunner`) | Вынести каждый runner в отдельный модуль |
-| `agents.py` + `cognitive_runner.py` | Дублирование JSON-парсинга (`_parse_json_actions`, `_extract_json_array`, `_extract_json_object`) | Общий модуль `json_parser.py` |
-| `environment.py` + `async_environment.py` (~1945 строк) | ~50% дублирования логики (`_init_state`, `_generate_needs`, `_deliver_observations`) | Базовый класс `BaseEnvironment` |
-| `llm.py` (~1212 строк) | 13 провайдеров, кеширование, логирование — всё вместе | Разделить на `llm_providers.py`, `embedding_providers.py`, `llm_cache.py` |
-| Система инструментов | Два параллельных пути обработки (TOOL_DISPATCH и Arbiter) плюс специальные обработчики в AsyncEnvironment | Унификация через Arbiter как единый путь; встроенные инструменты — оптимизация |
-
-Подробности — в [ARCHITECTURE.md](ARCHITECTURE.md), раздел 26.
+| Миграция | Описание |
+|----------|---------|
+| Удаление `magistry_sim` | Старый движок удалён целиком. Все нужные модули (`bm25.py`, `llm/`) перенесены в `magistry_lc`. Зависимость через `deps.py` устранена. |
+| Веб-эндпоинты `magistry_sim` | Эндпоинты, зависевшие от старого движка, заглушены (HTTP 501) или переведены на `magistry_lc.llm`. |
