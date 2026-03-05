@@ -81,7 +81,7 @@ def next_s_number() -> str:
     Returns:
         Строка вида ``S7``, ``S8`` и т.д.
     """
-    from magistry_sim.enums import ScenarioId
+    from web.backend.constants import ScenarioId
 
     max_num = -1
     for member in ScenarioId:
@@ -106,7 +106,7 @@ def next_g_number() -> str:
     Returns:
         Строка вида ``G4``, ``G5`` и т.д.
     """
-    from magistry_sim.enums import GovernanceMode
+    from web.backend.constants import GovernanceMode
 
     max_num = -1
     for member in GovernanceMode:

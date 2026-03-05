@@ -152,7 +152,7 @@ class OpenAICompatibleProvider:
         base_url: str | None = None,
         cache_path: str | None = None,
         provider_order: list[str] | None = None,
-        use_tool_calls: bool = False,
+        use_tool_calls: bool = True,
     ) -> None:
         try:
             from openai import OpenAI
@@ -601,7 +601,7 @@ def create_provider(
     base_url: str | None = None,
     cache_path: str | None = None,
     provider_order: list[str] | None = None,
-    use_tool_calls: bool = False,
+    use_tool_calls: bool = True,
 ) -> LLMProvider:
     """Фабрика LLM-провайдеров.
 

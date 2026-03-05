@@ -7,11 +7,11 @@ ticks: 3
 llm:
   # По умолчанию используется OPENAI_API_KEY и provider_order=["Groq"].
   # base_url можно указать для OpenRouter/OpenAI-compatible.
-  model: "gpt-4o-mini"
+  model: "openai/gpt-oss-120b"
   base_url: null
   provider_order: ["Groq"]
-  temperature: 0.0
-  use_tool_calls: false
+  temperature: 0.1
+  use_tool_calls: true
   trace_max_chars: 0
 
 runtime:

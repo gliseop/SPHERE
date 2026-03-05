@@ -27,26 +27,17 @@ async def list_governance_modes(_user: User = Depends(require_viewer)) -> list[d
     Returns:
         Список словарей с полями id, label, description.
     """
-    from magistry_sim.enums import GovernanceMode
-
-    labels = {
-        "G0": "Без контроля",
-        "G1": "Аудитор (рекомендательный)",
-        "G2": "Аудитор (санкции по репутации)",
-        "G3": "Полный контроль (трибунал)",
-    }
-    descriptions = {
-        "G0": "Нет надзора со стороны аудитора или трибунала.",
-        "G1": "Аудитор может наблюдать и давать рекомендации.",
-        "G2": "Аудитор может рекомендовать заморозку репутации участников.",
-        "G3": "Аудитор может инициировать трибунал; решение принимает коллегия присяжных.",
-    }
+    from web.backend.constants import (
+        GOVERNANCE_DESCRIPTIONS,
+        GOVERNANCE_LABELS,
+        GovernanceMode,
+    )
 
     result: list[dict] = [
         {
             "id": mode.value,
-            "label": f"{mode.value} — {labels.get(mode.value, mode.value)}",
-            "description": descriptions.get(mode.value, ""),
+            "label": f"{mode.value} — {GOVERNANCE_LABELS.get(mode.value, mode.value)}",
+            "description": GOVERNANCE_DESCRIPTIONS.get(mode.value, ""),
         }
         for mode in GovernanceMode
     ]

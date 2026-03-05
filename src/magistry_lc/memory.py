@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from .config import MemoryConfig
-from .deps import BM25Like, build_bm25
+from .bm25 import BM25Like, build_bm25
 from .llm import LLMCaller
 
 

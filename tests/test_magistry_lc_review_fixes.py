@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from magistry_sim.llm.providers import MockLLMProvider
+from magistry_lc.llm import MockLLMProvider
 
 from magistry_lc.actions import (
     ActionType,

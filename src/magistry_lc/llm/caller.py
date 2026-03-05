@@ -1,8 +1,8 @@
 """LLM-обвязка для MAGISTRY-LC.
 
-Здесь сознательно переиспользуется `OpenAICompatibleProvider` из `magistry_sim.llm`:
+Использует ``OpenAICompatibleProvider`` из пакета ``magistry_lc.llm``:
 - поддержка OpenAI-compatible API (включая OpenRouter);
-- `provider_order` (например, Groq по умолчанию);
+- ``provider_order`` (например, Groq по умолчанию);
 - кеш/логирование/ретраи.
 """
 
@@ -13,9 +13,10 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .config import LLMConfig
-from .deps import LLMProvider, LLMResponse, OpenAICompatibleProvider, StructuredLLMResponse
-from .tracing import TraceLog, TraceSpan
+from ..config import LLMConfig
+from .protocols import LLMProvider, LLMResponse, StructuredLLMResponse
+from .providers import OpenAICompatibleProvider
+from ..tracing import TraceLog, TraceSpan
 
 
 def create_llm_provider(cfg: LLMConfig) -> LLMProvider:

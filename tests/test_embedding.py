@@ -1,6 +1,6 @@
 """Тесты провайдера эмбеддингов."""
 
-from magistry_sim.llm import (
+from magistry_lc.llm import (
     EmbeddingProvider,
     MockEmbeddingProvider,
     OpenAIEmbeddingProvider,

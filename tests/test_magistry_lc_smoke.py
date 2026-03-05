@@ -4,7 +4,7 @@ from pathlib import Path
 
 import asyncio
 
-from magistry_sim.llm.providers import MockLLMProvider
+from magistry_lc.llm import MockLLMProvider
 
 from magistry_lc.config import ScenarioConfig
 from magistry_lc.engine import RunArtifacts, WorldEngine

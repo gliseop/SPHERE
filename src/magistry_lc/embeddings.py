@@ -1,6 +1,6 @@
 """Асинхронные хелперы для эмбеддингов (batch + cache).
 
-`EmbeddingProvider` в `magistry_sim` синхронный и может делать HTTP-запросы.
+`EmbeddingProvider` синхронный и может делать HTTP-запросы.
 В MAGISTRY-LC все вызовы эмбеддингов выполняются через `asyncio.to_thread`,
 а также по возможности батчатся и кешируются по тексту.
 """
@@ -12,7 +12,7 @@ import logging
 from collections.abc import Iterable
 from typing import TypeVar
 
-from .deps import EmbeddingProvider
+from .llm import EmbeddingProvider
 
 
 T = TypeVar("T")

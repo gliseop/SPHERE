@@ -18,7 +18,7 @@ from .llm import LLMCaller
 from .memory import AgentMemory
 from .state import AgentState, WorldState
 
-from .deps import EmbeddingProvider
+from .llm import EmbeddingProvider
 from .utils import redact_numbers
 
 

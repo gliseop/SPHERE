@@ -29,7 +29,7 @@ from .tracing import TraceLog
 from .utils import redact_numbers
 from .worldgen import WorldGenerator
 
-from .deps import EmbeddingProvider, LLMProvider, create_embedding_provider
+from .llm import EmbeddingProvider, LLMProvider, create_embedding_provider
 
 
 logger = logging.getLogger(__name__)

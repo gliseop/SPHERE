@@ -90,20 +90,9 @@ def _write_names_json(run_name: str, scenario_id: str, governance: str) -> None:
         scenario_id: Идентификатор сценария (S0, S1, S2).
         governance: Идентификатор режима управления (G0-G3).
     """
-    try:
-        from magistry_sim.enums import GovernanceMode, ScenarioId
-        from magistry_sim.scenarios import add_governance_agents, get_scenario
-
-        base = get_scenario(ScenarioId(scenario_id))
-        full = add_governance_agents(base, GovernanceMode(governance))
-        names = {agent.id: agent.name for agent in full.agents}
-        path = _RESULTS_DIR / f"{run_name}_names.json"
-        path.write_text(
-            json.dumps(names, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        _logger.exception("Failed to write names JSON for run %s", run_name)
+    _logger.warning(
+        "Cannot write names JSON for run %s: magistry_sim removed", run_name
+    )
 
 
 def _write_names_json_from_config(
@@ -111,18 +100,20 @@ def _write_names_json_from_config(
 ) -> None:
     """Сгенерировать файл имён агентов из JSON-конфига сценария."""
     try:
-        from magistry_sim.config import ScenarioConfig
-        from magistry_sim.enums import GovernanceMode
-        from magistry_sim.scenarios import add_governance_agents
-
-        cfg = ScenarioConfig.model_validate(scenario_config)
-        full = add_governance_agents(cfg, GovernanceMode(governance))
-        names = {agent.id: agent.name for agent in full.agents}
-        path = _RESULTS_DIR / f"{run_name}_names.json"
-        path.write_text(
-            json.dumps(names, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        names = {}
+        agents = scenario_config.get("agents", [])
+        for a in agents:
+            if isinstance(a, dict):
+                aid = a.get("id", "")
+                aname = a.get("name", aid)
+                if aid:
+                    names[aid] = aname
+        if names:
+            path = _RESULTS_DIR / f"{run_name}_names.json"
+            path.write_text(
+                json.dumps(names, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
     except Exception:
         _logger.exception("Failed to write names JSON for run %s", run_name)
 

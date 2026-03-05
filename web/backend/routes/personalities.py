@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
 
@@ -92,55 +91,12 @@ async def generate_personality_interview(
 ) -> dict:
     """Сгенерировать интервью для личности через LLM.
 
-    Длительная операция (5 LLM-вызовов), выполняется в отдельном потоке.
+    Зависит от magistry_sim (interviews, personality) и пока недоступен.
     """
-    pers_path = PERSONALITIES_DIR / f"{personality_id}.json"
-    if not pers_path.exists():
-        raise HTTPException(status_code=404, detail="Personality not found")
-
-    try:
-        raw = json.loads(pers_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    def _generate() -> dict:
-        from magistry_sim.interviews import generate_interview, save_interview
-        from magistry_sim.llm import create_embedding_provider, create_provider
-        from magistry_sim.personality import (
-            AgentPersonality,
-            DarkTriadProfile,
-            HEXACOProfile,
-        )
-
-        hexaco_raw = raw.get("hexaco", {})
-        dt_raw = raw.get("dark_triad", {})
-        personality = AgentPersonality(
-            hexaco=HEXACOProfile(**hexaco_raw),
-            dark_triad=DarkTriadProfile(**dt_raw),
-            neutralization_techniques=raw.get("neutralization_techniques", []),
-            biography=raw.get("biography", ""),
-        )
-
-        archetype = personality.classify_archetype()
-        llm = create_provider(mock=False)
-        embedder = create_embedding_provider(mock=False)
-
-        interview = generate_interview(
-            personality=personality,
-            role=payload.role,
-            archetype=archetype,
-            llm=llm,
-            embedder=embedder,
-            interview_id=personality_id,
-            use_extended_protocol=True,
-        )
-        save_interview(interview, INTERVIEWS_DIR)
-        result = interview.model_dump()
-        result.pop("embedding", None)
-        return result
-
-    result = await asyncio.to_thread(_generate)
-    return result
+    raise HTTPException(
+        status_code=501,
+        detail="Генерация интервью недоступна: движок magistry_sim удалён.",
+    )
 
 
 @router.delete("/api/personalities/{personality_id}/interview", status_code=204)
