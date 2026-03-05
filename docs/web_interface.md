@@ -8,9 +8,20 @@
 
 ```
 web/backend/
-├── main.py           # FastAPI-приложение: REST + WebSocket (~2500 строк)
+├── main.py           # FastAPI-приложение: WebSocket, middleware, точка входа
+├── routes/           # REST-эндпоинты (выделены из main.py)
+│   ├── auth.py       # POST /api/auth/login
+│   ├── runs.py       # Прогоны: список, детали, экспорт, удаление
+│   ├── run_control.py # Запуск и остановка симуляций
+│   ├── scenarios.py  # CRUD сценариев
+│   ├── agent_types.py # CRUD типов агентов
+│   ├── personalities.py # CRUD архетипов и интервью
+│   ├── governance.py # CRUD режимов управления
+│   ├── ai.py         # AI-генерация (личность, тип агента, вспомогательные агенты)
+│   └── templates.py  # Встроенные шаблоны сценариев и режимов
 ├── auth.py           # JWT-аутентификация, bcrypt, роли
 ├── database.py       # SQLite через встроенный sqlite3 / aiosqlite
+├── constants.py      # Enum-значения (GovernanceMode, ScenarioId, NEUTRALIZATION_TECHNIQUES)
 ├── runner.py         # Фоновый запуск симуляций
 ├── graph_state.py    # Построение графа связей для визуализации
 └── manage_users.py   # CLI управления пользователями
@@ -18,7 +29,7 @@ web/backend/
 
 ### Аутентификация
 
-Система использует JWT-токены на основе `python-jose` с алгоритмом HS256. Пароли хешируются через `bcrypt`. Две роли:
+Система использует JWT-токены на основе `PyJWT` с алгоритмом HS256. Пароли хешируются через `bcrypt`. Две роли:
 
 - **admin** — полный доступ: запуск симуляций, управление сценариями, удаление прогонов
 - **viewer** — только чтение: просмотр прогонов, событий, графов

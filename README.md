@@ -82,13 +82,13 @@ graph TB
     ENT --> ARB
 ```
 
-Полное описание — в [ARCHITECTURE.md](ARCHITECTURE.md).
+Полное описание — в [docs/architecture_guide.md](docs/architecture_guide.md).
 
 ## Документация
 
 | Документ | Описание |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Полная архитектура системы |
+| [docs/architecture_guide.md](docs/architecture_guide.md) | Навигатор по архитектуре: карта модулей, путь данных |
 | [chapter_1.md](chapter_1.md) | Глава 1 ВКР: теоретические основания, обзор литературы, гибридная система |
 | [AGENTS.md](AGENTS.md) | Инструкции для AI-агентов: правила, соглашения, задачи |
 | [docs/overview.md](docs/overview.md) | Обзор системы для технического читателя |
@@ -96,6 +96,8 @@ graph TB
 | [docs/testing.md](docs/testing.md) | Тестирование: структура, паттерны, покрытие |
 | [docs/cli_reference.md](docs/cli_reference.md) | Справочник CLI: аргументы, переменные окружения |
 | [docs/web_interface.md](docs/web_interface.md) | Веб-интерфейс: API, WebSocket, компоненты |
+| [docs/simulation_engine.md](docs/simulation_engine.md) | Движок: агент, арбитр, память, оракул |
+| [docs/data_formats.md](docs/data_formats.md) | Форматы данных: сценарии, события, персоны |
 | [docs/persona_interview_design.md](docs/persona_interview_design.md) | Подсистема персон: генерация, интервью, фрагментный поиск |
 
 ## Режимы управления

@@ -22,15 +22,13 @@ source .venv/bin/activate  # Linux/macOS
 ### Установка зависимостей
 
 ```bash
-# Основные зависимости + тесты + поиск
-pip install -e ".[dev,search]"
+# Движок + тесты
+pip install -e ".[lc,dev]"
 ```
 
 Группы зависимостей:
-- `dev` — pytest, pytest-asyncio, rank-bm25 (для тестов)
-- `search` — rank-bm25 (для гибридного поиска)
-- `stats` — scipy (для статистического анализа пакетных прогонов)
-- `lc` — зависимости greenfield-движка MAGISTRY-LC (LangChain/LangGraph + YAML)
+- `lc` — движок MAGISTRY-LC: LangChain/LangGraph, PyYAML, OpenAI, Rich
+- `dev` — pytest, pytest-asyncio, rank-bm25 (для тестов и гибридного поиска)
 
 ### Настройка переменных окружения
 
@@ -42,8 +40,7 @@ cp .env.example .env
 
 | Переменная | Обязательна | Описание |
 |---|---|---|
-| `OPENAI_API_KEY` | Да (для симуляций) | Ключ OpenAI API |
-| `EMBEDDING_PROVIDER` | Нет | Не используется (всегда OpenAI-совместимый API) |
+| `OPENAI_API_KEY` | Да (для симуляций) | Ключ OpenAI API (или совместимого провайдера, например OpenRouter) |
 | `JWT_SECRET` | Да (для веб) | Секрет для JWT-токенов, генерируется: `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `JWT_EXPIRE_HOURS` | Нет | Время жизни токена, по умолчанию 24 часа |
 | `MAGISTRY_DEV` | Нет | `1` для режима разработки (позволяет запуск без JWT_SECRET) |
@@ -58,76 +55,42 @@ cd ../..
 
 ## Запуск CLI-симуляции
 
-### Список сценариев
+### Запуск симуляции по сценарию
 
 ```bash
-magistry-sim --list-scenarios
-```
-
-### Синхронный режим (раундовый)
-
-Агенты ходят по очереди в случайном порядке, один раунд — один ход каждого агента.
-
-```bash
-# Базовый сценарий S0 (чистая сделка, 3 агента, без коррупции)
-magistry-sim --scenario S0 --runner cognitive
-
-# С режимом управления G2 (аудитор + репутация)
-magistry-sim --scenario S1 --governance G2
-
-# Сохранение журнала событий и метрик
-magistry-sim --scenario S0 --jsonl results/run.jsonl --summary-json results/metrics.json
-```
-
-### Асинхронный режим (непрерывное время)
-
-Каждое действие имеет длительность, агенты пробуждаются по расписанию.
-
-```bash
-magistry-sim --scenario S1 --mode async --runner cognitive
-
-# С параллельной обработкой агентов
-magistry-sim --scenario S1 --mode async --parallel-agents --parallel-workers 4
-```
-
-### Пакетный запуск
-
-Множество прогонов для статистического анализа.
-
-```bash
-# 10 прогонов для каждого режима G0, G2, G3
-magistry-sim --scenario S0 --batch --batch-runs 10 --batch-modes G0,G2,G3 --output-dir batch_results
-```
-
-Полный список аргументов CLI — в [cli_reference.md](./cli_reference.md).
-
-## MAGISTRY-LC (greenfield)
-
-Установите extra-зависимости:
-
-```bash
-pip install -e ".[lc]"
-```
-
-Минимальный запуск:
-
-```bash
+# Минимальный сценарий (YAML)
 magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
 ```
 
-Сгенерировать сценарий из описания (LLM):
+### Переопределение числа тиков
 
 ```bash
-magistry-lc compose --description "Кумовство при найме" --out scenarios/lc_composed.yaml
+magistry-lc run --scenario scenarios/lc_minimal.yaml --ticks 50 --out results/long_run
 ```
 
-Примечание: команда также обогащает персон (биография + интервью), поэтому делает несколько LLM-вызовов (примерно 1 на агента).
+### Генерация сценария из описания (LLM)
 
-Чанкинг-оракул по `events.jsonl` (LLM):
+```bash
+magistry-lc compose --description "Кумовство при найме в муниципальном учреждении" --out scenarios/composed.yaml
+```
+
+Команда генерирует сценарий и обогащает персоны (биография + интервью), поэтому делает несколько LLM-вызовов (примерно 1 на агента).
+
+Описание можно передать из файла:
+
+```bash
+magistry-lc compose --description-file docs/scenario_brief.txt --out scenarios/composed.yaml
+```
+
+### Анализ нарушений (оракул)
+
+Пост-фактум анализ журнала событий чанками через LLM:
 
 ```bash
 magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
 ```
+
+Полный список аргументов CLI — в [cli_reference.md](./cli_reference.md).
 
 ## Запуск веб-интерфейса
 
@@ -156,21 +119,21 @@ python web/backend/manage_users.py add admin admin_password --role admin
 pytest
 
 # Конкретный модуль
-pytest tests/test_environment.py
+pytest tests/test_magistry_lc_smoke.py
 
 # По паттерну
-pytest -k "test_cognitive"
+pytest -k "test_arbiter"
 
 # С подробным выводом
 pytest -v
 ```
 
-Тесты используют `MockAgentRunner` и `MockLLMProvider` и не требуют ключа OpenAI API. Конфигурация: `asyncio_mode = "auto"`, что позволяет писать async-тесты без дополнительных декораторов.
+Тесты используют `MockLLMProvider` и `MockEmbeddingProvider` и не требуют ключа OpenAI API. Конфигурация: `asyncio_mode = "auto"`, что позволяет писать async-тесты без дополнительных декораторов.
 
 Подробности о тестировании — в [testing.md](./testing.md).
 
 ## Следующие шаги
 
 - [Обзор системы](./overview.md) — архитектура и ключевые понятия
-- [Движок симуляции](./simulation_engine.md) — когнитивный агент, среды, личность
-- [Архитектура](../ARCHITECTURE.md) — полное описание системы
+- [Движок симуляции](./simulation_engine.md) — агент, арбитр, память, оракул
+- [Навигатор по архитектуре](./architecture_guide.md) — карта модулей и путь данных

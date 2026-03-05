@@ -1,184 +1,194 @@
 # Навигатор по архитектуре
 
-Этот документ помогает ориентироваться в архитектуре MAGISTRY: карта модулей, указатель разделов [ARCHITECTURE.md](../ARCHITECTURE.md), объяснение двух сред исполнения и путь данных в веб-интерфейсе. Документ не дублирует содержание ARCHITECTURE.md, а указывает, куда читать.
+Этот документ помогает ориентироваться в архитектуре MAGISTRY: карта модулей, зависимости между ними и путь данных в веб-интерфейсе. Документ не дублирует содержание кода, а указывает, куда читать.
 
 ## Карта модулей
 
 ```mermaid
 graph TB
-    subgraph Ядро["Ядро"]
-        ENV[environment.py]
-        AENV[async_environment.py]
-        STATE[state.py]
-        CONFIG[config.py]
-        CASES[cases.py]
-        ENUMS[enums.py]
-        SOPS[state_ops.py]
+    subgraph Ядро["Ядро движка"]
+        ENGINE[engine.py<br/>WorldEngine]
+        STATE[state.py<br/>WorldState]
+        CONFIG[config.py<br/>ScenarioConfig]
+        IDS[ids.py<br/>TypedId, EntityKind]
+        ENTITIES[entities.py<br/>EntityRegistry]
+        IDALLOC[id_alloc.py<br/>IdAllocator]
+        OPS[ops.py<br/>StateOp → Event]
     end
 
-    subgraph Когнитивный["Когнитивный агент"]
-        COG[cognitive_runner.py]
-        MEM[memory.py]
-        REFL[reflection.py]
-        PLAN[planning.py]
-        BM25[bm25.py]
-    end
-
-    subgraph Личность["Личность и персона"]
-        PERS[personality.py]
-        INT[interviews.py]
-        PGEN[persona_generator.py]
-        BIO[biography.py]
-    end
-
-    subgraph Инструменты["Инструменты"]
-        ACT[tools/actions.py]
-        COMM[tools/communication.py]
+    subgraph Агент["Агент"]
+        AGENT[agent.py<br/>AgentRunner]
+        MEMORY[memory.py<br/>AgentMemory]
+        ACTIONS[actions.py<br/>Action + perform]
+        PERSONA[persona.py<br/>PersonaArtifact]
+        BM25[bm25.py<br/>BM25]
     end
 
     subgraph Управление["Управление и арбитраж"]
-        ARB[arbiter.py]
-        DFORGE[document_forge.py]
-        CONV[conversation.py]
-        WRULES[world_rules.py]
+        ARBITER[arbiter.py<br/>HybridArbiter]
+        JOURNAL[journal.py<br/>YAMLJournal]
+        DAO[dao.py<br/>DAO vote + policy]
+    end
+
+    subgraph Генерация["Генерация мира"]
+        WORLDGEN[worldgen.py<br/>WorldGenerator]
+        COMPOSER[composer.py<br/>WorldComposer]
+        ORACLE[oracle.py<br/>ViolationOracle]
+    end
+
+    subgraph LLM["LLM-подсистема (llm/)"]
+        PROTOCOLS[protocols.py<br/>LLMProvider]
+        PROVIDERS[providers.py<br/>OpenAI + Mock]
+        EMBEDDINGS[embeddings.py<br/>EmbeddingProvider]
+        CACHE[llm/cache.py<br/>LLMCache]
+        CALLER[caller.py<br/>LLMCaller]
     end
 
     subgraph Инфраструктура["Инфраструктура"]
-        LLM[llm.py]
-        TRACE[tracing.py]
-        CLOCK[sim_clock.py]
-        SCHED[scheduler.py]
-        LOC[locations.py]
-    end
-
-    subgraph Нарратив["Нарратив и генерация"]
-        NARR[narrator.py]
-        WGEN[world_generator.py]
-        EGEN[event_generator.py]
-    end
-
-    subgraph Метрики["Метрики и анализ"]
-        METR[metrics.py]
-        STAT[statistics.py]
-        ORA[oracle.py]
-        REP[reputation.py]
-        RES[resources.py]
-        GRAPH[graph.py]
+        EVENTS[events.py<br/>EventLog JSONL]
+        TRACING[tracing.py<br/>TraceLog JSONL]
+        SCENARIO[scenario.py<br/>load/save YAML]
+        GRAPHS[graphs.py<br/>LangGraph]
+        CLI[cli.py<br/>magistry-lc]
     end
 
     subgraph Веб["Веб-интерфейс"]
         MAIN[web/backend/main.py]
+        ROUTES[web/backend/routes/]
         AUTH[web/backend/auth.py]
         RUNNER[web/backend/runner.py]
         FRONT[web/frontend/]
     end
 
-    COG --> MEM
-    COG --> REFL
-    COG --> PLAN
-    MEM --> BM25
-    COG --> INT
-    COG --> PERS
+    ENGINE --> STATE
+    ENGINE --> AGENT
+    ENGINE --> ARBITER
+    ENGINE --> OPS
+    ENGINE --> EVENTS
+    ENGINE --> WORLDGEN
 
-    ENV --> STATE
-    ENV --> COG
-    ENV --> ACT
-    ENV --> COMM
-    AENV --> STATE
-    AENV --> COG
-    AENV --> CLOCK
-    AENV --> SCHED
-    AENV --> LOC
+    AGENT --> MEMORY
+    AGENT --> ACTIONS
+    AGENT --> PERSONA
+    MEMORY --> BM25
+    MEMORY --> EMBEDDINGS
 
-    ARB --> SOPS
-    ARB --> WRULES
-    ARB --> LLM
-    DFORGE --> LLM
+    ARBITER --> JOURNAL
+    ARBITER --> ENTITIES
+    ARBITER --> CALLER
 
-    RUNNER --> AENV
+    DAO --> OPS
+    DAO --> STATE
+
+    COMPOSER --> CALLER
+    ORACLE --> CALLER
+
+    CALLER --> PROVIDERS
+    CALLER --> TRACING
+    PROVIDERS --> PROTOCOLS
+
+    CLI --> ENGINE
+    CLI --> COMPOSER
+    CLI --> ORACLE
+
+    RUNNER --> ENGINE
     MAIN --> AUTH
+    MAIN --> ROUTES
     MAIN --> RUNNER
     FRONT --> MAIN
 ```
 
-## Указатель разделов ARCHITECTURE.md
+## Указатель модулей
 
-| Хочу понять... | Раздел ARCHITECTURE.md |
+| Хочу понять... | Где читать |
 |---|---|
-| Зачем v3, что не так с v2 | 1. От симулятора закупок к протоколу бюрократии |
-| Принцип предметной независимости | 2. Принцип: движок не знает, что такое тендер |
-| Дело, предложение, полномочие, ресурс | 3. Четыре абстракции ядра |
-| Почему нет конечных автоматов в коде | 4. Свободная модель делопроизводства |
-| Как устроен раунд | 5. Устройство раунда |
-| Какие инструменты у агентов | 6. Восемь инструментов |
-| Что видит агент на каждом ходу | 7. Что видит агент: ситуационные сводки |
-| Как формируется характер агента | 8. Агенты: характер и полномочия |
-| Откуда берутся дела | 9. Потребности организации |
-| Какие сценарии есть | 10. Сценарии как конфигурация |
-| Чем G0 отличается от G3 | 11. Режимы управления G0–G3 |
-| Как работает граф связей | 12. Социальный граф |
-| Как устроена память агента | 13. Поток памяти |
-| Когнитивный цикл, интервью | 14. Когнитивный агент (CognitiveAgentRunner) |
-| Как оцениваются результаты | 15. Метрики |
-| Сколько стоит прогон | 16. Управление затратами |
-| Где что лежит в коде | 17. Структура проекта |
-| Как обеспечить повторяемость | 18. Воспроизводимость |
-| Какие проблемы известны | 19. Ограничения и риски |
-| Как работает арбитр | 20. Арбитр свободных действий |
-| Непрерывное время | 21. Асинхронная среда (AsyncEnvironment) |
-| Многорепликовые диалоги | 22. Система тредов |
-| Генерация документов ГОСТ | 23. DocumentForge |
-| HEXACO, Dark Triad, архетипы | 24. Расширенная модель личности |
-| Веб-интерфейс, API, WebSocket | 25. Веб-интерфейс |
+| Как устроен тик симуляции | `engine.py` → `WorldEngine.run()` |
+| Как агент принимает решение | `agent.py` → `AgentRunner`, `memory.py` → гибридный retrieval |
+| Какие действия доступны агенту | `actions.py` → `ActionKind`, структурированные + `perform` |
+| Как арбитр проверяет действия | `arbiter.py` → полномочия + антифантомы + LLM-perform |
+| Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра |
+| Как устроено DAO-голосование | `dao.py` → кворум, порог, закрытие голосования |
+| Типизированные ID и антифантомы | `ids.py` + `entities.py` → `EntityRegistry` |
+| Детерминированный apply | `ops.py` → `StateOp` преобразуется в `Event` |
+| Как генерируется сценарий через LLM | `composer.py` → `WorldComposer.compose()` |
+| Как работает генератор мира | `worldgen.py` → внешние события без приватных утечек |
+| Как оракул анализирует нарушения | `oracle.py` → чанкинг по events.jsonl |
+| Как устроена память агента | `memory.py` → working buffer + long-term hybrid index |
+| Как работает гибридный поиск | `memory.py` (retrieval) + `bm25.py` (лексический) + `embeddings.py` (векторный) |
+| Как устроены LLM-провайдеры | `llm/providers.py` → `OpenAICompatibleProvider`, `MockLLMProvider` |
+| Как устроен конфиг сценария | `config.py` → `ScenarioConfig` (Pydantic) |
+| Как загружается/сохраняется сценарий | `scenario.py` → YAML/JSON |
+| Как устроена личность агента | `persona.py` → `PersonaArtifact`, `PersonaLibrary`, `PersonaGenerator` |
+| Как работает LangGraph-интеграция | `graphs.py` → tick graph + SqliteSaver checkpoints |
+| Как работает CLI | `cli.py` → `run`, `compose`, `oracle` |
 
-## Две среды исполнения
+## Путь данных: тик симуляции
 
-Система поддерживает две среды, выбираемые через `--mode sync|async`. Обе используют один и тот же `CognitiveAgentRunner` для принятия решений агентами и один и тот же набор инструментов.
+```mermaid
+sequenceDiagram
+    participant E as WorldEngine
+    participant A as AgentRunner
+    participant M as AgentMemory
+    participant Arb as Arbiter
+    participant Ent as EntityRegistry
+    participant O as Ops
+    participant S as WorldState
+    participant EL as EventLog
 
-### Environment (синхронная, раундовая)
+    E->>A: decide(agent, state, tick)
+    A->>M: retrieve(situation)
+    M-->>A: релевантные воспоминания
+    A-->>E: Action[]
 
-Раунд — дискретный шаг времени. В каждом раунде все агенты получают ход в случайном порядке. Подходит для детерминированных экспериментов, отладки, пакетных прогонов с фиксированным зерном. Реализация проще; все взаимодействия синхронны.
+    loop Каждое действие
+        E->>Arb: evaluate(action, state)
+        Arb->>Ent: validate_targets(action)
+        Ent-->>Arb: ✓ / reject (антифантом)
+        Arb-->>E: verdict (approved / rejected)
 
-### AsyncEnvironment (асинхронная, непрерывное время)
+        alt Одобрено
+            E->>O: apply(action, state)
+            O->>S: обновление состояния
+            O-->>E: Event
+            E->>EL: запись события
+        end
+    end
 
-Время моделируется через `SimClock` с точностью до секунды. Каждое действие имеет длительность (открытие дела — дольше, чем отправка сообщения). `Scheduler` (приоритетная очередь на `heapq`) планирует пробуждения агентов. `WorkSchedule` переносит пробуждения на рабочие часы (Пн–Пт, 9:00–18:00; праздники учитываются). Поддерживается параллельная обработка нескольких агентов через `ThreadPoolExecutor`.
+    E->>M: store(events для агента)
+```
 
-Асинхронная среда обеспечивает большую реалистичность: действия занимают время, агенты могут пробуждаться одновременно, а рабочий график исключает нереалистичные ситуации вроде ночных переговоров. Эта среда используется для «живых» симуляций через веб-интерфейс.
-
-## Путь данных в веб-интерфейсе
+## Путь данных: веб-интерфейс
 
 ```mermaid
 sequenceDiagram
     participant Б as Браузер (React)
-    participant С as FastAPI (main.py)
-    participant Р as Runner (фоновый поток)
-    participant Д as AsyncEnvironment
-    participant Ж as EventLog
+    participant R as Routes (FastAPI)
+    participant Run as Runner
+    participant E as WorldEngine
+    participant EL as EventLog
 
-    Б->>С: POST /api/live/start {scenario, governance, ...}
-    С->>Р: Запуск симуляции в фоновом потоке
-    Р->>Д: AsyncEnvironment.run()
+    Б->>R: POST /api/runs/launch {scenario}
+    R->>Run: запуск в фоновом потоке
+    Run->>E: WorldEngine.run()
 
-    loop Каждое действие агента
-        Д->>Ж: Запись события (JSONL)
-        Д->>С: Помещение события в очередь
+    loop Каждый тик
+        E->>EL: запись события
+        E->>Run: помещение в очередь
     end
 
-    Б->>С: WebSocket /ws
-    С->>Б: Аутентификация (JWT)
+    Б->>R: WebSocket /ws/live
+    R->>Б: аутентификация (JWT)
 
     loop Пока симуляция идёт
-        С->>Б: sim_event (пакет событий)
-        С->>Б: graph_update (обновление графа)
-        С->>Б: sim_status (раунд, время)
+        R->>Б: sim_event (пакет событий)
+        R->>Б: graph_update (обновление графа)
+        R->>Б: sim_status
     end
 
-    С->>Б: sim_ended
+    R->>Б: sim_ended
 
-    Б->>С: GET /api/runs/{name}/events?round=N
-    С->>Б: JSON (события раунда)
+    Б->>R: GET /api/run/{name}
+    R->>Б: JSON (события, граф, метрики)
 ```
 
-Браузер подключается по WebSocket после аутентификации. Сервер пакетирует события (по `MAGISTRY_WS_EVENT_BATCH_SIZE` штук каждые `MAGISTRY_WS_EVENT_BATCH_INTERVAL_S` секунд) и троттлит обновления графа (не чаще `MAGISTRY_LIVE_GRAPH_THROTTLE_S`). Это предотвращает перегрузку клиента при интенсивных симуляциях.
-
-При подключении к уже идущей симуляции клиент получает буфер последних `MAGISTRY_LIVE_HISTORY_EVENTS` событий, что позволяет увидеть контекст без полной перезагрузки.
+Браузер подключается по WebSocket после аутентификации. Сервер пакетирует события (по `MAGISTRY_WS_EVENT_BATCH_SIZE` штук каждые `MAGISTRY_WS_EVENT_BATCH_INTERVAL_S` секунд) и троттлит обновления графа (не чаще `MAGISTRY_LIVE_GRAPH_THROTTLE_S`). При подключении к уже идущей симуляции клиент получает буфер последних `MAGISTRY_LIVE_HISTORY_EVENTS` событий.

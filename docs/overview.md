@@ -53,7 +53,7 @@ C4Context
 
 **Арбитр** (`Arbiter`) — гибридный механизм: сначала детерминированная проверка полномочий и существования адресатов, затем (для `perform`-действий) LLM-оценка допустимости на основе YAML-журнала мира.
 
-Подробное описание — в [ARCHITECTURE.md](../ARCHITECTURE.md).
+Подробное описание — в [architecture_guide.md](./architecture_guide.md) и [simulation_engine.md](./simulation_engine.md).
 
 ## Зависимости
 

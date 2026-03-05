@@ -44,7 +44,7 @@ flowchart TD
     subgraph Симуляция
         J --> K["InterviewFragmentIndex<br/>(BM25 + cosine)"]
         K --> L["retrieve_interview_context()"]
-        L --> M["Когнитивный промпт<br/>(CognitiveAgentRunner)"]
+        L --> M["Когнитивный промпт<br/>(AgentRunner)"]
         I --> N["_ensure_personality()"]
         N --> M
     end

@@ -1,79 +1,82 @@
 # Справочник командной строки
 
-## magistry-sim
+## magistry-lc
 
-Основная точка входа для запуска симуляций.
+Точка входа для движка симуляции. Три подкоманды: `run`, `compose`, `oracle`.
 
 ```bash
-magistry-sim [аргументы]
+magistry-lc <подкоманда> [аргументы]
 ```
 
-### Аргументы
+### run — запуск симуляции
+
+```bash
+magistry-lc run --scenario <путь> [--out <директория>] [--ticks <число>]
+```
 
 | Аргумент | Тип | По умолчанию | Описание |
 |---|---|---|---|
-| `--scenario` | строка | `S0` | Идентификатор сценария (S0–S6) |
-| `--scenario-json` | путь | — | Путь к JSON-конфигурации ScenarioConfig (перекрывает `--scenario`) |
-| `--governance` | строка | — | Режим управления (G0–G3); если не указан, берётся из сценария |
-| `--seed` | целое | — | Зерно генератора случайных чисел |
-| `--rounds` | целое | — | Количество раундов (перекрывает значение из сценария) |
-| `--runner` | строка | `cognitive` | Тип агентного исполнителя: `llm`, `crewai`, `cognitive` |
-| `--mode` | строка | `sync` | Режим симуляции: `sync` (раундовый) или `async` (непрерывное время) |
-| `--list-scenarios` | флаг | — | Показать таблицу доступных сценариев и завершить |
-| `--jsonl` | путь | — | Сохранить журнал событий в JSONL-файл |
-| `--summary-json` | путь | — | Сохранить метрики в JSON-файл |
+| `--scenario` | путь | (обязательный) | Путь к сценарию (.yaml или .json) |
+| `--out` | путь | `lc_results/<timestamp>` | Выходная директория (events.jsonl, trace.jsonl) |
+| `--ticks` | целое | из сценария | Переопределить число тиков |
 
-### Когнитивный агент
+### compose — генерация сценария из описания
+
+```bash
+magistry-lc compose --description <текст> --out <путь> [опции]
+```
 
 | Аргумент | Тип | По умолчанию | Описание |
 |---|---|---|---|
-| `--interviews` | путь | — | Путь к библиотеке интервью (JSONL) |
-| `--interviews-dir` | путь | — | Директория с интервью (JSON) для fragment-based retrieval |
-| `--personalities-dir` | путь | — | Директория с архетипами личности (JSON) |
+| `--description` | строка | `""` | Текстовое описание сценария |
+| `--description-file` | путь | — | Путь к файлу с описанием (альтернатива `--description`) |
+| `--out` | путь | (обязательный) | Куда сохранить сценарий (.yaml/.json) |
+| `--ticks` | целое | `25` | Число тиков |
+| `--seed` | целое | `42` | Зерно генератора |
+| `--language` | строка | `ru` | Язык генерации |
+| `--model` | строка | из LLMConfig | Модель LLM |
+| `--base-url` | строка | — | Базовый URL API |
+| `--provider-order` | строка | — | Приоритет провайдеров через запятую (например, `Groq,OpenAI`) |
+| `--temperature` | дробное | из LLMConfig | Температура генерации |
+| `--trace` | путь | `lc_results/compose_trace.jsonl` | Путь к файлу трассировки |
 
-### Параллельная обработка
+### oracle — анализ нарушений
 
-| Аргумент | Тип | По умолчанию | Описание |
-|---|---|---|---|
-| `--parallel-agents` | флаг | — | Параллельная генерация решений агентами |
-| `--parallel-workers` | целое | авто | Максимум потоков для параллельной обработки |
-
-### Асинхронный режим
-
-| Аргумент | Тип | По умолчанию | Описание |
-|---|---|---|---|
-| `--start-time` | ISO 8601 | — | Время начала симуляции |
-| `--end-time` | ISO 8601 | — | Время окончания симуляции |
-
-### Пакетный запуск
+```bash
+magistry-lc oracle --events <путь> --out <путь> [опции]
+```
 
 | Аргумент | Тип | По умолчанию | Описание |
 |---|---|---|---|
-| `--batch` | флаг | — | Включить пакетный режим |
-| `--batch-runs` | целое | `10` | Количество прогонов на каждый режим управления |
-| `--batch-modes` | строка | все | Режимы управления через запятую (например, `G0,G2,G3`) |
-| `--output-dir` | путь | `batch_results` | Директория для результатов |
+| `--events` | путь | (обязательный) | Путь к events.jsonl |
+| `--out` | путь | (обязательный) | Выходной JSON с нарушениями |
+| `--window` | целое | `5` | Размер окна в тиках |
+| `--model` | строка | из LLMConfig | Модель LLM |
+| `--base-url` | строка | — | Базовый URL API |
+| `--provider-order` | строка | — | Приоритет провайдеров через запятую |
+| `--temperature` | дробное | из LLMConfig | Температура генерации |
+| `--trace` | путь | `<out>.trace.jsonl` | Путь к файлу трассировки |
 
 ### Примеры
 
 ```bash
-# Базовый прогон
-magistry-sim --scenario S0
+# Минимальный прогон
+magistry-lc run --scenario scenarios/lc_minimal.yaml
 
-# Асинхронный режим с пользовательским временем
-magistry-sim --scenario S1 --mode async \
-    --start-time "2026-02-16T09:00:00+03:00" \
-    --end-time "2026-02-27T18:00:00+03:00"
+# Прогон с указанием выходной директории и числа тиков
+magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/run_50 --ticks 50
 
-# Пакетный запуск с пользовательским сценарием
-magistry-sim --scenario-json scenarios/custom.json \
-    --batch --batch-runs 20 --batch-modes G0,G3 \
-    --output-dir results/custom_batch
+# Генерация сценария через LLM
+magistry-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" \
+    --out scenarios/tender.yaml
 
-# Параллельные агенты с сохранением журнала
-magistry-sim --scenario S2 --mode async \
-    --parallel-agents --parallel-workers 8 \
-    --jsonl results/s2_run.jsonl
+# Генерация из файла с описанием
+magistry-lc compose --description-file docs/brief.txt \
+    --out scenarios/brief.yaml --ticks 30 --seed 123
+
+# Анализ нарушений с указанием модели
+magistry-lc oracle --events results/run_50/events.jsonl \
+    --out results/run_50/violations.json --model gpt-4o
 ```
 
 ## manage_users.py
@@ -115,7 +118,7 @@ python -m web.backend.manage_users change-role --username viewer1 --role admin
 
 | Переменная | Описание |
 |---|---|
-| `OPENAI_API_KEY` | Ключ OpenAI API для LLM-вызовов (обязателен для симуляций с когнитивным агентом) |
+| `OPENAI_API_KEY` | Ключ OpenAI API для LLM-вызовов (обязателен для симуляций) |
 | `JWT_SECRET` | Секрет для JWT-токенов (обязателен для веб-интерфейса в продакшен-режиме) |
 
 ### LLM и эмбеддинги
