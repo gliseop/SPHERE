@@ -24,10 +24,11 @@ def create_llm_provider(cfg: LLMConfig) -> LLMProvider:
     api_key = os.getenv(cfg.api_key_env)
     if not api_key:
         raise RuntimeError(f"{cfg.api_key_env} is not set")
+    base_url = cfg.base_url or os.getenv("OPENAI_BASE_URL")
     return OpenAICompatibleProvider(
         model=cfg.model,
         api_key=api_key,
-        base_url=cfg.base_url,
+        base_url=base_url,
         provider_order=list(cfg.provider_order) if cfg.provider_order else None,
         use_tool_calls=cfg.use_tool_calls,
     )

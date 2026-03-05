@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from .actions import (
     Action,
     ActionType,
+    SPAWN_AGENT_ALLOWED_CAPABILITIES,
     CastVoteAction,
     CreateWorkItemAction,
     NoopAction,
@@ -27,19 +28,20 @@ from .actions import (
     RequestEntityAction,
     RespondNominationAction,
     SendMessageAction,
+    SpawnAgentAction,
     SubmitWorkProposalAction,
     AddWorkNoteAction,
     NominatePositionChangeAction,
 )
-from .config import GovernanceConfig
+from .config import GovernanceConfig, RuntimeConfig
 from .dao import DaoEngine
-from .entities import EntityRecord
 from .id_alloc import IdAllocator
-from .ids import EntityKind, ensure_kind, make_id, parse_typed_id
+from .ids import EntityKind, ensure_kind, make_id, normalize_slug, parse_typed_id
 from .llm import LLMCaller
 from .ops import (
     AddWorkNoteOp,
     CastVoteOp,
+    CreateAgentOp,
     CreateEntityOp,
     CreateWorkItemOp,
     ModifyReputationOp,
@@ -190,6 +192,7 @@ class Arbiter:
     governance: GovernanceConfig
     id_alloc: IdAllocator
     dao: DaoEngine
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     temperature: float = 0.0
 
     async def arbitrate_actions(
@@ -203,6 +206,7 @@ class Arbiter:
         """Преобразовать Action[] в список результатов с ops."""
         journal_yaml = journal_yaml or state.journal_yaml()
         results: list[ActionResult] = []
+        spawn_used = False
         for idx, act in enumerate(actions):
             res = await self._arbitrate_one(
                 state=state,
@@ -210,8 +214,11 @@ class Arbiter:
                 action_index=idx,
                 action=act,
                 journal_yaml=journal_yaml,
+                spawn_used=spawn_used,
             )
             results.append(res)
+            if isinstance(act, SpawnAgentAction) and res.approved:
+                spawn_used = True
         return results
 
     async def arbitrate_tick(
@@ -254,6 +261,7 @@ class Arbiter:
             arbitration[aid] = []
             agent = state.agents.get(aid)
             caps = set(agent.capabilities) if agent is not None else set()
+            spawn_used = False
             for idx, act in enumerate(proposed[aid]):
                 if isinstance(act, PerformAction):
                     arbitration[aid].append(None)
@@ -265,8 +273,11 @@ class Arbiter:
                         action_index=idx,
                         action=act,
                         journal_yaml=journal_yaml,
+                        spawn_used=spawn_used,
                     )
                     arbitration[aid].append(_reserve_open_vote_target(res))
+                    if isinstance(act, SpawnAgentAction) and res.approved:
+                        spawn_used = True
 
         async def _decide(m: tuple[str, int, PerformAction, set[str]]) -> _PerformArbiterOutput:
             aid, idx, act, caps = m
@@ -310,6 +321,21 @@ class Arbiter:
             out[aid] = [r for r in items if r is not None]  # type: ignore[truthy-bool]
         return out
 
+    @staticmethod
+    def _sanitize_spawn_capabilities(capabilities: list[str], *, internal: bool) -> list[str]:
+        allowed = set(SPAWN_AGENT_ALLOWED_CAPABILITIES)
+        out: list[str] = []
+        seen: set[str] = set()
+        for cap in capabilities:
+            cap = str(cap or "").strip()
+            if cap not in allowed or cap in seen:
+                continue
+            seen.add(cap)
+            out.append(cap)
+        if out:
+            return out
+        return ["message", "work"] if internal else ["message"]
+
     async def _arbitrate_one(
         self,
         *,
@@ -318,6 +344,7 @@ class Arbiter:
         action_index: int,
         action: Action,
         journal_yaml: str,
+        spawn_used: bool = False,
     ) -> ActionResult:
         agent = state.agents.get(agent_id)
         if agent is None:
@@ -444,6 +471,47 @@ class Arbiter:
                         created_by=agent_id,
                         created_tick=state.tick,
                         meta={"title": "", "description": action.description},
+                    )
+                ],
+            )
+
+        if isinstance(action, SpawnAgentAction):
+            missing = _require("spawn")
+            if missing:
+                return ActionResult(action_index, False, missing, [])
+            if not self.runtime.allow_runtime_spawn:
+                return ActionResult(action_index, False, "runtime_spawn_disabled", [])
+            if spawn_used:
+                return ActionResult(action_index, False, "spawn_limit_per_tick_exceeded", [])
+            if len(state.agents) >= self.runtime.max_agents:
+                return ActionResult(action_index, False, "max_agents_reached", [])
+            slug = normalize_slug(action.slug, fallback=action.name or "spawned")
+            entity_id = make_id(EntityKind.AGENT, slug)
+            if state.registry.exists(entity_id) or entity_id in state.agents:
+                return ActionResult(action_index, False, f"agent_id_conflict:{entity_id}", [])
+            name = (action.name or "").strip()
+            persona_hint = (action.persona_hint or "").strip()
+            if not name:
+                return ActionResult(action_index, False, "spawn_requires_name", [])
+            if not persona_hint:
+                return ActionResult(action_index, False, "spawn_requires_persona_hint", [])
+            capabilities = self._sanitize_spawn_capabilities(
+                list(action.capabilities or []),
+                internal=bool(action.internal),
+            )
+            return ActionResult(
+                action_index,
+                True,
+                "spawn_agent",
+                [
+                    CreateAgentOp(
+                        entity_id=entity_id,
+                        name=name,
+                        internal=bool(action.internal),
+                        persona_hint=persona_hint,
+                        capabilities=capabilities,
+                        created_by=agent_id,
+                        created_tick=state.tick,
                     )
                 ],
             )

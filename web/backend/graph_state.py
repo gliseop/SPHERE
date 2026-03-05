@@ -41,7 +41,7 @@ class GraphStateBuilder:
     _thread_strength: dict[str, float] = field(default_factory=dict)
 
     def ingest(self, e: dict[str, Any]) -> None:
-        aid = str(e.get("agent_id", "") or "")
+        aid = str(e.get("agent_id", e.get("actor_id", "")) or "")
         if aid and aid != "system":
             self._ensure_agent(aid)
 
@@ -93,6 +93,18 @@ class GraphStateBuilder:
             b = str(payload.get("agent_b", "") or "")
             delta = _as_float(payload.get("delta", 0.1), default=0.1)
             self._add_edge(a, b, delta)
+            return
+
+        if event_type == "entity_created":
+            entity_id = str(payload.get("entity_id", "") or "")
+            kind = str(payload.get("kind", "") or "")
+            meta = payload.get("meta", {}) or {}
+            if kind == "agent" and entity_id:
+                self._ensure_agent(entity_id)
+                if isinstance(meta, dict):
+                    name = str(meta.get("name", "") or "")
+                    if name:
+                        self.agents[entity_id]["name"] = name
             return
 
         # Backward/legacy: edges strengthened implicitly by message traffic.

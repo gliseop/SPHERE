@@ -19,8 +19,8 @@ graph TB
     subgraph Агент["Агент"]
         AGENT[agent.py<br/>AgentRunner]
         MEMORY[memory.py<br/>AgentMemory]
-        ACTIONS[actions.py<br/>Action + perform]
-        PERSONA[persona.py<br/>PersonaArtifact]
+        ACTIONS[actions.py<br/>Action + spawn_agent + perform]
+        PERSONA[persona.py<br/>PersonaArtifact + SocialGraphExtractor]
         BM25[bm25.py<br/>BM25]
     end
 
@@ -104,21 +104,21 @@ graph TB
 |---|---|
 | Как устроен тик симуляции | `engine.py` → `WorldEngine.run()` |
 | Как агент принимает решение | `agent.py` → `AgentRunner`, `memory.py` → гибридный retrieval |
-| Какие действия доступны агенту | `actions.py` → `ActionKind`, структурированные + `perform` |
+| Какие действия доступны агенту | `actions.py` → structured actions, `spawn_agent`, `perform` |
 | Как арбитр проверяет действия | `arbiter.py` → полномочия + антифантомы + LLM-perform |
 | Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра |
 | Как устроено DAO-голосование | `dao.py` → кворум, порог, закрытие голосования |
 | Типизированные ID и антифантомы | `ids.py` + `entities.py` → `EntityRegistry` |
 | Детерминированный apply | `ops.py` → `StateOp` преобразуется в `Event` |
 | Как генерируется сценарий через LLM | `composer.py` → `WorldComposer.compose()` |
-| Как работает генератор мира | `worldgen.py` → внешние события без приватных утечек |
+| Как работает генератор мира | `worldgen.py` → внешние события + spawn suggestions без приватных утечек |
 | Как оракул анализирует нарушения | `oracle.py` → чанкинг по events.jsonl |
 | Как устроена память агента | `memory.py` → working buffer + long-term hybrid index |
 | Как работает гибридный поиск | `memory.py` (retrieval) + `bm25.py` (лексический) + `embeddings.py` (векторный) |
 | Как устроены LLM-провайдеры | `llm/providers.py` → `OpenAICompatibleProvider`, `MockLLMProvider` |
 | Как устроен конфиг сценария | `config.py` → `ScenarioConfig` (Pydantic) |
 | Как загружается/сохраняется сценарий | `scenario.py` → YAML/JSON |
-| Как устроена личность агента | `persona.py` → `PersonaArtifact`, `PersonaLibrary`, `PersonaGenerator` |
+| Как устроена личность агента и социальный граф | `persona.py` → `PersonaArtifact`, `PersonaGenerator`, `SocialGraphExtractor` |
 | Как работает LangGraph-интеграция | `graphs.py` → tick graph + SqliteSaver checkpoints |
 | Как работает CLI | `cli.py` → `run`, `compose`, `oracle` |
 

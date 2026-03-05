@@ -20,19 +20,71 @@ class _WorldEventModel(BaseModel):
     description: str
 
 
+class _SpawnSuggestionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slug: str
+    name: str
+    internal: bool
+    persona_hint: str
+    reason: str = ""
+
+
+@dataclass(slots=True)
+class SpawnSuggestion:
+    """Предложение worldgen создать нового агента."""
+
+    slug: str
+    name: str
+    internal: bool
+    persona_hint: str
+    reason: str = ""
+
+
+@dataclass(slots=True)
+class WorldgenOutput:
+    """Нормализованный результат worldgen: события + предложения спавна."""
+
+    events: list[Event]
+    spawns: list[SpawnSuggestion]
+
+
 def _worldgen_schema() -> dict[str, Any]:
     return {
-        "type": "array",
-        "maxItems": 3,
-        "items": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "audience": {"type": "string", "enum": ["public", "internal"]},
-                "description": {"type": "string"},
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "events": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "audience": {"type": "string", "enum": ["public", "internal"]},
+                        "description": {"type": "string"},
+                    },
+                    "required": ["audience", "description"],
+                },
             },
-            "required": ["audience", "description"],
+            "spawns": {
+                "type": "array",
+                "maxItems": 2,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "slug": {"type": "string"},
+                        "name": {"type": "string"},
+                        "internal": {"type": "boolean"},
+                        "persona_hint": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["slug", "name", "internal", "persona_hint"],
+                },
+            },
         },
+        "required": ["events", "spawns"],
     }
 
 
@@ -43,8 +95,8 @@ class WorldGenerator:
     llm: LLMCaller
     temperature: float = 0.0
 
-    async def generate(self, *, tick: int, recent_events: list[Event], language: str) -> list[Event]:
-        """Сгенерировать внешние события на основе нормализованных событий раунда."""
+    async def generate(self, *, tick: int, recent_events: list[Event], language: str) -> WorldgenOutput:
+        """Сгенерировать внешние события и предложения спавна."""
         compact = []
         for ev in recent_events[-200:]:
             # World-gen видит только public/internal события (без приватных 1:1 сообщений).
@@ -61,6 +113,8 @@ class WorldGenerator:
             "Ты — генератор внешних событий мира для симуляции организационных процессов.\n"
             "На вход: события текущего тика (нормализованные), без промптов и внутренних мыслей.\n"
             "Сгенерируй 0–3 внешних события, которые логично следуют из ситуации.\n"
+            "При необходимости предложи 0–2 новых персонажей, которые логично появляются в сюжете именно сейчас.\n"
+            "Новый персонаж должен быть релевантен текущим событиям и иметь краткий persona_hint.\n"
             f"Пиши на языке: {language!r}.\n"
             "Ответ: JSON по схеме.\n"
         )
@@ -74,10 +128,16 @@ class WorldGenerator:
             schema=_worldgen_schema(),
             temperature=self.temperature,
         )
-        if not isinstance(resp.data, list):
-            return []
+        if isinstance(resp.data, list):
+            events_raw = resp.data
+            spawns_raw = []
+        elif isinstance(resp.data, dict):
+            events_raw = resp.data.get("events") or []
+            spawns_raw = resp.data.get("spawns") or []
+        else:
+            return WorldgenOutput(events=[], spawns=[])
         out: list[Event] = []
-        for item in resp.data:
+        for item in events_raw:
             try:
                 we = _WorldEventModel.model_validate(item)
             except Exception:
@@ -92,4 +152,21 @@ class WorldGenerator:
                     audience=audience,
                 )
             )
-        return out
+        spawns: list[SpawnSuggestion] = []
+        for item in spawns_raw:
+            try:
+                spawn = _SpawnSuggestionModel.model_validate(item)
+            except Exception:
+                continue
+            if not spawn.slug.strip() or not spawn.name.strip() or not spawn.persona_hint.strip():
+                continue
+            spawns.append(
+                SpawnSuggestion(
+                    slug=spawn.slug.strip(),
+                    name=spawn.name.strip(),
+                    internal=bool(spawn.internal),
+                    persona_hint=spawn.persona_hint.strip(),
+                    reason=spawn.reason.strip(),
+                )
+            )
+        return WorldgenOutput(events=out, spawns=spawns)

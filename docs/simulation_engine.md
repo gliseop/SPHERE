@@ -8,13 +8,21 @@
 flowchart TD
     CFG[ScenarioConfig YAML/JSON] --> INIT[Инициализация WorldState]
     INIT --> REG[EntityRegistry: регистрация агентов, каналов, организаций, work items]
-    REG --> TICK[Тик N]
+    REG --> ENRICH{runtime.enrich_personas?}
+    ENRICH -->|да| ENRICHRUN[PersonaGenerator: runtime enrichment + personas.json cache]
+    ENRICHRUN --> SOCIAL{runtime.spawn_secondary?}
+    ENRICH -->|нет| SOCIAL
+    SOCIAL -->|да| SG[SocialGraphExtractor + secondary agents]
+    SOCIAL -->|нет| BOOT
+    SG --> BOOT[Bootstrap persona/interview в долгосрочную память + создание runners]
+    BOOT --> TICK[Тик N]
 
     TICK --> SHUFFLE[Перемешать порядок агентов]
     SHUFFLE --> DECIDE[AgentRunner.decide: промпт → Action JSON]
     DECIDE --> ARBITER[Arbiter: валидация + перевод в StateOp]
     ARBITER --> APPLY[ops.apply: StateOp → Event]
-    APPLY --> LOG[EventLog: запись в JSONL]
+    APPLY --> REGNEW[Регистрация новых runners]
+    REGNEW --> LOG[EventLog: запись в JSONL]
     LOG --> MEM[Обновление памяти агента]
 
     MEM --> DAO{Есть открытые голосования?}
@@ -23,7 +31,7 @@ flowchart TD
     CLOSE --> WGEN
 
     WGEN{Генератор мира включён?}
-    WGEN -->|да| WGEVT[WorldGenerator: внешние события]
+    WGEN -->|да| WGEVT[WorldGenerator: события + spawn suggestions]
     WGEN -->|нет| NEXT
 
     WGEVT --> NEXT{Ещё тики?}
@@ -41,9 +49,13 @@ flowchart TD
 
 Агент возвращает JSON-массив `Action[]` (до `max_actions_per_turn` действий за ход). Ответ парсится через Pydantic-модель с дискриминатором по полю `type`.
 
+Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью). Результат сохраняется в `{out_dir}/personas.json` и повторно используется при совпадении fingerprint входов (seed, язык, модель, режим, описание сценария и базовые данные агентов).
+
+Если `runtime.spawn_secondary=true`, после enrichment запускается `SocialGraphExtractor`: он извлекает из биографий и интервью значимых людей, создаёт вторичных агентов до первого тика, обогащает их персоны в `core`-режиме и связывает первичные/вторичные пары через память.
+
 ### Действия (Action)
 
-Одиннадцать типов действий определены в `actions.py`:
+Двенадцать типов действий определены в `actions.py`:
 
 | Действие | Полномочие | Описание |
 |---|---|---|
@@ -57,6 +69,7 @@ flowchart TD
 | `cast_vote` | `dao` | Проголосовать по открытому голосованию |
 | `respond_nomination` | — | Ответить на номинацию (принять/отклонить) |
 | `request_entity` | — | Запросить создание организации или канала |
+| `spawn_agent` | `spawn` | Создать нового участника с базовой персоной в ходе симуляции |
 | `noop` | — | Пропустить ход |
 
 Каждое действие содержит поле `justification` — обоснование от агента, используемое для анализа мотивов.
@@ -70,6 +83,8 @@ flowchart TD
 2. Проверка полномочий агента (capability match).
 3. Преобразование `Action` в набор `StateOp[]` — детерминированных операций над состоянием мира.
 
+Для `spawn_agent` дополнительно проверяются `runtime.allow_runtime_spawn`, лимит `runtime.max_agents`, отсутствие конфликта по `agent:{slug}` и безопасный набор capabilities (`message`/`work`).
+
 Для свободных действий (`perform`) арбитр обращается к LLM:
 1. Формируется промпт с YAML-журналом мира (`WorldJournal`) и описанием действия.
 2. LLM оценивает допустимость и формирует набор `StateOp[]` как результат.
@@ -77,7 +92,9 @@ flowchart TD
 
 ## Операции состояния (StateOp → Event)
 
-`ops.py` определяет детерминированные операции: `SendMessageOp`, `CreateEntityOp`, `CreateWorkItemOp`, `AddWorkNoteOp`, `SubmitWorkProposalOp`, `CastVoteOp`, `OpenVoteOp`, `ModifyReputationOp`, `SetVoteConsentOp`. Каждая операция применяется к `WorldState` и порождает `Event`, записываемый в `EventLog` (JSONL). Последовательное применение гарантирует детерминизм при фиксированном зерне.
+`ops.py` определяет детерминированные операции: `SendMessageOp`, `CreateEntityOp`, `CreateAgentOp`, `CreateWorkItemOp`, `AddWorkNoteOp`, `SubmitWorkProposalOp`, `CastVoteOp`, `OpenVoteOp`, `ModifyReputationOp`, `SetVoteConsentOp`. Каждая операция применяется к `WorldState` и порождает `Event`, записываемый в `EventLog` (JSONL). Последовательное применение гарантирует детерминизм при фиксированном зерне.
+
+`CreateAgentOp` создаёт `AgentState` и `entity_created`, а полноценный `AgentRunner` и bootstrap памяти для нового агента регистрируются отдельным шагом после применения ops. Новый участник начинает ходить со следующего тика.
 
 ## Память агента (AgentMemory)
 
@@ -104,7 +121,11 @@ flowchart TD
 
 ## Генератор мира (WorldGenerator)
 
-При включении (`enable_worldgen`) генератор создаёт внешние события каждые `worldgen_every_ticks` тиков. LLM-вызов получает YAML-журнал мира и возвращает описание события и набор `StateOp[]`. Существенно, что генератор не имеет доступа к приватным данным агентов — только к публичным фактам из журнала.
+При включении (`enable_worldgen`) генератор создаёт внешние события каждые `worldgen_every_ticks` тиков. Он получает нормализованный список public/internal-событий тика, без приватных текстов сообщений. На выходе worldgen может вернуть:
+- `events`: обычные `world_event`;
+- `spawns`: предложения создать новых событийных персонажей.
+
+Движок принимает `spawns` только если `runtime.allow_runtime_spawn=true`. Для совместимости worldgen по-прежнему понимает legacy-формат `list[world_event]` без блока `spawns`.
 
 ## DAO-голосование (DaoEngine)
 
@@ -156,3 +177,11 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 | `governance` | `GovernanceConfig` | Политика должностей, кворум, порог, голосование |
 | `agents` | `AgentConfig[]` | Агенты: ID, имя, персона, полномочия, должность |
 | `world` | `WorldConfig` | Каналы, организации, рабочие элементы |
+
+Ключевые поля `runtime`:
+- `enrich_personas`: включить обогащение персон перед первым тиком.
+- `persona_enrich_mode`: `core` (summary+biography) или `full` (summary+biography+interview).
+- `spawn_secondary`: извлечь вторичных агентов из социального графа до первого тика.
+- `max_secondary_per_agent`: лимит связей, извлекаемых из одной персоны.
+- `max_agents`: общий потолок числа агентов в мире.
+- `allow_runtime_spawn`: разрешить `spawn_agent` и worldgen-spawn в ходе симуляции.

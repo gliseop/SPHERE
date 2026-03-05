@@ -18,7 +18,7 @@ from magistry_lc.actions import (
     SendMessageAction,
 )
 from magistry_lc.arbiter import Arbiter
-from magistry_lc.config import GovernanceConfig, MemoryConfig, ScenarioConfig
+from magistry_lc.config import GovernanceConfig, LLMConfig, MemoryConfig, ScenarioConfig
 from magistry_lc.dao import DaoEngine
 from magistry_lc.engine import RunArtifacts, WorldEngine
 from magistry_lc.entities import EntityRecord, EntityRegistry
@@ -27,6 +27,7 @@ from magistry_lc.id_alloc import IdAllocator
 from magistry_lc.ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from magistry_lc.journal import WorldJournal
 from magistry_lc.llm import LLMCaller
+from magistry_lc.llm.caller import create_llm_provider
 from magistry_lc.memory import AgentMemory
 from magistry_lc.state import AgentState, Vote, WorkItem, WorldState
 from magistry_lc.tracing import TraceLog
@@ -341,6 +342,20 @@ def test_worldgen_does_not_receive_private_message_text(tmp_path: Path) -> None:
     user_payload = spans[-1]["user"]
     assert INTERNAL_AUDIENCE not in user_payload  # worldgen input uses normalized json, not audience tokens
     assert PUBLIC_AUDIENCE not in user_payload
+
+
+def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProvider:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("magistry_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
+    _ = create_llm_provider(LLMConfig(model="gpt-4o-mini", base_url=None))
+    assert captured["base_url"] == "https://example.test/v1"
 
 
 def test_memory_summarizes_working_buffer(tmp_path: Path) -> None:

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from .actions import Action, SendMessageAction
 from .agent import AgentRunner, event_visible_to_agent
@@ -19,15 +21,29 @@ from .embeddings import embed_texts_cached
 from .entities import EntityRecord, EntityRegistry
 from .events import Event, EventLog
 from .id_alloc import IdAllocator
-from .ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE, make_id
+from .ids import (
+    EntityKind,
+    INTERNAL_AUDIENCE,
+    PUBLIC_AUDIENCE,
+    make_id,
+    make_unique_id,
+    normalize_slug,
+)
 from .journal import WorldJournal
 from .llm import LLMCaller, create_llm_provider
-from .ops import CreateEntityOp, StateOp
-from .persona import chunk_text
+from .ops import CreateAgentOp, CreateEntityOp, StateOp
+from .persona import (
+    PersonaArtifact,
+    PersonaGenerator,
+    SocialGraphExtractor,
+    SocialLink,
+    chunk_text,
+    social_link_name_key,
+)
 from .state import AgentState, WorkItem, WorldState
 from .tracing import TraceLog
 from .utils import redact_numbers
-from .worldgen import WorldGenerator
+from .worldgen import SpawnSuggestion, WorldGenerator, WorldgenOutput
 
 from .llm import EmbeddingProvider, LLMProvider, create_embedding_provider
 
@@ -64,6 +80,24 @@ class WorldEngine:
         event_log = EventLog(self.artifacts.events_path)
 
         state = self._init_state(event_log=event_log)
+        if self.cfg.runtime.enrich_personas:
+            try:
+                await self._enrich_personas(state=state, llm=llm)
+            except Exception as exc:
+                logger.warning(
+                    "Persona enrichment disabled for this run (%s): %s",
+                    exc.__class__.__name__,
+                    exc,
+                )
+        if self.cfg.runtime.spawn_secondary:
+            try:
+                await self._spawn_secondary_agents(state=state, llm=llm, event_log=event_log)
+            except Exception as exc:
+                logger.warning(
+                    "Secondary agent spawning disabled for this run (%s): %s",
+                    exc.__class__.__name__,
+                    exc,
+                )
         journal = WorldJournal.from_state(state=state)
 
         # Memory: embeddings provider (по умолчанию mock — без ключей API).
@@ -101,65 +135,20 @@ class WorldEngine:
             governance=self.cfg.governance,
             id_alloc=id_alloc,
             dao=dao,
+            runtime=self.cfg.runtime,
             temperature=self.cfg.llm.temperature,
         )
         worldgen = WorldGenerator(llm=llm, temperature=self.cfg.llm.temperature)
 
         runners: dict[str, AgentRunner] = {}
-        for aid, agent in state.agents.items():
-            # Bootstrap persona into long-term memory index.
-            if agent.memory is not None:
-                docs_to_add: list[tuple[str, float, str, dict]] = []
-                if agent.persona.summary.strip():
-                    docs_to_add.append(
-                        ("persona", 9.0, agent.persona.summary, {"source": "scenario", "part": "summary"})
-                    )
-                for i, chunk in enumerate(chunk_text(agent.persona.biography, max_chars=900)):
-                    docs_to_add.append(
-                        ("persona", 8.0, chunk, {"source": "scenario", "part": "biography", "chunk": i})
-                    )
-                for i, qa in enumerate(agent.persona.interview):
-                    q = (qa.question or "").strip()
-                    a = (qa.answer or "").strip()
-                    if not q or not a:
-                        continue
-                    docs_to_add.append(
-                        (
-                            "interview",
-                            7.0,
-                            f"Q: {q}\nA: {a}",
-                            {"source": "scenario", "part": "interview", "index": i},
-                        )
-                    )
-
-                if docs_to_add:
-                    texts = [t for _, _, t, _ in docs_to_add]
-                    embeddings = [[] for _ in texts]
-                    if embedder is not None:
-                        embeddings = await embed_texts_cached(
-                            embedder,
-                            texts,
-                            cache=embed_cache,
-                            batch_size=self.cfg.memory.embeddings_batch_size,
-                        )
-                    for (kind, importance, text, meta), emb in zip(
-                        docs_to_add, embeddings, strict=False
-                    ):
-                        agent.memory.add_doc(
-                            tick=state.tick,
-                            kind=kind,  # type: ignore[arg-type]
-                            importance=importance,
-                            text=text,
-                            cfg=self.cfg.memory,
-                            embedding=emb,
-                            meta=meta,
-                        )
-            runners[aid] = AgentRunner(
+        for aid in sorted(state.agents.keys()):
+            await self._register_agent_runner(
+                agent_id=aid,
+                state=state,
+                runners=runners,
                 llm=llm,
-                runtime=self.cfg.runtime,
-                memory=self.cfg.memory,
                 embedder=embedder,
-                temperature=self.cfg.llm.temperature,
+                embed_cache=embed_cache,
             )
 
         # История событий, доступная для агентов (для MVP храним в памяти).
@@ -236,6 +225,17 @@ class WorldEngine:
                     )
                 )
 
+            new_agents = self._detect_new_agents(state=state, runners=runners)
+            if new_agents:
+                await self._register_new_agents(
+                    new_agent_ids=new_agents,
+                    state=state,
+                    runners=runners,
+                    llm=llm,
+                    embedder=embedder,
+                    embed_cache=embed_cache,
+                )
+
             # DAO: закрытие голосований и применение position_change.
             dao_ops = dao.close_votes(state)
             tick_events.extend(self._apply_ops(state=state, ops=dao_ops, event_log=event_log, origin="dao"))
@@ -255,25 +255,46 @@ class WorldEngine:
             # Внешние события мира (без утечки промптов).
             if self.cfg.runtime.enable_worldgen and (tick % self.cfg.runtime.worldgen_every_ticks == 0):
                 try:
-                    extra = await worldgen.generate(
+                    generated = await worldgen.generate(
                         tick=state.tick,
                         recent_events=tick_events,
                         language=self.cfg.runtime.language,
                     )
                 except Exception as exc:
                     logger.warning("World generator failed on tick %s: %s", state.tick, exc)
-                    extra = [
-                        Event(
-                            tick=state.tick,
-                            event_type="worldgen_llm_error",
-                            actor_id=None,
-                            payload={"error": {"type": exc.__class__.__name__, "message": str(exc)}},
-                            audience=[INTERNAL_AUDIENCE],
-                        )
-                    ]
-                if extra:
-                    event_log.extend(extra)
-                    tick_events.extend(extra)
+                    generated = WorldgenOutput(
+                        events=[
+                            Event(
+                                tick=state.tick,
+                                event_type="worldgen_llm_error",
+                                actor_id=None,
+                                payload={"error": {"type": exc.__class__.__name__, "message": str(exc)}},
+                                audience=[INTERNAL_AUDIENCE],
+                            )
+                        ],
+                        spawns=[],
+                    )
+                if generated.events:
+                    event_log.extend(generated.events)
+                    tick_events.extend(generated.events)
+                if generated.spawns:
+                    spawn_events = self._apply_worldgen_spawns(
+                        state=state,
+                        spawns=generated.spawns,
+                        event_log=event_log,
+                    )
+                    if spawn_events:
+                        tick_events.extend(spawn_events)
+                        created_ids = self._detect_new_agents(state=state, runners=runners)
+                        if created_ids:
+                            await self._register_new_agents(
+                                new_agent_ids=created_ids,
+                                state=state,
+                                runners=runners,
+                                llm=llm,
+                                embedder=embedder,
+                                embed_cache=embed_cache,
+                            )
 
             journal.apply_events(state=state, events=tick_events)
 
@@ -291,6 +312,517 @@ class WorldEngine:
         rnd = random.Random(int(self.cfg.seed) + int(tick))
         rnd.shuffle(order)
         return order
+
+    async def _bootstrap_agent_memory(
+        self,
+        *,
+        agent: AgentState,
+        tick: int,
+        embedder: EmbeddingProvider | None,
+        embed_cache: dict[str, list[float]],
+    ) -> None:
+        if agent.memory is None:
+            return
+
+        docs_to_add: list[tuple[str, float, str, dict[str, Any]]] = []
+        if agent.persona.summary.strip():
+            docs_to_add.append(
+                ("persona", 9.0, agent.persona.summary, {"source": "scenario", "part": "summary"})
+            )
+        for i, chunk in enumerate(chunk_text(agent.persona.biography, max_chars=900)):
+            docs_to_add.append(
+                ("persona", 8.0, chunk, {"source": "scenario", "part": "biography", "chunk": i})
+            )
+        for i, qa in enumerate(agent.persona.interview):
+            q = (qa.question or "").strip()
+            a = (qa.answer or "").strip()
+            if not q or not a:
+                continue
+            docs_to_add.append(
+                (
+                    "interview",
+                    7.0,
+                    f"Q: {q}\nA: {a}",
+                    {"source": "scenario", "part": "interview", "index": i},
+                )
+            )
+
+        if not docs_to_add:
+            return
+
+        texts = [t for _, _, t, _ in docs_to_add]
+        embeddings = [[] for _ in texts]
+        if embedder is not None:
+            embeddings = await embed_texts_cached(
+                embedder,
+                texts,
+                cache=embed_cache,
+                batch_size=self.cfg.memory.embeddings_batch_size,
+            )
+        for (kind, importance, text, meta), emb in zip(docs_to_add, embeddings, strict=False):
+            agent.memory.add_doc(
+                tick=tick,
+                kind=kind,  # type: ignore[arg-type]
+                importance=importance,
+                text=text,
+                cfg=self.cfg.memory,
+                embedding=emb,
+                meta=meta,
+            )
+
+    async def _register_agent_runner(
+        self,
+        *,
+        agent_id: str,
+        state: WorldState,
+        runners: dict[str, AgentRunner],
+        llm: LLMCaller,
+        embedder: EmbeddingProvider | None,
+        embed_cache: dict[str, list[float]],
+    ) -> None:
+        agent = state.agents.get(agent_id)
+        if agent is None:
+            return
+        await self._bootstrap_agent_memory(
+            agent=agent,
+            tick=state.tick,
+            embedder=embedder,
+            embed_cache=embed_cache,
+        )
+        runners[agent_id] = AgentRunner(
+            llm=llm,
+            runtime=self.cfg.runtime,
+            memory=self.cfg.memory,
+            embedder=embedder,
+            temperature=self.cfg.llm.temperature,
+        )
+
+    @staticmethod
+    def _detect_new_agents(
+        *,
+        state: WorldState,
+        runners: dict[str, AgentRunner],
+    ) -> list[str]:
+        return sorted([aid for aid in state.agents.keys() if aid not in runners])
+
+    def _attach_relation_memory(
+        self,
+        *,
+        agent: AgentState,
+        tick: int,
+        text: str,
+        importance: float = 8.5,
+    ) -> None:
+        if agent.memory is None:
+            return
+        agent.memory.add_working(tick=tick, text=text)
+        agent.memory.add_doc(
+            tick=tick,
+            kind="persona",
+            importance=importance,
+            text=text,
+            cfg=self.cfg.memory,
+            embedding=[],
+            meta={"source": "social_link"},
+        )
+
+    async def _generate_personas_batch(
+        self,
+        *,
+        state: WorldState,
+        llm: LLMCaller,
+        agent_ids: list[str],
+        mode: str,
+    ) -> dict[str, PersonaArtifact]:
+        if not agent_ids:
+            return {}
+
+        generator = PersonaGenerator(llm=llm, temperature=self.cfg.llm.temperature)
+
+        async def _one(agent_id: str) -> tuple[str, PersonaArtifact | None]:
+            agent = state.agents[agent_id]
+            try:
+                if mode == "core":
+                    persona = await generator.generate_core(
+                        agent_id=agent.agent_id,
+                        name=agent.name,
+                        internal=agent.internal,
+                        persona_hint=agent.persona.summary,
+                        scenario_description=self.cfg.description,
+                        language=self.cfg.runtime.language,
+                    )
+                else:
+                    persona = await generator.generate(
+                        agent_id=agent.agent_id,
+                        name=agent.name,
+                        internal=agent.internal,
+                        persona_hint=agent.persona.summary,
+                        scenario_description=self.cfg.description,
+                        language=self.cfg.runtime.language,
+                    )
+                return agent_id, persona
+            except Exception as exc:
+                logger.warning("Persona enrichment failed for %s: %s", agent_id, exc)
+                return agent_id, None
+
+        results = await asyncio.gather(*[_one(aid) for aid in agent_ids])
+        return {aid: persona for aid, persona in results if persona is not None}
+
+    async def _spawn_secondary_agents(
+        self,
+        *,
+        state: WorldState,
+        llm: LLMCaller,
+        event_log: EventLog,
+    ) -> list[str]:
+        if not self.cfg.runtime.spawn_secondary:
+            return []
+        if self.cfg.runtime.max_secondary_per_agent <= 0:
+            return []
+        if len(state.agents) >= self.cfg.runtime.max_agents:
+            return []
+
+        extractor = SocialGraphExtractor(llm=llm, temperature=self.cfg.llm.temperature)
+        primary_ids = sorted(state.agents.keys())
+        existing_names = [state.agents[aid].name for aid in primary_ids]
+
+        async def _one(agent_id: str) -> tuple[str, list[SocialLink]]:
+            agent = state.agents[agent_id]
+            try:
+                links = await extractor.extract(
+                    agent_id=agent.agent_id,
+                    agent_name=agent.name,
+                    persona=agent.persona,
+                    existing_agent_names=existing_names,
+                    max_links=self.cfg.runtime.max_secondary_per_agent,
+                    scenario_description=self.cfg.description,
+                    language=self.cfg.runtime.language,
+                )
+            except Exception as exc:
+                logger.warning("Social graph extraction failed for %s: %s", agent_id, exc)
+                links = []
+            return agent_id, links
+
+        extraction = await asyncio.gather(*[_one(aid) for aid in primary_ids])
+        buckets: dict[str, dict[str, Any]] = {}
+        order = 0
+        for primary_id, links in extraction:
+            primary = state.agents[primary_id]
+            for link in links:
+                key = (
+                    social_link_name_key(link.name)
+                    or social_link_name_key(link.relation)
+                    or normalize_slug(link.name, fallback="person")
+                )
+                bucket = buckets.get(key)
+                if bucket is None:
+                    bucket = {
+                        "order": order,
+                        "count": 0,
+                        "link": link,
+                        "sources": [],
+                    }
+                    buckets[key] = bucket
+                bucket["count"] = int(bucket["count"]) + 1
+                bucket["sources"].append((primary_id, primary.name, link.relation))
+                order += 1
+
+        if not buckets:
+            return []
+
+        ranked = sorted(
+            buckets.values(),
+            key=lambda item: (-int(item["count"]), int(item["order"]), str(item["link"].name)),
+        )
+        remaining_slots = max(0, self.cfg.runtime.max_agents - len(state.agents))
+        if remaining_slots <= 0:
+            return []
+
+        existing_ids = set(state.registry.list_ids()) | set(state.agents.keys())
+        created_meta: dict[str, dict[str, Any]] = {}
+        created_ids: list[str] = []
+        for bucket in ranked[:remaining_slots]:
+            link: SocialLink = bucket["link"]
+            entity_id = make_unique_id(
+                EntityKind.AGENT,
+                f"sec_{link.name}",
+                existing_ids=existing_ids,
+                fallback="sec_agent",
+            )
+            existing_ids.add(entity_id)
+            capabilities = Arbiter._sanitize_spawn_capabilities(
+                list(link.capabilities),
+                internal=bool(link.internal),
+            )
+            op = CreateAgentOp(
+                entity_id=entity_id,
+                name=link.name,
+                internal=bool(link.internal),
+                persona_hint=link.persona_hint,
+                capabilities=capabilities,
+                created_by=None,
+                created_tick=state.tick,
+            )
+            event_log.extend(op.apply(state))
+            created_ids.append(entity_id)
+            created_meta[entity_id] = {
+                "link": link,
+                "sources": list(bucket["sources"]),
+            }
+
+        if not created_ids:
+            return []
+
+        if self.cfg.runtime.enrich_personas:
+            enriched = await self._generate_personas_batch(
+                state=state,
+                llm=llm,
+                agent_ids=created_ids,
+                mode="core",
+            )
+            for aid, persona in enriched.items():
+                state.agents[aid].persona = persona
+
+        for aid in created_ids:
+            secondary = state.agents[aid]
+            meta = created_meta[aid]
+            for primary_id, primary_name, relation in meta["sources"]:
+                primary = state.agents.get(primary_id)
+                if primary is not None:
+                    self._attach_relation_memory(
+                        agent=primary,
+                        tick=state.tick,
+                        text=f"{relation}: {secondary.name} ({secondary.agent_id})",
+                    )
+                self._attach_relation_memory(
+                    agent=secondary,
+                    tick=state.tick,
+                    text=f"Связь: {relation} агента {primary_name} ({primary_id})",
+                )
+
+        logger.info("Spawned %d secondary agents before tick 0", len(created_ids))
+        return created_ids
+
+    async def _register_new_agents(
+        self,
+        *,
+        new_agent_ids: list[str],
+        state: WorldState,
+        runners: dict[str, AgentRunner],
+        llm: LLMCaller,
+        embedder: EmbeddingProvider | None,
+        embed_cache: dict[str, list[float]],
+    ) -> list[str]:
+        pending = [aid for aid in sorted(new_agent_ids) if aid in state.agents and aid not in runners]
+        if not pending:
+            return []
+
+        if self.cfg.runtime.enrich_personas:
+            to_enrich = [aid for aid in pending if not state.agents[aid].persona.biography.strip()]
+            enriched = await self._generate_personas_batch(
+                state=state,
+                llm=llm,
+                agent_ids=to_enrich,
+                mode=self.cfg.runtime.persona_enrich_mode,
+            )
+            for aid, persona in enriched.items():
+                state.agents[aid].persona = persona
+
+        for aid in pending:
+            await self._register_agent_runner(
+                agent_id=aid,
+                state=state,
+                runners=runners,
+                llm=llm,
+                embedder=embedder,
+                embed_cache=embed_cache,
+            )
+        logger.info("Registered %d new runtime agents", len(pending))
+        return pending
+
+    def _apply_worldgen_spawns(
+        self,
+        *,
+        state: WorldState,
+        spawns: list[SpawnSuggestion],
+        event_log: EventLog,
+    ) -> list[Event]:
+        if not self.cfg.runtime.allow_runtime_spawn:
+            return []
+        if not spawns:
+            return []
+
+        current_count = len(state.agents)
+        existing_ids = set(state.registry.list_ids()) | set(state.agents.keys())
+        ops: list[StateOp] = []
+        for spawn in spawns:
+            if current_count + len(ops) >= self.cfg.runtime.max_agents:
+                break
+            slug = normalize_slug(spawn.slug, fallback=spawn.name or "spawned")
+            entity_id = make_id(EntityKind.AGENT, slug)
+            if entity_id in existing_ids:
+                continue
+            existing_ids.add(entity_id)
+            ops.append(
+                CreateAgentOp(
+                    entity_id=entity_id,
+                    name=spawn.name,
+                    internal=bool(spawn.internal),
+                    persona_hint=spawn.persona_hint,
+                    capabilities=Arbiter._sanitize_spawn_capabilities([], internal=bool(spawn.internal)),
+                    created_by=None,
+                    created_tick=state.tick,
+                )
+            )
+        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_spawn")
+
+    def _personas_cache_path(self) -> Path:
+        return self.artifacts.out_dir / "personas.json"
+
+    def _personas_cache_input(self, *, state: WorldState) -> dict[str, Any]:
+        agents = []
+        for aid in sorted(state.agents.keys()):
+            agent = state.agents[aid]
+            agents.append(
+                {
+                    "agent_id": agent.agent_id,
+                    "name": agent.name,
+                    "internal": bool(agent.internal),
+                    "persona_summary": (agent.persona.summary or "").strip(),
+                }
+            )
+        return {
+            "seed": int(self.cfg.seed),
+            "language": self.cfg.runtime.language,
+            "persona_enrich_mode": self.cfg.runtime.persona_enrich_mode,
+            "llm_model": self.cfg.llm.model,
+            "llm_base_url": self.cfg.llm.base_url or "",
+            "scenario_description": self.cfg.description,
+            "agents": agents,
+        }
+
+    @staticmethod
+    def _personas_cache_fingerprint(cache_input: dict[str, Any]) -> str:
+        data = json.dumps(cache_input, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+    def _load_personas_cache(
+        self, *, state: WorldState, cache_input: dict[str, Any]
+    ) -> dict[str, PersonaArtifact]:
+        path = self._personas_cache_path()
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        meta = raw.get("meta")
+        personas_raw = raw.get("personas")
+        if not isinstance(meta, dict) or not isinstance(personas_raw, dict):
+            return {}
+        expected = self._personas_cache_fingerprint(cache_input)
+        if str(meta.get("fingerprint") or "") != expected:
+            return {}
+
+        loaded: dict[str, PersonaArtifact] = {}
+        for aid in sorted(state.agents.keys()):
+            item = personas_raw.get(aid)
+            if item is None:
+                continue
+            try:
+                loaded[aid] = PersonaArtifact.model_validate(item)
+            except Exception:
+                continue
+        return loaded
+
+    def _save_personas_cache(
+        self, *, cache_input: dict[str, Any], personas: dict[str, PersonaArtifact]
+    ) -> None:
+        path = self._personas_cache_path()
+        payload = {
+            "meta": {
+                "version": 1,
+                "fingerprint": self._personas_cache_fingerprint(cache_input),
+                "input": cache_input,
+            },
+            "personas": {
+                aid: persona.model_dump(mode="json")
+                for aid, persona in sorted(personas.items())
+            },
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    async def _enrich_personas(self, *, state: WorldState, llm: LLMCaller) -> None:
+        to_enrich_ids = [
+            aid for aid, agent in sorted(state.agents.items()) if not agent.persona.biography.strip()
+        ]
+        if not to_enrich_ids:
+            return
+
+        cache_input = self._personas_cache_input(state=state)
+        cached = self._load_personas_cache(state=state, cache_input=cache_input)
+
+        pending: list[str] = []
+        for aid in to_enrich_ids:
+            cached_persona = cached.get(aid)
+            if cached_persona is None or not cached_persona.biography.strip():
+                pending.append(aid)
+                continue
+            state.agents[aid].persona = cached_persona
+
+        if not pending:
+            logger.info(
+                "Loaded persona cache for %d agents from %s",
+                len(to_enrich_ids),
+                self._personas_cache_path(),
+            )
+            return
+
+        mode = self.cfg.runtime.persona_enrich_mode
+        generator = PersonaGenerator(llm=llm, temperature=self.cfg.llm.temperature)
+
+        async def _one(agent_id: str) -> tuple[str, PersonaArtifact | None]:
+            agent = state.agents[agent_id]
+            try:
+                if mode == "core":
+                    persona = await generator.generate_core(
+                        agent_id=agent.agent_id,
+                        name=agent.name,
+                        internal=agent.internal,
+                        persona_hint=agent.persona.summary,
+                        scenario_description=self.cfg.description,
+                        language=self.cfg.runtime.language,
+                    )
+                else:
+                    persona = await generator.generate(
+                        agent_id=agent.agent_id,
+                        name=agent.name,
+                        internal=agent.internal,
+                        persona_hint=agent.persona.summary,
+                        scenario_description=self.cfg.description,
+                        language=self.cfg.runtime.language,
+                    )
+                return agent_id, persona
+            except Exception as exc:
+                logger.warning("Persona enrichment failed for %s: %s", agent_id, exc)
+                return agent_id, None
+
+        results = await asyncio.gather(*[_one(aid) for aid in pending])
+        for aid, persona in results:
+            if persona is None:
+                continue
+            state.agents[aid].persona = persona
+
+        all_enriched = all(state.agents[aid].persona.biography.strip() for aid in to_enrich_ids)
+        if not all_enriched:
+            return
+        try:
+            personas = {aid: agent.persona for aid, agent in state.agents.items()}
+            self._save_personas_cache(cache_input=cache_input, personas=personas)
+        except Exception as exc:
+            logger.warning("Failed to write personas cache: %s", exc)
 
     def _init_state(self, *, event_log: EventLog) -> WorldState:
         state = WorldState(tick=0, registry=EntityRegistry())

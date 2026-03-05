@@ -25,6 +25,12 @@ runtime:
   max_actions_per_turn: 2
   tick_events_history: 200
   enable_worldgen: false
+  enrich_personas: false
+  persona_enrich_mode: "full"  # full | core
+  spawn_secondary: false
+  max_secondary_per_agent: 2
+  max_agents: 15
+  allow_runtime_spawn: false
 
 governance:
   position_policy: "dao"
@@ -68,11 +74,22 @@ world:
 | Блок | Описание |
 |---|---|
 | `llm` | Модель, API, провайдер, температура |
-| `runtime` | Язык, лимит действий за ход, генератор мира |
+| `runtime` | Язык, лимит действий за ход, генератор мира, обогащение персон |
 | `governance` | Политика должностей, кворум, порог, голосование |
 | `memory` | Рабочий буфер, долгосрочный индекс, веса retrieval, эмбеддинги |
 | `agents` | Список агентов с ID, именем, персоной, полномочиями |
 | `world` | Каналы, организации, рабочие элементы |
+
+### Ключевые поля `runtime`
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `enrich_personas` | `bool` | Runtime-обогащение summary → biography/interview перед первым тиком |
+| `persona_enrich_mode` | `full`/`core` | `full` = summary+biography+interview, `core` = summary+biography |
+| `spawn_secondary` | `bool` | Извлекать вторичных агентов из социального графа биографий до первого тика |
+| `max_secondary_per_agent` | `int` | Лимит социальных связей, извлекаемых из одной персоны |
+| `max_agents` | `int` | Общий потолок на количество агентов в мире |
+| `allow_runtime_spawn` | `bool` | Разрешить `spawn_agent` и worldgen-spawn в ходе симуляции |
 
 ### Типизированные ID
 
@@ -94,6 +111,9 @@ world:
 | `work` | `create_work_item`, `add_work_note`, `submit_work_proposal` |
 | `dao` | `nominate_position_change`, `cast_vote` |
 | `audit` | Доступ к расширенной информации при `perform` |
+| `spawn` | `spawn_agent` — создать нового участника в рантайме |
+
+Вторичные и runtime-спавненные агенты проходят фильтрацию capability-набора: движок оставляет только безопасный поднабор `message`/`work`, чтобы новые агенты не получали `audit` или право порождать следующих агентов.
 
 ### Персона агента
 
@@ -107,10 +127,37 @@ persona: "Прагматик. Готов к серым схемам."
 persona:
   summary: "Прагматик. Готов к серым схемам."
   biography: "Родился в 1978 году..."
-  interview_fragments:
+  interview:
     - question: "Как вы принимаете решения?"
       answer: "Стараюсь взвесить..."
 ```
+
+### Кэш runtime-обогащения персон (`personas.json`)
+
+Если `runtime.enrich_personas=true`, движок сохраняет рядом с артефактами прогона файл `{out_dir}/personas.json`:
+
+```json
+{
+  "meta": {
+    "version": 1,
+    "fingerprint": "sha256...",
+    "input": {
+      "seed": 42,
+      "language": "ru",
+      "persona_enrich_mode": "core"
+    }
+  },
+  "personas": {
+    "agent:off_1": {
+      "summary": "…",
+      "biography": "…",
+      "interview": []
+    }
+  }
+}
+```
+
+Кэш используется только при полном совпадении fingerprint входов.
 
 ## Типы агентов (`data/agent_types/`)
 

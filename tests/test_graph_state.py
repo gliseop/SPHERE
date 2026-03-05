@@ -43,6 +43,23 @@ def test_graph_state_caps_thread_strength_per_thread_id():
     assert graph["edges"][0]["strength"] == 1.0
 
 
+def test_graph_state_adds_node_from_entity_created_agent_event():
+    graph = build_graph_state(
+        [
+            {
+                "event_type": "entity_created",
+                "payload": {
+                    "entity_id": "agent:sec_wife",
+                    "kind": "agent",
+                    "meta": {"name": "Волкова Н.И."},
+                },
+            }
+        ]
+    )
+    assert {n["id"] for n in graph["nodes"]} == {"agent:sec_wife"}
+    assert graph["nodes"][0]["name"] == "Волкова Н.И."
+
+
 def test_graph_state_sums_across_threads():
     # Two different threads can each contribute up to 1.0.
     events = []
@@ -63,4 +80,3 @@ def test_graph_state_sums_across_threads():
     graph = build_graph_state(events)
     assert len(graph["edges"]) == 1
     assert graph["edges"][0]["strength"] == 2.0
-

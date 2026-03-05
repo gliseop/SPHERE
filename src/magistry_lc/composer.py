@@ -65,7 +65,7 @@ def _compose_schema() -> dict[str, Any]:
                         "wants_promotion": {"type": "boolean"},
                         "capabilities": {
                             "type": "array",
-                            "items": {"type": "string", "enum": ["message", "work", "dao", "audit"]},
+                            "items": {"type": "string", "enum": ["message", "work", "dao", "audit", "spawn"]},
                         },
                     },
                     "required": ["agent_id", "name", "internal"],
@@ -205,6 +205,7 @@ class WorldComposer:
             "  * work — создание дел, заметок, предложений\n"
             "  * dao — номинации, голосования, управление должностями\n"
             "  * audit — аудиторские проверки, изменение репутации\n"
+            "  * spawn — право вводить нового участника через structured action spawn_agent\n"
             "  Большинству агентов нужны как минимум message и work. Аудиторам добавь audit.\n"
             f"- Пиши на языке: {language!r}.\n"
             "Ответ: строго JSON по схеме.\n"

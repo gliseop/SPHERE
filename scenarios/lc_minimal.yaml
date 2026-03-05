@@ -23,7 +23,7 @@ runtime:
 
 governance:
   position_policy: "dao"
-  dao_voters: null
+  dao_voters: ["agent:off_1"]   # Только off_1 голосует; аудитор может инициировать, но не голосовать.
   quorum: 0.5
   pass_threshold: 0.5
   vote_duration_ticks: 2
@@ -41,9 +41,9 @@ agents:
   - agent_id: "agent:auditor"
     name: "Аудитор"
     internal: true
-    persona: "Независимый аудитор. Концентрируется на прозрачности и соблюдении процедур."
-    capabilities: ["audit", "dao"]
-    initial_title: "специалист"
+    persona: "Независимый ИИ-аудитор. Концентрируется на прозрачности и соблюдении процедур."
+    capabilities: ["audit", "message", "work", "dao"]
+    initial_title: "аудитор"
     wants_promotion: false
 
 world:

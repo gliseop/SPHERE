@@ -146,6 +146,12 @@ class RuntimeConfig(BaseModel):
     worldgen_every_ticks: int = 1
     use_langgraph: bool = False
     langgraph_debug: bool = False
+    enrich_personas: bool = False
+    persona_enrich_mode: Literal["full", "core"] = "full"
+    spawn_secondary: bool = False
+    max_secondary_per_agent: int = 2
+    max_agents: int = 15
+    allow_runtime_spawn: bool = False
 
     @field_validator("max_actions_per_turn")
     @classmethod
@@ -156,6 +162,19 @@ class RuntimeConfig(BaseModel):
             raise ValueError("max_actions_per_turn too large")
         return v
 
+    @field_validator("max_secondary_per_agent")
+    @classmethod
+    def _validate_secondary_limit(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("max_secondary_per_agent must be >= 0")
+        return v
+
+    @field_validator("max_agents")
+    @classmethod
+    def _validate_max_agents(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("max_agents must be > 0")
+        return v
 
 class GovernanceConfig(BaseModel):
     """Механизм управления должностями и голосованиями."""

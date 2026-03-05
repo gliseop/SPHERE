@@ -27,6 +27,7 @@ class ActionType(StrEnum):
     CAST_VOTE = "cast_vote"
     RESPOND_NOMINATION = "respond_nomination"
     REQUEST_ENTITY = "request_entity"
+    SPAWN_AGENT = "spawn_agent"
     NOOP = "noop"
 
 
@@ -36,6 +37,9 @@ class VoteChoice(StrEnum):
     YES = "yes"
     NO = "no"
     ABSTAIN = "abstain"
+
+
+SPAWN_AGENT_ALLOWED_CAPABILITIES: tuple[str, ...] = ("message", "work")
 
 
 class _BaseAction(BaseModel):
@@ -116,6 +120,15 @@ class RequestEntityAction(_BaseAction):
     description: str = ""
 
 
+class SpawnAgentAction(_BaseAction):
+    type: Literal[ActionType.SPAWN_AGENT]
+    slug: str
+    name: str
+    internal: bool
+    persona_hint: str
+    capabilities: list[str] = Field(default_factory=lambda: ["message", "work"])
+
+
 class NoopAction(_BaseAction):
     type: Literal[ActionType.NOOP]
 
@@ -131,6 +144,7 @@ Action = Annotated[
     | CastVoteAction
     | RespondNominationAction
     | RequestEntityAction
+    | SpawnAgentAction
     | NoopAction,
     Field(discriminator="type"),
 ]
@@ -245,6 +259,17 @@ def actions_json_schema(*, max_actions: int) -> dict[str, Any]:
                 "description": {"type": "string"},
             },
             ["type", "kind", "slug"],
+        ),
+        obj(
+            {
+                "type": {"const": ActionType.SPAWN_AGENT},
+                "slug": {"type": "string"},
+                "name": {"type": "string"},
+                "internal": {"type": "boolean"},
+                "persona_hint": {"type": "string"},
+                "capabilities": {"type": "array", "items": {"type": "string"}},
+            },
+            ["type", "slug", "name", "internal", "persona_hint"],
         ),
         obj({"type": {"const": ActionType.NOOP}}, ["type"]),
     ]

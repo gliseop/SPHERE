@@ -19,7 +19,8 @@ from .ids import (
     is_audience_ref,
     parse_typed_id,
 )
-from .state import Vote, WorkItem, WorldState
+from .persona import PersonaArtifact
+from .state import AgentState, Vote, WorkItem, WorldState
 
 
 class StateOp(Protocol):
@@ -61,6 +62,56 @@ class CreateEntityOp:
                     "kind": self.kind.value,
                     "meta": dict(self.meta),
                 },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class CreateAgentOp:
+    """Создать нового агента в registry и state."""
+
+    entity_id: str
+    name: str
+    internal: bool
+    persona_hint: str
+    capabilities: list[str]
+    created_by: str | None
+    created_tick: int
+
+    def apply(self, state: WorldState) -> list[Event]:
+        ensure_kind(self.entity_id, EntityKind.AGENT)
+        if state.registry.exists(self.entity_id) or self.entity_id in state.agents:
+            raise ValueError(f"Agent already exists: {self.entity_id!r}")
+
+        meta = {
+            "name": self.name,
+            "internal": bool(self.internal),
+            "capabilities": list(self.capabilities),
+        }
+        state.registry.register(
+            EntityRecord(
+                entity_id=self.entity_id,
+                kind=EntityKind.AGENT,
+                created_by=self.created_by,
+                created_tick=self.created_tick,
+                meta=meta,
+            )
+        )
+        state.agents[self.entity_id] = AgentState(
+            agent_id=self.entity_id,
+            name=self.name,
+            internal=bool(self.internal),
+            persona=PersonaArtifact(summary=(self.persona_hint or "").strip()),
+            capabilities=list(self.capabilities),
+            wants_promotion=False,
+        )
+        return [
+            Event(
+                tick=state.tick,
+                event_type="entity_created",
+                actor_id=self.created_by,
+                payload={"entity_id": self.entity_id, "kind": EntityKind.AGENT.value, "meta": meta},
                 audience=[INTERNAL_AUDIENCE],
             )
         ]

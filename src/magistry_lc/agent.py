@@ -98,6 +98,10 @@ class AgentRunner:
             action_types.append("respond_nomination (vote_id, accept: true/false) — принять/отклонить номинацию")
         if "audit" in agent.capabilities:
             action_types.append("add_work_note (work_id, text) — добавить аудиторскую заметку")
+        if "spawn" in agent.capabilities:
+            action_types.append(
+                "spawn_agent (slug, name, internal, persona_hint, capabilities) — ввести нового участника с базовой персоной"
+            )
         action_types.append("perform (description, target_id) — свободное действие (когда нет подходящего типа выше)")
         action_types.append("request_entity (kind: org/chan, slug, description) — запросить создание организации/канала")
         action_types.append("noop — пропустить ход")
@@ -124,6 +128,7 @@ class AgentRunner:
             "- ПРЕДПОЧИТАЙ структурированные действия (send_message, add_work_note и др.) вместо perform\n"
             "- perform используй ТОЛЬКО когда нет подходящего структурированного типа\n"
             "- не выдумывай новые ID; если нужна новая организация/канал — используй request_entity\n"
+            "- если у тебя есть capability spawn, создавай новых агентов только через spawn_agent и с кратким persona_hint\n"
         )
 
     async def _render_memory(
@@ -135,7 +140,9 @@ class AgentRunner:
 
         parts: list[str] = []
         if agent.persona.summary.strip():
-            parts.append("Персона (кратко): " + _truncate(agent.persona.summary, 420))
+            parts.append("Персона (кратко): " + agent.persona.summary.strip())
+        if agent.persona.biography.strip():
+            parts.append("Биография (начало):\n" + _truncate(agent.persona.biography, 600))
 
         if mem.summary.strip():
             parts.append("Сводка (рабочая память):\n" + _truncate(mem.summary, 900))

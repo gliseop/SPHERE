@@ -11,7 +11,7 @@ magistry-lc <подкоманда> [аргументы]
 ### run — запуск симуляции
 
 ```bash
-magistry-lc run --scenario <путь> [--out <директория>] [--ticks <число>]
+magistry-lc run --scenario <путь> [--out <директория>] [--ticks <число>] [--enrich-personas] [--persona-enrich-mode full|core]
 ```
 
 | Аргумент | Тип | По умолчанию | Описание |
@@ -19,6 +19,8 @@ magistry-lc run --scenario <путь> [--out <директория>] [--ticks <�
 | `--scenario` | путь | (обязательный) | Путь к сценарию (.yaml или .json) |
 | `--out` | путь | `lc_results/<timestamp>` | Выходная директория (events.jsonl, trace.jsonl) |
 | `--ticks` | целое | из сценария | Переопределить число тиков |
+| `--enrich-personas` | флаг | `false` | Включить runtime-обогащение персон перед первым тиком |
+| `--persona-enrich-mode` | `full`/`core` | из сценария | Переопределить режим обогащения персон |
 
 ### compose — генерация сценария из описания
 
@@ -65,6 +67,9 @@ magistry-lc run --scenario scenarios/lc_minimal.yaml
 
 # Прогон с указанием выходной директории и числа тиков
 magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/run_50 --ticks 50
+
+# Реалистичный сценарий с enrichment/social graph/worldgen
+magistry-lc run --scenario scenarios/procurement_tender.yaml --out results/procurement_tender_run
 
 # Генерация сценария через LLM
 magistry-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" \
@@ -125,6 +130,7 @@ python -m web.backend.manage_users change-role --username viewer1 --role admin
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
+| `OPENAI_BASE_URL` | — | OpenAI-compatible base URL. Используется для LLM и, если не задано иное, для эмбеддингов |
 | `EMBEDDING_PROVIDER` | — | Не используется (эмбеддинги генерируются через OpenAI-совместимый API) |
 
 ### Веб-сервер

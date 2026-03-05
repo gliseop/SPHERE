@@ -29,15 +29,15 @@ MAGISTRY/
 │   ├── entities.py             # EntityRegistry + EntityRecord (антифантомы)
 │   ├── id_alloc.py             # Детерминированное выделение новых ID
 │   ├── state.py                # WorldState (agents/work_items/votes)
-│   ├── persona.py              # PersonaArtifact/Library/Generator (биография + интервью)
+│   ├── persona.py              # PersonaArtifact/Library/Generator + SocialGraphExtractor
 │   ├── memory.py               # Память агента (buffer + hybrid retrieval)
-│   ├── actions.py              # Action[] (structured + perform)
+│   ├── actions.py              # Action[] (structured + spawn_agent + perform)
 │   ├── agent.py                # AgentRunner (1 LLM-вызов на ход)
-│   ├── ops.py                  # Детерминированные StateOp -> Event
+│   ├── ops.py                  # Детерминированные StateOp -> Event, включая CreateAgentOp
 │   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM perform)
 │   ├── dao.py                  # DAO vote closure + position policy
-│   ├── engine.py               # WorldEngine (параллельные ходы + детерминированный apply)
-│   ├── worldgen.py             # WorldGenerator (external events, без приватных утечек)
+│   ├── engine.py               # WorldEngine (enrichment, social graph, динамический spawn, детерминированный apply)
+│   ├── worldgen.py             # WorldGenerator (external events + spawn suggestions, без приватных утечек)
 │   ├── composer.py             # WorldComposer (LLM → ScenarioConfig + persona enrichment)
 │   ├── oracle.py               # ViolationOracle (чанкинг по events.jsonl)
 │   ├── events.py               # EventLog (JSONL) — "истина" мира
@@ -73,7 +73,7 @@ MAGISTRY/
 │           ├── components/     # SimGraph, EventFeed, AgentPanel и др.
 │           ├── hooks/          # useAuth, useSimulation
 │           └── utils/          # apiClient, payload, time
-├── tests/                      # Тесты (8 файлов: движок, эмбеддинги, веб)
+├── tests/                      # Тесты (9 файлов: движок, эмбеддинги, веб)
 ├── data/
 │   ├── agent_types/            # Шаблоны типов агентов (JSON)
 │   ├── personalities/          # Архетипы личности (JSON)
@@ -92,7 +92,7 @@ MAGISTRY/
 
 1. **Движок не знает предметной области.** Ядро оперирует абстракциями (действие, полномочие, сущность). Специфика — в конфигурации сценариев (YAML).
 
-2. **Полномочия вместо ролей.** Агент определяется набором полномочий (`message`, `work`, `dao`, `audit`), а не жёсткой ролью. Арбитр проверяет полномочия при каждом действии.
+2. **Полномочия вместо ролей.** Агент определяется набором полномочий (`message`, `work`, `dao`, `audit`, `spawn`), а не жёсткой ролью. Арбитр проверяет полномочия при каждом действии.
 
 3. **Агенты максимально свободны.** Агент — автономная сущность с собственными целями и личностью. Структурированные действия (`send_message`, `add_work_note`, `submit_proposal`) — типовой путь; произвольные действия оцениваются LLM-арбитром. Среда обеспечивает физику, но не диктует поведение.
 
@@ -174,6 +174,7 @@ cd web && bash start.sh                   # сервер + фронтенд
 | Добавить сценарий | `scenarios/` (YAML), `config.py` |
 | Изменить арбитра | `arbiter.py`, `journal.py`, `ops.py` |
 | Изменить агентский цикл | `agent.py`, `memory.py`, `actions.py` |
+| Изменить социальный граф / динамический спавн | `persona.py`, `engine.py`, `actions.py`, `ops.py`, `worldgen.py` |
 | Добавить LLM-провайдера | `llm/providers.py`, `llm/__init__.py` |
 | Изменить генерацию мира | `worldgen.py`, `composer.py` |
 | Добавить REST-эндпоинт | `web/backend/routes/` |
@@ -186,6 +187,7 @@ cd web && bash start.sh                   # сервер + фронтенд
 
 - **Зависимость от OpenAI-совместимого API**: для запуска симуляции требуется `OPENAI_API_KEY` (или совместимый эндпоинт, например OpenRouter). Тесты используют `MockLLMProvider` и не требуют ключа.
 - **Эмбеддинги**: поддерживаются mock-режим и реальные провайдеры через OpenAI-совместимый API. Тесты используют `MockEmbeddingProvider`.
+- **Динамический спавн**: вторичные и runtime-спавненные агенты получают только безопасный capability-набор (`message`/`work`), без `audit` и без права порождать следующих агентов.
 - **Веб-интерфейс**: ряд эндпоинтов, зависевших от удалённого `magistry_sim`, возвращают HTTP 501 (заглушки).
 - **Legacy launcher в backend**: `web/backend/runner.py` функции `launch_simulation*` отключены и явно бросают `RuntimeError`, пока веб-запуск не мигрирован на `magistry_lc`.
 - **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.

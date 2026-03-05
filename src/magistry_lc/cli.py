@@ -26,6 +26,10 @@ def _cmd_run(args: argparse.Namespace) -> None:
     cfg = load_scenario(args.scenario)
     if args.ticks is not None:
         cfg.ticks = int(args.ticks)
+    if bool(getattr(args, "enrich_personas", False)):
+        cfg.runtime.enrich_personas = True
+    if getattr(args, "persona_enrich_mode", None):
+        cfg.runtime.persona_enrich_mode = str(args.persona_enrich_mode)
     out_dir = Path(args.out) if args.out else Path("lc_results") / datetime.now().strftime("%Y%m%d_%H%M%S")
     artifacts = default_artifacts(out_dir)
     engine = WorldEngine(cfg=cfg, artifacts=artifacts)
@@ -94,6 +98,18 @@ def main() -> None:
     p_run.add_argument("--scenario", type=str, required=True, help="Путь к сценарию (.yaml/.json)")
     p_run.add_argument("--out", type=str, default=None, help="Выходная директория (по умолчанию lc_results/<ts>)")
     p_run.add_argument("--ticks", type=int, default=None, help="Переопределить число тиков")
+    p_run.add_argument(
+        "--enrich-personas",
+        action="store_true",
+        help="Включить runtime-обогащение персон перед первым тиком",
+    )
+    p_run.add_argument(
+        "--persona-enrich-mode",
+        type=str,
+        choices=("full", "core"),
+        default=None,
+        help="Режим обогащения персон: full (summary+biography+interview) или core (summary+biography)",
+    )
     p_run.set_defaults(fn=_cmd_run)
 
     p_comp = sub.add_parser("compose", help="Сгенерировать сценарий из текстового описания (LLM)")
