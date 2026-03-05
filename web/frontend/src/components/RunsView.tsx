@@ -8,6 +8,8 @@ interface ActiveRun {
   pid: number
   status: 'running' | 'finished'
   returncode?: number
+  external?: boolean
+  stop_supported?: boolean
 }
 
 interface SavedScenario {
@@ -43,6 +45,26 @@ interface GovernanceModeItem {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+async function readApiErrorMessage(res: Response): Promise<string> {
+  try {
+    const payload = await res.json()
+    if (isRecord(payload) && typeof payload.detail === 'string' && payload.detail.trim()) {
+      return payload.detail
+    }
+  } catch {
+    // ignore parse errors
+  }
+  try {
+    const text = await res.text()
+    if (text.trim()) {
+      return text
+    }
+  } catch {
+    // ignore read errors
+  }
+  return ''
 }
 
 const FALLBACK_SCENARIOS: TemplateScenario[] = [
@@ -182,7 +204,11 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
             ...(launchWindow ? { parallel_window: Number(launchWindow) } : {}),
           } : {}),
         })
-      if (!res.ok) return
+      if (!res.ok) {
+        const message = await readApiErrorMessage(res)
+        window.alert(message || 'Не удалось запустить прогон')
+        return
+      }
       const data = await res.json().catch(() => null) as { run_name?: string } | null
       refreshRuns()
       if (data?.run_name) {
@@ -196,7 +222,12 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
   async function handleStop(runName: string) {
     setStopping(runName)
     try {
-      await apiClient.post(`/api/runs/${runName}/stop`)
+      const res = await apiClient.post(`/api/runs/${runName}/stop`)
+      if (!res.ok) {
+        const message = await readApiErrorMessage(res)
+        window.alert(message || 'Не удалось остановить прогон')
+        return
+      }
       refreshRuns()
     } finally {
       setStopping(null)
@@ -377,7 +408,9 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
               <div key={a.run_name} className="runs-active-item">
                 <div className="active-dot" />
                 <span className="runs-active-name">{a.run_name}</span>
-                <span className="runs-active-pid">PID {a.pid}</span>
+                <span className="runs-active-pid">
+                  {a.external ? 'external' : `PID ${a.pid}`}
+                </span>
                 <button
                   className="btn-clipped success small"
                   onClick={() => onLive(a.run_name)}
@@ -385,7 +418,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                 >
                   ● Live
                 </button>
-                {user?.role === 'admin' && (
+                {user?.role === 'admin' && (a.stop_supported ?? !a.external) && (
                   <button
                     className="btn-clipped danger small"
                     onClick={() => handleStop(a.run_name)}
@@ -417,7 +450,9 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
           </thead>
           <tbody>
             {filtered.map((r) => {
-              const isActive = activeNames.has(r.name)
+              const activeEntry = activeRuns.find((item) => item.run_name === r.name && item.status === 'running')
+              const isActive = Boolean(activeEntry)
+              const stopSupported = Boolean(activeEntry && (activeEntry.stop_supported ?? !activeEntry.external))
               return (
                 <tr key={r.name} className={`runs-row${isActive ? ' active' : ''}`}>
                   {hasRunning && (
@@ -460,7 +495,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                         ●
                       </button>
                     )}
-                    {isActive && user?.role === 'admin' && (
+                    {isActive && user?.role === 'admin' && stopSupported && (
                       <button
                         className="btn-clipped danger small"
                         onClick={() => handleStop(r.name)}

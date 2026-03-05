@@ -42,6 +42,20 @@ class TestDiscoverExternalRuns:
         assert runs[0]["external"] is True
         assert runs[0]["pid"] == 0
 
+    def test_fresh_directory_events_no_summary(self, results_dir: Path):
+        """Свежий directory-based events-файл без summary — прогон обнаружен."""
+        run_dir = results_dir / "lc_run"
+        run_dir.mkdir()
+        events = run_dir / "events.jsonl"
+        events.write_text('{"type": "action"}\n')
+
+        runs = runner._discover_external_runs()
+        assert len(runs) == 1
+        assert runs[0]["run_name"] == "lc_run"
+        assert runs[0]["status"] == "running"
+        assert runs[0]["external"] is True
+        assert runs[0]["pid"] == 0
+
     def test_events_with_summary_ignored(self, results_dir: Path):
         """Если summary-файл существует — прогон считается завершённым."""
         events = results_dir / "run1_events.jsonl"
@@ -55,10 +69,10 @@ class TestDiscoverExternalRuns:
         """Если файл не обновлялся дольше порога — не считать живым."""
         events = results_dir / "old_run_events.jsonl"
         events.write_text('{"type": "action"}\n')
-        # Сделать файл «старым»: mtime = сейчас - 120 секунд
-        old_time = time.time() - 120
+        # Сделать файл «старым»: mtime < now - _EXTERNAL_ALIVE_THRESHOLD
         import os
 
+        old_time = time.time() - (runner._EXTERNAL_ALIVE_THRESHOLD + 5)
         os.utime(events, (old_time, old_time))
 
         assert runner._discover_external_runs() == []

@@ -12,6 +12,7 @@ from web.backend.settings import BUILTIN_GOVERNANCE_IDS, GOVERNANCE_MODES_DIR
 from web.backend.validators import next_g_number, validate_library_id
 
 router = APIRouter(tags=["governance"])
+_ALLOCATE_ID_ATTEMPTS = 256
 
 
 @router.get("/api/governance-modes")
@@ -66,12 +67,21 @@ async def create_governance_mode(data: dict, _user: User = Depends(require_admin
     Returns:
         Сохранённый режим управления с назначенным id.
     """
-    mode_id = next_g_number()
-    data["id"] = mode_id
-    data["custom"] = True
-    path = GOVERNANCE_MODES_DIR / f"{mode_id}.json"
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return data
+    base_data = dict(data)
+    for _ in range(_ALLOCATE_ID_ATTEMPTS):
+        mode_id = next_g_number()
+        payload = {**base_data, "id": mode_id, "custom": True}
+        path = GOVERNANCE_MODES_DIR / f"{mode_id}.json"
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+            return payload
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to write governance mode: {exc}") from exc
+
+    raise HTTPException(status_code=409, detail="Failed to allocate governance mode ID")
 
 
 @router.put("/api/governance-modes/{mode_id}")

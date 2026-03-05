@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import shutil
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User
+from web.backend.run_artifacts import (
+    resolve_run_artifact,
+    run_json_sidecar_candidates,
+    run_log_sidecar_candidates,
+)
 from web.backend.settings import RESULTS_DIR
 from web.backend.validators import validate_run_name
 
@@ -89,15 +96,59 @@ async def delete_run(run_name: str, _user: User = Depends(require_admin)) -> Non
     if any(r.get("run_name") == run_name and r.get("status") == "running" for r in active):
         raise HTTPException(status_code=409, detail="Run is running")
 
-    for suffix in (
-        "_events.jsonl",
-        "_names.json",
-        "_summary.json",
-        "_stdout.log",
-        "_stderr.log",
-    ):
-        path = RESULTS_DIR / f"{run_name}{suffix}"
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
+    ref = resolve_run_artifact(run_name, results_dir=RESULTS_DIR)
+    removed_any = False
+    errors: list[str] = []
+
+    legacy_candidates = [
+        RESULTS_DIR / f"{run_name}_events.jsonl",
+        RESULTS_DIR / f"{run_name}_trace.jsonl",
+        RESULTS_DIR / f"{run_name}_analysis.md",
+        RESULTS_DIR / f"{run_name}_defects.md",
+        RESULTS_DIR / f"{run_name}_detailed_observations.md",
+        RESULTS_DIR / f"{run_name}_codex_independent_analysis.md",
+    ]
+    if ref is not None:
+        for stem in ("names", "summary", "scenario"):
+            legacy_or_dir = run_json_sidecar_candidates(ref, stem, results_dir=RESULTS_DIR)
+            legacy_candidates.extend(legacy_or_dir)
+        for stem in ("stdout", "stderr"):
+            legacy_or_dir = run_log_sidecar_candidates(ref, stem, results_dir=RESULTS_DIR)
+            legacy_candidates.extend(legacy_or_dir)
+    else:
+        legacy_candidates.extend(
+            [
+                RESULTS_DIR / f"{run_name}_names.json",
+                RESULTS_DIR / f"{run_name}_summary.json",
+                RESULTS_DIR / f"{run_name}_scenario.json",
+                RESULTS_DIR / f"{run_name}_stdout.log",
+                RESULTS_DIR / f"{run_name}_stderr.log",
+            ]
+        )
+
+    seen: set[str] = set()
+    for path in legacy_candidates:
+        key = str(path)
+        if key in seen:
             continue
+        seen.add(key)
+        try:
+            path.unlink()
+            removed_any = True
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            errors.append(f"{path.name}: {exc}")
+
+    run_dir = RESULTS_DIR / run_name
+    if run_dir.is_dir():
+        try:
+            shutil.rmtree(run_dir)
+            removed_any = True
+        except OSError as exc:
+            errors.append(f"{run_dir.name}/: {exc}")
+
+    if errors:
+        raise HTTPException(status_code=500, detail="; ".join(errors))
+    if not removed_any:
+        raise HTTPException(status_code=404, detail="Run not found")

@@ -63,6 +63,7 @@ MAGISTRY/
 │   │   ├── auth.py             # JWT-аутентификация, роли
 │   │   ├── database.py         # SQLite через aiosqlite
 │   │   ├── runner.py           # Фоновый запуск симуляций
+│   │   ├── run_artifacts.py    # Поиск артефактов прогонов (legacy + directory)
 │   │   ├── graph_state.py      # Построение графа для визуализации
 │   │   ├── constants.py        # Enum-значения (GovernanceMode, ScenarioId)
 │   │   └── manage_users.py     # CLI управления пользователями
@@ -187,6 +188,7 @@ cd web && bash start.sh                   # сервер + фронтенд
 - **Эмбеддинги**: поддерживаются mock-режим и реальные провайдеры через OpenAI-совместимый API. Тесты используют `MockEmbeddingProvider`.
 - **Веб-интерфейс**: ряд эндпоинтов, зависевших от удалённого `magistry_sim`, возвращают HTTP 501 (заглушки).
 - **Legacy launcher в backend**: `web/backend/runner.py` функции `launch_simulation*` отключены и явно бросают `RuntimeError`, пока веб-запуск не мигрирован на `magistry_lc`.
+- **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.
 
 ## Техническое состояние кодовой базы
 

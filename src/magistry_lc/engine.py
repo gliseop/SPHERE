@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .actions import Action
+from .actions import Action, SendMessageAction
 from .agent import AgentRunner, event_visible_to_agent
 from .arbiter import Arbiter, ActionResult
 from .config import ScenarioConfig
@@ -213,21 +213,27 @@ class WorldEngine:
                 tick_events = list(out.get("tick_events") or [])
             else:
                 # Сбор действий агентов параллельно.
-                proposed = await self._gather_actions(
+                proposed, gather_errors = await self._gather_actions(
                     state=state,
                     runners=runners,
                     events_history=events_history,
                     agent_order=agent_order,
                 )
+                tick_events: list[Event] = []
+                if gather_errors:
+                    event_log.extend(gather_errors)
+                    tick_events.extend(gather_errors)
 
                 # Арбитраж + применение ops детерминированно.
-                tick_events = await self._apply_actions(
-                    state=state,
-                    arbiter=arbiter,
-                    proposed=proposed,
-                    event_log=event_log,
-                    agent_order=agent_order,
-                    journal_yaml=journal.to_yaml(),
+                tick_events.extend(
+                    await self._apply_actions(
+                        state=state,
+                        arbiter=arbiter,
+                        proposed=proposed,
+                        event_log=event_log,
+                        agent_order=agent_order,
+                        journal_yaml=journal.to_yaml(),
+                    )
                 )
 
             # DAO: закрытие голосований и применение position_change.
@@ -235,21 +241,36 @@ class WorldEngine:
             tick_events.extend(self._apply_ops(state=state, ops=dao_ops, event_log=event_log, origin="dao"))
 
             # Обновить память агентов (feedback loop).
-            await self._update_agent_memory(
+            memory_errors = await self._update_agent_memory(
                 state=state,
                 tick_events=tick_events,
                 llm=llm,
                 embedder=embedder,
                 embed_cache=embed_cache,
+                event_log=event_log,
             )
+            if memory_errors:
+                tick_events.extend(memory_errors)
 
             # Внешние события мира (без утечки промптов).
             if self.cfg.runtime.enable_worldgen and (tick % self.cfg.runtime.worldgen_every_ticks == 0):
-                extra = await worldgen.generate(
-                    tick=state.tick,
-                    recent_events=tick_events,
-                    language=self.cfg.runtime.language,
-                )
+                try:
+                    extra = await worldgen.generate(
+                        tick=state.tick,
+                        recent_events=tick_events,
+                        language=self.cfg.runtime.language,
+                    )
+                except Exception as exc:
+                    logger.warning("World generator failed on tick %s: %s", state.tick, exc)
+                    extra = [
+                        Event(
+                            tick=state.tick,
+                            event_type="worldgen_llm_error",
+                            actor_id=None,
+                            payload={"error": {"type": exc.__class__.__name__, "message": str(exc)}},
+                            audience=[INTERNAL_AUDIENCE],
+                        )
+                    ]
                 if extra:
                     event_log.extend(extra)
                     tick_events.extend(extra)
@@ -364,16 +385,36 @@ class WorldEngine:
         runners: dict[str, AgentRunner],
         events_history: list[Event],
         agent_order: list[str],
-    ) -> dict[str, list[Action]]:
-        async def _one(aid: str) -> tuple[str, list[Action]]:
+    ) -> tuple[dict[str, list[Action]], list[Event]]:
+        async def _one(aid: str) -> tuple[str, list[Action], Event | None]:
             agent = state.agents[aid]
             visible = [ev for ev in events_history if event_visible_to_agent(ev, aid, internal=agent.internal)]
-            acts = await runners[aid].propose_actions(agent=agent, state=state, visible_events=visible)
-            return aid, acts
+            try:
+                acts = await runners[aid].propose_actions(agent=agent, state=state, visible_events=visible)
+                return aid, acts, None
+            except Exception as exc:
+                logger.warning("Agent %s propose_actions failed on tick %s: %s", aid, state.tick, exc)
+                return (
+                    aid,
+                    [],
+                    Event(
+                        tick=state.tick,
+                        event_type="agent_llm_error",
+                        actor_id=aid,
+                        payload={"stage": "propose_actions", "error": {"type": exc.__class__.__name__, "message": str(exc)}},
+                        audience=[INTERNAL_AUDIENCE],
+                    ),
+                )
 
         order = list(agent_order) if agent_order else sorted(state.agents.keys())
         pairs = await asyncio.gather(*[_one(aid) for aid in order])
-        return {aid: acts for aid, acts in pairs}
+        gathered: dict[str, list[Action]] = {}
+        errors: list[Event] = []
+        for aid, acts, err in pairs:
+            gathered[aid] = acts
+            if err is not None:
+                errors.append(err)
+        return gathered, errors
 
     async def _apply_actions(
         self,
@@ -388,7 +429,20 @@ class WorldEngine:
         tick_events: list[Event] = []
 
         # Сначала — арбитраж (LLM только для perform), без изменения state.
-        arbitration = await arbiter.arbitrate_tick(state=state, proposed=proposed, journal_yaml=journal_yaml)
+        try:
+            arbitration = await arbiter.arbitrate_tick(state=state, proposed=proposed, journal_yaml=journal_yaml)
+        except Exception as exc:
+            logger.warning("Arbiter failed on tick %s: %s", state.tick, exc)
+            ev = Event(
+                tick=state.tick,
+                event_type="arbiter_llm_error",
+                actor_id=None,
+                payload={"stage": "arbitrate_tick", "error": {"type": exc.__class__.__name__, "message": str(exc)}},
+                audience=[INTERNAL_AUDIENCE],
+            )
+            event_log.append(ev)
+            tick_events.append(ev)
+            return tick_events
 
         # Потом — детерминированное применение ops по порядку (agent_id, action_index).
         for aid in agent_order:
@@ -401,7 +455,11 @@ class WorldEngine:
                         tick=state.tick,
                         event_type="arbiter_rejected",
                         actor_id=aid,
-                        payload={"action_index": res.action_index, "reason": res.reason, "action": str(action)},
+                        payload={
+                            "action_index": res.action_index,
+                            "reason": res.reason,
+                            "action": self._event_action_repr(action),
+                        },
                         audience=[aid],
                     )
                     event_log.append(ev)
@@ -412,7 +470,12 @@ class WorldEngine:
                     tick=state.tick,
                     event_type="arbiter_approved",
                     actor_id=aid,
-                    payload={"action_index": res.action_index, "reason": res.reason, "action": str(action), "ops": [type(o).__name__ for o in res.ops]},
+                    payload={
+                        "action_index": res.action_index,
+                        "reason": res.reason,
+                        "action": self._event_action_repr(action),
+                        "ops": [type(o).__name__ for o in res.ops],
+                    },
                     audience=[INTERNAL_AUDIENCE],
                 )
                 event_log.append(ev_ok)
@@ -448,6 +511,18 @@ class WorldEngine:
                 events.append(ev)
         return events
 
+    @staticmethod
+    def _event_action_repr(action: Action | None) -> str:
+        """Безопасная строка действия для event payload."""
+        if action is None:
+            return ""
+        action_payload = action.model_dump(mode="python")
+        if isinstance(action, SendMessageAction) and bool(action_payload.get("private", True)):
+            text = str(action_payload.get("text") or "")
+            action_payload["text"] = "<redacted>"
+            action_payload["text_len"] = len(text)
+        return str(action_payload)
+
     async def _update_agent_memory(
         self,
         *,
@@ -456,7 +531,10 @@ class WorldEngine:
         llm: LLMCaller,
         embedder: EmbeddingProvider | None,
         embed_cache: dict[str, list[float]],
-    ) -> None:
+        event_log: EventLog,
+    ) -> list[Event]:
+        errors: list[Event] = []
+
         def _event_to_text(ev: Event, agent_id: str) -> str:
             if ev.event_type == "message_sent":
                 to_id = str(ev.payload.get("to_id") or "")
@@ -521,12 +599,24 @@ class WorldEngine:
             texts = [t for _, _, _, t, _ in docs_to_embed]
             embeddings = [[] for _ in texts]
             if embedder is not None:
-                embeddings = await embed_texts_cached(
-                    embedder,
-                    texts,
-                    cache=embed_cache,
-                    batch_size=self.cfg.memory.embeddings_batch_size,
-                )
+                try:
+                    embeddings = await embed_texts_cached(
+                        embedder,
+                        texts,
+                        cache=embed_cache,
+                        batch_size=self.cfg.memory.embeddings_batch_size,
+                    )
+                except Exception as exc:
+                    logger.warning("Memory embeddings failed on tick %s: %s", state.tick, exc)
+                    ev = Event(
+                        tick=state.tick,
+                        event_type="memory_embedding_error",
+                        actor_id=None,
+                        payload={"error": {"type": exc.__class__.__name__, "message": str(exc)}},
+                        audience=[INTERNAL_AUDIENCE],
+                    )
+                    event_log.append(ev)
+                    errors.append(ev)
             for (aid, importance, kind, text, meta), emb in zip(
                 docs_to_embed, embeddings, strict=False
             ):
@@ -546,13 +636,27 @@ class WorldEngine:
         for agent in state.agents.values():
             if agent.memory is None:
                 continue
-            await agent.memory.maybe_summarize_working(
-                llm=llm,
-                language=self.cfg.runtime.language,
-                cfg=self.cfg.memory,
-                tick=state.tick,
-                temperature=self.cfg.llm.temperature,
-            )
+            try:
+                await agent.memory.maybe_summarize_working(
+                    llm=llm,
+                    language=self.cfg.runtime.language,
+                    cfg=self.cfg.memory,
+                    tick=state.tick,
+                    temperature=self.cfg.llm.temperature,
+                )
+            except Exception as exc:
+                logger.warning("Memory summarization failed for %s on tick %s: %s", agent.agent_id, state.tick, exc)
+                ev = Event(
+                    tick=state.tick,
+                    event_type="memory_llm_error",
+                    actor_id=agent.agent_id,
+                    payload={"stage": "summarize_working", "error": {"type": exc.__class__.__name__, "message": str(exc)}},
+                    audience=[INTERNAL_AUDIENCE],
+                )
+                event_log.append(ev)
+                errors.append(ev)
+
+        return errors
 
 
 def default_artifacts(out_dir: str | Path) -> RunArtifacts:

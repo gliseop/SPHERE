@@ -10,13 +10,17 @@ from magistry_lc.llm import MockLLMProvider
 
 from magistry_lc.actions import (
     ActionType,
+    CastVoteAction,
+    CreateWorkItemAction,
     NominatePositionChangeAction,
     PerformAction,
+    RespondNominationAction,
     SendMessageAction,
 )
 from magistry_lc.arbiter import Arbiter
-from magistry_lc.config import GovernanceConfig, MemoryConfig
+from magistry_lc.config import GovernanceConfig, MemoryConfig, ScenarioConfig
 from magistry_lc.dao import DaoEngine
+from magistry_lc.engine import RunArtifacts, WorldEngine
 from magistry_lc.entities import EntityRecord, EntityRegistry
 from magistry_lc.events import Event
 from magistry_lc.id_alloc import IdAllocator
@@ -24,7 +28,7 @@ from magistry_lc.ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from magistry_lc.journal import WorldJournal
 from magistry_lc.llm import LLMCaller
 from magistry_lc.memory import AgentMemory
-from magistry_lc.state import AgentState, WorkItem, WorldState
+from magistry_lc.state import AgentState, Vote, WorkItem, WorldState
 from magistry_lc.tracing import TraceLog
 from magistry_lc.worldgen import WorldGenerator
 
@@ -58,6 +62,42 @@ def _mk_arbiter(tmp_path: Path, *, mock: MockLLMProvider) -> Arbiter:
     llm = LLMCaller(provider=mock, trace=trace)
     gov = GovernanceConfig()
     return Arbiter(llm=llm, governance=gov, id_alloc=IdAllocator(), dao=DaoEngine(cfg=gov), temperature=0.0)
+
+
+class _FailingPerformProvider(MockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self._failed = False
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "- actor_id: agent:off_1" in user and not self._failed:
+            self._failed = True
+            raise RuntimeError("perform-llm-failure")
+        return super().generate_structured(system, user, schema, temperature)
+
+
+class _FailingProposeProvider(MockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self._failed = False
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Off 1" in user and not self._failed:
+            self._failed = True
+            raise RuntimeError("agent-llm-failure")
+        return super().generate_structured(system, user, schema, temperature)
 
 
 def test_arbiter_enforces_message_capability(tmp_path: Path) -> None:
@@ -124,6 +164,105 @@ def test_arbiter_blocks_nomination_when_target_declines_promotion(tmp_path: Path
     assert "target_declines_promotion" in res[0].reason
 
 
+def test_arbiter_rejects_work_item_with_unknown_participant(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["work"], off_2_caps=["work"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    act = CreateWorkItemAction(
+        type=ActionType.CREATE_WORK_ITEM,
+        work_type="task",
+        title="Task",
+        description="",
+        participants=["agent:ghost"],
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert "unknown_participant_agent_id" in res[0].reason
+
+
+def test_arbiter_rejects_vote_from_non_voter(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_1",
+        created_tick=0,
+        closes_tick=2,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_2"],
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    act = CastVoteAction(
+        type=ActionType.CAST_VOTE,
+        vote_id="vote:1",
+        choice="yes",
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert "agent_is_not_eligible_voter" in res[0].reason
+
+
+def test_arbiter_rejects_nomination_response_from_non_target(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_1",
+        created_tick=0,
+        closes_tick=2,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1", "agent:off_2"],
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    act = RespondNominationAction(
+        type=ActionType.RESPOND_NOMINATION,
+        vote_id="vote:1",
+        accept=True,
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert "only_target_can_respond" in res[0].reason
+
+
+def test_arbiter_rejects_second_open_vote_for_same_target_in_tick(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    actions = [
+        NominatePositionChangeAction(
+            type=ActionType.NOMINATE_POSITION_CHANGE,
+            target_agent_id="agent:off_2",
+            new_title="lead",
+            reason="first",
+            justification="",
+        ),
+        NominatePositionChangeAction(
+            type=ActionType.NOMINATE_POSITION_CHANGE,
+            target_agent_id="agent:off_2",
+            new_title="lead",
+            reason="second",
+            justification="",
+        ),
+    ]
+    out = asyncio.run(
+        arbiter.arbitrate_tick(
+            state=state,
+            proposed={"agent:off_1": actions},
+            journal_yaml=state.journal_yaml(),
+        )
+    )
+    assert out["agent:off_1"][0].approved is True
+    assert out["agent:off_1"][1].approved is False
+    assert "open_vote_already_exists_for_target" in out["agent:off_1"][1].reason
+
+
 def test_perform_invalid_op_is_rejected_not_silently_skipped(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
     mock = MockLLMProvider(
@@ -147,6 +286,35 @@ def test_perform_invalid_op_is_rejected_not_silently_skipped(tmp_path: Path) -> 
     res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
     assert res[0].approved is False
     assert "perform_op_invalid" in res[0].reason
+
+
+def test_dao_eligible_voters_filters_by_dao_capability() -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["message"])
+    dao = DaoEngine(cfg=GovernanceConfig())
+    voters = dao.eligible_voters(state)
+    assert voters == ["agent:off_1"]
+
+
+def test_arbiter_continues_when_perform_llm_fails(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    arbiter = _mk_arbiter(tmp_path, mock=_FailingPerformProvider())
+
+    proposed = {
+        "agent:off_1": [PerformAction(type=ActionType.PERFORM, description="perform", target_id="", justification="")],
+        "agent:off_2": [
+            SendMessageAction(
+                type=ActionType.SEND_MESSAGE,
+                to_id="agent:off_1",
+                text="ok",
+                private=True,
+                justification="",
+            )
+        ],
+    }
+    out = asyncio.run(arbiter.arbitrate_tick(state=state, proposed=proposed, journal_yaml=state.journal_yaml()))
+    assert out["agent:off_1"][0].approved is False
+    assert "arbiter_llm_error" in out["agent:off_1"][0].reason
+    assert out["agent:off_2"][0].approved is True
 
 
 def test_worldgen_does_not_receive_private_message_text(tmp_path: Path) -> None:
@@ -301,6 +469,113 @@ def test_world_journal_redacts_private_messages_and_tracks_world_events() -> Non
 
     d = journal.to_dict()
     assert any(e.get("type") == "world_event" for e in d["history"])
+
+
+def test_engine_redacts_private_message_text_in_arbiter_approved(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "lc-private-redaction",
+            "ticks": 1,
+            "runtime": {"max_actions_per_turn": 1},
+                "agents": [
+                    {
+                        "agent_id": "agent:off_1",
+                        "name": "Off 1",
+                        "internal": True,
+                        "persona": "test",
+                        "capabilities": ["message"],
+                    },
+                    {
+                        "agent_id": "agent:off_2",
+                        "name": "Off 2",
+                        "internal": True,
+                        "persona": "test",
+                        "capabilities": ["message"],
+                    },
+                ],
+                "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+            }
+        )
+    mock = MockLLMProvider(
+        structured_responses={
+            "Off 1": [
+                {
+                    "type": "send_message",
+                    "to_id": "agent:off_2",
+                    "text": "SECRET",
+                    "private": True,
+                    "justification": "test",
+                }
+            ],
+            "Off 2": [{"type": "noop", "justification": ""}],
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=mock)
+    asyncio.run(engine.run())
+
+    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    approved = [
+        e for e in events
+        if e.get("event_type") == "arbiter_approved" and e.get("actor_id") == "agent:off_1"
+    ]
+    assert approved
+    action_repr = str(approved[0].get("payload", {}).get("action", ""))
+    assert "SECRET" not in action_repr
+    assert "<redacted>" in action_repr
+
+    private_msgs = [
+        e for e in events
+        if e.get("event_type") == "message_sent"
+        and e.get("actor_id") == "agent:off_1"
+        and bool(e.get("payload", {}).get("private", True))
+    ]
+    assert private_msgs
+    assert private_msgs[0].get("payload", {}).get("text") == "SECRET"
+
+
+def test_engine_survives_single_agent_llm_failure(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "lc-llm-failsafe",
+            "ticks": 1,
+            "runtime": {"max_actions_per_turn": 1},
+                "agents": [
+                    {
+                        "agent_id": "agent:off_1",
+                        "name": "Off 1",
+                        "internal": True,
+                        "persona": "test",
+                        "capabilities": ["message"],
+                    },
+                    {
+                        "agent_id": "agent:off_2",
+                        "name": "Off 2",
+                        "internal": True,
+                        "persona": "test",
+                        "capabilities": ["message"],
+                    },
+                ],
+                "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+            }
+        )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=_FailingProposeProvider())
+    state = asyncio.run(engine.run())
+
+    assert state.tick == 0
+    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(e.get("event_type") == "agent_llm_error" for e in events)
 
 
 def test_composer_normalizes_or_falls_back_on_invalid_ids(tmp_path: Path) -> None:

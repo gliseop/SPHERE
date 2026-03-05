@@ -23,6 +23,7 @@ web/backend/
 ├── database.py       # SQLite через встроенный sqlite3 / aiosqlite
 ├── constants.py      # Enum-значения (GovernanceMode, ScenarioId, NEUTRALIZATION_TECHNIQUES)
 ├── runner.py         # Фоновый запуск симуляций
+├── run_artifacts.py  # Единый поиск run-артефактов (legacy + directory)
 ├── graph_state.py    # Построение графа связей для визуализации
 └── manage_users.py   # CLI управления пользователями
 ```
@@ -34,7 +35,7 @@ web/backend/
 - **admin** — полный доступ: запуск симуляций, управление сценариями, удаление прогонов
 - **viewer** — только чтение: просмотр прогонов, событий, графов
 
-Токен выдаётся через OAuth2 password flow (`POST /api/auth/login`). Время жизни настраивается через `JWT_EXPIRE_HOURS` (по умолчанию 24 часа). Секрет задаётся через `JWT_SECRET`; в режиме разработки (`MAGISTRY_DEV=1`) допускается работа без явного секрета.
+Токен выдаётся через OAuth2 password flow (`POST /api/auth/login`). Время жизни настраивается через `JWT_EXPIRE_HOURS` (по умолчанию 24 часа, при невалидном значении используется fallback). Секрет задаётся через `JWT_SECRET`; в режиме разработки (`MAGISTRY_DEV=1`) допускается работа без явного секрета.
 
 ### REST API
 
@@ -52,16 +53,18 @@ web/backend/
 | GET | `/api/run/{name}` | Детали прогона (события, граф, метрики) |
 | GET | `/api/run/{name}/export` | Экспорт полного прогона |
 | GET | `/api/run/{name}/scenario` | Конфигурация сценария прогона |
-| GET | `/api/run/{name}/prompts` | Промпты и ответы LLM |
+| GET | `/api/run/{name}/prompts` | Промпты и ответы LLM (только `admin`, limit ≤ 1000) |
 | DELETE | `/api/runs/{run_name}` | Удалить прогон |
+
+`/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`.
 
 #### Живая симуляция
 
 | Метод | Путь | Описание |
 |---|---|---|
-| POST | `/api/scenarios/{scenario_id}/run` | Запустить симуляцию по сценарию |
-| POST | `/api/runs/launch` | Запустить симуляцию с произвольной конфигурацией |
-| GET | `/api/runs/active` | Список активных симуляций |
+| POST | `/api/scenarios/{scenario_id}/run` | Заглушка (HTTP 501, legacy launcher удалён) |
+| POST | `/api/runs/launch` | Заглушка (HTTP 501, legacy launcher удалён) |
+| GET | `/api/runs/active` | Список активных симуляций (`external`, `stop_supported`) |
 | POST | `/api/runs/{run_name}/stop` | Остановить симуляцию |
 
 #### Сценарии
@@ -126,17 +129,20 @@ web/backend/
 
 Два WebSocket-эндпоинта:
 
-**`/ws/live`** — потоковая передача событий текущей симуляции. Типы сообщений:
+- `/ws/live` — мониторинг активного прогона (автовыбор или `run_name` в query).
+- `/ws/playback/{name}` — воспроизведение сохранённого прогона.
+
+Фактические типы сообщений:
 
 | Тип | Направление | Описание |
 |---|---|---|
-| `sim_event` | сервер → клиент | Событие симуляции (действие агента, изменение состояния) |
-| `graph_update` | сервер → клиент | Обновление социального графа |
-| `sim_status` | сервер → клиент | Статус симуляции (раунд, время) |
-| `sim_ended` | сервер → клиент | Симуляция завершена |
-| `history` | сервер → клиент | Буфер последних событий при подключении |
-
-**`/ws/playback/{name}`** — воспроизведение завершённого прогона.
+| `meta` | сервер → клиент | Метаданные прогона (`scenario`, `governance`, `seed`, `run_name`, `names`) |
+| `event` | сервер → клиент | Одно событие |
+| `events` | сервер → клиент | Пакет событий |
+| `graph_state` | сервер → клиент | Текущее состояние графа |
+| `ping` | сервер → клиент | keepalive |
+| `done` | сервер → клиент | Поток завершён |
+| `error` | сервер → клиент | Ошибка (например, unauthorized/run not found) |
 
 Оптимизация: события пакетируются (`MAGISTRY_WS_EVENT_BATCH_SIZE`, по умолчанию 50 штук каждые 0.15 с), обновления графа троттлятся (`MAGISTRY_LIVE_GRAPH_THROTTLE_S`, по умолчанию 0.25 с). Типы событий из `MAGISTRY_WS_DROP_EVENT_TYPES` (по умолчанию `idle`) фильтруются и не передаются клиенту.
 

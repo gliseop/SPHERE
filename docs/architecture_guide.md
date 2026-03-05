@@ -164,31 +164,28 @@ sequenceDiagram
     participant Б as Браузер (React)
     participant R as Routes (FastAPI)
     participant Run as Runner
-    participant E as WorldEngine
-    participant EL as EventLog
+    participant FS as results/
 
-    Б->>R: POST /api/runs/launch {scenario}
-    R->>Run: запуск в фоновом потоке
-    Run->>E: WorldEngine.run()
-
-    loop Каждый тик
-        E->>EL: запись события
-        E->>Run: помещение в очередь
-    end
+    Б->>R: GET /api/runs
+    R->>FS: scan legacy + directory runs
+    R-->>Б: список прогонов
 
     Б->>R: WebSocket /ws/live
     R->>Б: аутентификация (JWT)
+    R->>Run: list_active()
 
     loop Пока симуляция идёт
-        R->>Б: sim_event (пакет событий)
-        R->>Б: graph_update (обновление графа)
-        R->>Б: sim_status
+        R->>FS: tail events.jsonl
+        R->>Б: events/event (пакет событий)
+        R->>Б: graph_state
+        R->>Б: ping
     end
 
-    R->>Б: sim_ended
+    R->>Б: done
 
     Б->>R: GET /api/run/{name}
-    R->>Б: JSON (события, граф, метрики)
+    R->>FS: resolve events path
+    R->>Б: JSON (события, граф, мета)
 ```
 
 Браузер подключается по WebSocket после аутентификации. Сервер пакетирует события (по `MAGISTRY_WS_EVENT_BATCH_SIZE` штук каждые `MAGISTRY_WS_EVENT_BATCH_INTERVAL_S` секунд) и троттлит обновления графа (не чаще `MAGISTRY_LIVE_GRAPH_THROTTLE_S`). При подключении к уже идущей симуляции клиент получает буфер последних `MAGISTRY_LIVE_HISTORY_EVENTS` событий.

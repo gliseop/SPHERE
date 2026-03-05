@@ -228,6 +228,27 @@ class Arbiter:
         """
         arbitration: dict[str, list[ActionResult | None]] = {}
         perform_meta: list[tuple[str, int, PerformAction, set[str]]] = []
+        reserved_vote_targets: set[str] = {
+            vote.target_agent_id
+            for vote in state.votes.values()
+            if vote.status == "open"
+        }
+
+        def _reserve_open_vote_target(res: ActionResult) -> ActionResult:
+            if not res.approved:
+                return res
+            for op in res.ops:
+                if not isinstance(op, OpenVoteOp):
+                    continue
+                if op.target_agent_id in reserved_vote_targets:
+                    return ActionResult(
+                        res.action_index,
+                        False,
+                        f"open_vote_already_exists_for_target:{op.target_agent_id}",
+                        [],
+                    )
+                reserved_vote_targets.add(op.target_agent_id)
+            return res
 
         for aid in sorted(proposed.keys()):
             arbitration[aid] = []
@@ -238,15 +259,14 @@ class Arbiter:
                     arbitration[aid].append(None)
                     perform_meta.append((aid, idx, act, caps))
                 else:
-                    arbitration[aid].append(
-                        await self._arbitrate_one(
-                            state=state,
-                            agent_id=aid,
-                            action_index=idx,
-                            action=act,
-                            journal_yaml=journal_yaml,
-                        )
+                    res = await self._arbitrate_one(
+                        state=state,
+                        agent_id=aid,
+                        action_index=idx,
+                        action=act,
+                        journal_yaml=journal_yaml,
                     )
+                    arbitration[aid].append(_reserve_open_vote_target(res))
 
         async def _decide(m: tuple[str, int, PerformAction, set[str]]) -> _PerformArbiterOutput:
             aid, idx, act, caps = m
@@ -258,7 +278,19 @@ class Arbiter:
                 journal_yaml=journal_yaml,
             )
 
-        decisions = await asyncio.gather(*[_decide(m) for m in perform_meta])
+        raw_decisions = await asyncio.gather(*[_decide(m) for m in perform_meta], return_exceptions=True)
+        decisions: list[_PerformArbiterOutput] = []
+        for item in raw_decisions:
+            if isinstance(item, Exception):
+                decisions.append(
+                    _PerformArbiterOutput(
+                        approved=False,
+                        reason=f"arbiter_llm_error:{item.__class__.__name__}:{item}",
+                        ops=[],
+                    )
+                )
+            else:
+                decisions.append(item)
 
         # Конвертация perform-решений → StateOp делается строго детерминированно.
         for meta, decision in zip(perform_meta, decisions, strict=True):
@@ -270,7 +302,7 @@ class Arbiter:
                 action_index=idx,
                 decision=decision,
             )
-            arbitration[aid][idx] = res
+            arbitration[aid][idx] = _reserve_open_vote_target(res)
 
         # Убираем None (на всякий случай) и приводим тип.
         out: dict[str, list[ActionResult]] = {}
@@ -347,6 +379,12 @@ class Arbiter:
             missing = _require("work")
             if missing:
                 return ActionResult(action_index, False, missing, [])
+            participants_error = self._validate_work_participants(
+                state=state,
+                participants=action.participants,
+            )
+            if participants_error:
+                return ActionResult(action_index, False, participants_error, [])
             wid = self.id_alloc.next_id(EntityKind.WORK_ITEM, tick=state.tick)
             return ActionResult(
                 action_index,
@@ -414,14 +452,12 @@ class Arbiter:
             missing = _require("dao")
             if missing:
                 return ActionResult(action_index, False, missing, [])
-            # Только DAO: создаём голосование, затем цель должна дать consent.
-            if action.target_agent_id not in state.agents:
-                return ActionResult(action_index, False, f"unknown target_agent_id: {action.target_agent_id}", [])
-            target = state.agents[action.target_agent_id]
-            if not target.internal:
-                return ActionResult(action_index, False, "cannot nominate external agent", [])
-            if not target.wants_promotion:
-                return ActionResult(action_index, False, "target_declines_promotion", [])
+            target_error = self._validate_open_vote_target(
+                state=state,
+                target_agent_id=action.target_agent_id,
+            )
+            if target_error:
+                return ActionResult(action_index, False, target_error, [])
 
             vote_id = self.id_alloc.next_id(EntityKind.VOTE, tick=state.tick)
             voters = self.dao.eligible_voters(state)
@@ -450,6 +486,9 @@ class Arbiter:
                 return ActionResult(action_index, False, missing, [])
             if action.vote_id not in state.votes:
                 return ActionResult(action_index, False, f"unknown vote_id: {action.vote_id}", [])
+            vote = state.votes[action.vote_id]
+            if agent_id not in vote.voters:
+                return ActionResult(action_index, False, f"agent_is_not_eligible_voter:{agent_id}", [])
             return ActionResult(
                 action_index,
                 True,
@@ -463,6 +502,9 @@ class Arbiter:
                 return ActionResult(action_index, False, missing, [])
             if action.vote_id not in state.votes:
                 return ActionResult(action_index, False, f"unknown vote_id: {action.vote_id}", [])
+            vote = state.votes[action.vote_id]
+            if vote.target_agent_id != agent_id:
+                return ActionResult(action_index, False, f"only_target_can_respond:{action.vote_id}", [])
             return ActionResult(
                 action_index,
                 True,
@@ -608,6 +650,33 @@ class Arbiter:
             return f"public_message_requires_chan_or_org_target:{to_id}"
         return None
 
+    @staticmethod
+    def _validate_work_participants(*, state: WorldState, participants: list[str]) -> str | None:
+        """Проверить участников work-item до формирования op."""
+        for participant_id in participants:
+            try:
+                ensure_kind(participant_id, EntityKind.AGENT)
+            except ValueError:
+                return f"participant_must_be_agent:{participant_id}"
+            if participant_id not in state.agents:
+                return f"unknown_participant_agent_id:{participant_id}"
+        return None
+
+    @staticmethod
+    def _validate_open_vote_target(*, state: WorldState, target_agent_id: str) -> str | None:
+        """Проверить цель голосования за смену должности."""
+        target = state.agents.get(target_agent_id)
+        if target is None:
+            return f"unknown target_agent_id: {target_agent_id}"
+        if not target.internal:
+            return "cannot nominate external agent"
+        if not target.wants_promotion:
+            return "target_declines_promotion"
+        for vote in state.votes.values():
+            if vote.status == "open" and vote.target_agent_id == target_agent_id:
+                return f"open_vote_already_exists_for_target:{target_agent_id}"
+        return None
+
     def _op_from_llm(self, *, agent_id: str, state: WorldState, op_type: str, args: dict[str, Any]) -> list[StateOp]:
         """Сконвертировать LLM-op в реальные ops."""
         if op_type == "noop":
@@ -635,6 +704,12 @@ class Arbiter:
         if op_type == "create_work_item":
             wid = self.id_alloc.next_id(EntityKind.WORK_ITEM, tick=state.tick)
             participants = [str(x) for x in (args.get("participants") or [])]
+            participants_error = self._validate_work_participants(
+                state=state,
+                participants=participants,
+            )
+            if participants_error:
+                raise ValueError(participants_error)
             return [
                 CreateWorkItemOp(
                     created_by=agent_id,
@@ -677,10 +752,12 @@ class Arbiter:
 
         if op_type == "open_vote":
             target_agent_id = str(args.get("target_agent_id") or "")
-            if target_agent_id not in state.agents:
-                raise ValueError("unknown target_agent_id")
-            if not state.agents[target_agent_id].wants_promotion:
-                raise ValueError("target_declines_promotion")
+            target_error = self._validate_open_vote_target(
+                state=state,
+                target_agent_id=target_agent_id,
+            )
+            if target_error:
+                raise ValueError(target_error)
             vote_id = self.id_alloc.next_id(EntityKind.VOTE, tick=state.tick)
             voters = self.dao.eligible_voters(state)
             closes_tick = state.tick + self.governance.vote_duration_ticks
@@ -701,12 +778,18 @@ class Arbiter:
             vote_id = str(args.get("vote_id") or "")
             if vote_id not in state.votes:
                 raise ValueError("unknown vote_id")
+            vote = state.votes[vote_id]
+            if agent_id not in vote.voters:
+                raise ValueError(f"agent_is_not_eligible_voter:{agent_id}")
             return [CastVoteOp(actor_id=agent_id, vote_id=vote_id, choice=str(args.get("choice") or "abstain"))]
 
         if op_type == "respond_nomination":
             vote_id = str(args.get("vote_id") or "")
             if vote_id not in state.votes:
                 raise ValueError("unknown vote_id")
+            vote = state.votes[vote_id]
+            if vote.target_agent_id != agent_id:
+                raise ValueError(f"only_target_can_respond:{vote_id}")
             return [SetVoteConsentOp(actor_id=agent_id, vote_id=vote_id, accept=bool(args.get("accept")))]
 
         if op_type == "modify_reputation":

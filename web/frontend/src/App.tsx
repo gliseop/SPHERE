@@ -64,7 +64,14 @@ export default function App() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
   const [speed, setSpeed] = useState(3.0)
   const [focusDay, setFocusDay] = useState<string | null>(null)
-  const [activeRuns, setActiveRuns] = useState<Array<{ run_name: string; pid: number; status: 'running' | 'finished'; returncode?: number }>>([])
+  const [activeRuns, setActiveRuns] = useState<Array<{
+    run_name: string
+    pid: number
+    status: 'running' | 'finished'
+    returncode?: number
+    external?: boolean
+    stop_supported?: boolean
+  }>>([])
   const [rightTab, setRightTab] = useState<'activity' | 'scenario'>('activity')
   const [scenarioConfig, setScenarioConfig] = useState<Record<string, unknown> | null>(null)
   const [currentRunName, setCurrentRunName] = useState<string | null>(null)

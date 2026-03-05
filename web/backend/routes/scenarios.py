@@ -13,6 +13,7 @@ from web.backend.settings import SCENARIOS_DIR
 from web.backend.validators import next_s_number, validate_scenario_id
 
 router = APIRouter(tags=["scenarios"])
+_ALLOCATE_ID_ATTEMPTS = 256
 
 
 @router.get("/api/scenarios")
@@ -64,12 +65,21 @@ async def create_scenario(payload: ScenarioPayload, _user: User = Depends(requir
     Returns:
         Сохранённый сценарий с назначенным id.
     """
-    scenario_id = next_s_number()
-    data = payload.model_dump(mode="json")
-    data["id"] = scenario_id
-    path = SCENARIOS_DIR / f"{scenario_id}.json"
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return data
+    base_data = payload.model_dump(mode="json")
+    for _ in range(_ALLOCATE_ID_ATTEMPTS):
+        scenario_id = next_s_number()
+        data = {**base_data, "id": scenario_id}
+        path = SCENARIOS_DIR / f"{scenario_id}.json"
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False, indent=2)
+            return data
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to write scenario: {exc}") from exc
+
+    raise HTTPException(status_code=409, detail="Failed to allocate scenario ID")
 
 
 @router.put("/api/scenarios/{scenario_id}")

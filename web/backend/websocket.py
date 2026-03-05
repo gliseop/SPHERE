@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 import json
-import re
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -15,6 +14,11 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .auth import verify_ws_token
 from .graph_state import GraphStateBuilder
+from .run_artifacts import (
+    parse_run_name,
+    resolve_run_artifact,
+    run_json_sidecar_candidates,
+)
 from .settings import (
     LIVE_GRAPH_THROTTLE_S,
     LIVE_HISTORY_EVENTS,
@@ -36,32 +40,6 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-def _parse_run_name(filename: str) -> dict:
-    """Разобрать имя файла прогона в метаданные.
-
-    Args:
-        filename: Имя файла вида S1_G2_events.jsonl или S1_G2_seed42_events.jsonl.
-
-    Returns:
-        Словарь с полями scenario, governance, seed (если есть), variant (если есть).
-    """
-    m = re.match(
-        r"(?P<scenario>S\d+)_(?P<governance>G\d+)(?:_seed(?P<seed>\d+))?(?:_(?P<variant>[A-Za-z0-9_\-]+))?_events\.jsonl",
-        filename,
-    )
-    if m:
-        return {
-            "scenario": m.group("scenario"),
-            "governance": m.group("governance"),
-            "seed": int(m.group("seed")) if m.group("seed") else None,
-            "variant": m.group("variant") or None,
-        }
-    m2 = re.match(r"(?P<name>.+?)_events\.jsonl$", filename)
-    if m2:
-        return {"scenario": m2.group("name"), "governance": "", "seed": None, "variant": None}
-    return {"scenario": "?", "governance": "?", "seed": None, "variant": None}
-
-
 def _load_names(run_name: str) -> dict[str, str]:
     """Загрузить имена агентов из сопроводительного файла.
 
@@ -71,16 +49,24 @@ def _load_names(run_name: str) -> dict[str, str]:
     Returns:
         Словарь agent_id -> отображаемое имя. Пустой словарь если файл отсутствует.
     """
-    path = RESULTS_DIR / f"{run_name}_names.json"
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return {}
-        return {str(k): str(v) for k, v in data.items()}
-    except (json.JSONDecodeError, OSError):
-        return {}
+    ref = resolve_run_artifact(run_name, results_dir=RESULTS_DIR)
+    if ref is None:
+        candidate_paths = [RESULTS_DIR / f"{run_name}_names.json", RESULTS_DIR / run_name / "names.json"]
+    else:
+        primary, fallback = run_json_sidecar_candidates(ref, "names", results_dir=RESULTS_DIR)
+        candidate_paths = [primary, fallback]
+
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                continue
+            return {str(k): str(v) for k, v in data.items()}
+        except (json.JSONDecodeError, OSError):
+            continue
+    return {}
 
 
 def _seed_builder_from_names(builder: GraphStateBuilder, names: dict[str, str]) -> None:
@@ -318,13 +304,14 @@ async def ws_playback(
         await websocket.send_json({"type": "error", "message": "Invalid run name"})
         await websocket.close()
         return
-    path = RESULTS_DIR / f"{name}_events.jsonl"
-    if not path.exists():
+    ref = resolve_run_artifact(name, results_dir=RESULTS_DIR)
+    if ref is None:
         await websocket.send_json({"type": "error", "message": "Run not found"})
         await websocket.close()
         return
 
-    meta = _parse_run_name(f"{name}_events.jsonl")
+    path = ref.events_path
+    meta = parse_run_name(name)
     names = _load_names(name)
     await websocket.send_json({"type": "meta", **meta, "names": names, "run_name": name})
     builder = GraphStateBuilder()
@@ -443,7 +430,8 @@ async def ws_live(
                 await asyncio.sleep(0.5)
                 continue
 
-            target_path = RESULTS_DIR / f"{target_run}_events.jsonl"
+            resolved = resolve_run_artifact(target_run, results_dir=RESULTS_DIR)
+            target_path = resolved.events_path if resolved is not None else (RESULTS_DIR / f"{target_run}_events.jsonl")
 
             if target_run != watched_run or target_path != watched_path:
                 watched_run = target_run
@@ -456,7 +444,7 @@ async def ws_live(
                 bootstrapped = False
                 graph_dirty = False
                 pending.clear()
-                meta = _parse_run_name(f"{target_run}_events.jsonl")
+                meta = parse_run_name(target_run)
                 await websocket.send_json(
                     {"type": "meta", **meta, "names": names, "run_name": target_run}
                 )

@@ -1,7 +1,8 @@
 """Интеграционные тесты авторизации эндпоинтов."""
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -51,13 +52,103 @@ def test_get_runs_no_auth_returns_401():
 
 def test_get_runs_with_viewer_token():
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
-        with patch("web.backend.routes.runs.RESULTS_DIR") as mock_dir:
-            mock_dir.glob.return_value = []
-            r = client.get(
-                "/api/runs",
-                headers={"Authorization": f"Bearer {viewer_token()}"},
-            )
+        r = client.get(
+            "/api/runs",
+            headers={"Authorization": f"Bearer {viewer_token()}"},
+        )
     assert r.status_code == 200
+
+
+def test_get_runs_supports_directory_artifacts(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/runs",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+    assert r.status_code == 200
+    names = {item.get("name") for item in r.json()}
+    assert "lc_run" in names
+
+
+def test_get_run_reads_directory_events(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        '{"event_type":"message_sent","payload":{"to_id":"chan:public","text":"x"}}\n',
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run?include_events=true",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["name"] == "lc_run"
+    assert payload["total_events"] == 1
+    assert isinstance(payload["events"], list) and len(payload["events"]) == 1
+
+
+def test_export_run_reads_directory_sidecars(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+    (run_dir / "scenario.json").write_text('{"title":"demo"}\n', encoding="utf-8")
+    (run_dir / "names.json").write_text('{"agent:1":"Alice"}\n', encoding="utf-8")
+    (run_dir / "summary.json").write_text('{"score":1}\n', encoding="utf-8")
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/export",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["name"] == "lc_run"
+    assert payload["scenario"] == {"title": "demo"}
+    assert payload["names"] == {"agent:1": "Alice"}
+    assert payload["summary"] == {"score": 1}
+
+
+def test_prompts_endpoint_requires_admin(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"llm_call"}\n', encoding="utf-8")
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/prompts",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+    assert r.status_code == 403
+
+
+def test_prompts_endpoint_caps_limit(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"llm_call"}\n', encoding="utf-8")
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/prompts?limit=5001",
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+    assert r.status_code == 400
 
 
 def test_create_scenario_viewer_gets_403():
@@ -70,12 +161,9 @@ def test_create_scenario_viewer_gets_403():
     assert r.status_code == 403
 
 
-def test_create_scenario_admin_gets_201():
+def test_create_scenario_admin_gets_201(tmp_path: Path):
     with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
-        mock_path = MagicMock()
-        mock_path.write_text = MagicMock()
-        with patch("web.backend.routes.scenarios.SCENARIOS_DIR") as mock_dir:
-            mock_dir.__truediv__ = MagicMock(return_value=mock_path)
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
             r = client.post(
                 "/api/scenarios",
                 json={"name": "test scenario"},
@@ -101,3 +189,21 @@ def test_launch_run_viewer_gets_403():
             headers={"Authorization": f"Bearer {viewer_token()}"},
         )
     assert r.status_code == 403
+
+
+def test_delete_directory_run(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+    (run_dir / "summary.json").write_text('{"status":"done"}\n', encoding="utf-8")
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.run_control.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                with patch("web.backend.runner._RESULTS_DIR", tmp_path):
+                    r = client.delete(
+                        "/api/runs/lc_run",
+                        headers={"Authorization": f"Bearer {admin_token()}"},
+                    )
+    assert r.status_code == 204
+    assert not run_dir.exists()

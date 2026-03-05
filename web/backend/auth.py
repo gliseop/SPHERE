@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 
 from .database import User, get_user_by_username
 
@@ -22,7 +23,10 @@ elif _DEV_MODE:
 else:
     _JWT_SECRET = None
 _JWT_ALGORITHM = "HS256"
-_JWT_EXPIRE_HOURS: int = int(os.environ.get("JWT_EXPIRE_HOURS", "24"))
+try:
+    _JWT_EXPIRE_HOURS = max(1, int((os.environ.get("JWT_EXPIRE_HOURS") or "24").strip()))
+except ValueError:
+    _JWT_EXPIRE_HOURS = 24
 
 _JWT_SECRET_ERR = (
     "JWT_SECRET is required. Set JWT_SECRET or export MAGISTRY_DEV=1 for dev mode."
@@ -93,7 +97,7 @@ def decode_token(token: str) -> dict:
         Словарь payload.
 
     Raises:
-        jose.JWTError: При невалидном или истёкшем токене.
+        jwt.InvalidTokenError: При невалидном или истёкшем токене.
     """
     return jwt.decode(token, _require_jwt_secret(), algorithms=[_JWT_ALGORITHM])
 
@@ -120,7 +124,7 @@ async def require_viewer(token: str = Depends(_oauth2_scheme)) -> User:
         username: str = payload.get("sub", "")
         if not username:
             raise credentials_exception
-    except JWTError:
+    except InvalidTokenError:
         raise credentials_exception
     user = get_user_by_username(username)
     if user is None:
@@ -165,5 +169,5 @@ def verify_ws_token(token: str | None) -> User | None:
         if not username:
             return None
         return get_user_by_username(username)
-    except JWTError:
+    except InvalidTokenError:
         return None

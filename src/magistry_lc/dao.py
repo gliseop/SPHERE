@@ -16,10 +16,25 @@ class DaoEngine:
     cfg: GovernanceConfig
 
     def eligible_voters(self, state: WorldState) -> list[str]:
-        """Список голосующих (по умолчанию: все внутренние агенты)."""
+        """Список голосующих (внутренние агенты с capability ``dao``)."""
         if self.cfg.dao_voters:
-            return list(self.cfg.dao_voters)
-        return state.get_internal_agent_ids()
+            source = [aid for aid in self.cfg.dao_voters if aid in state.agents]
+        else:
+            source = state.get_internal_agent_ids()
+
+        voters: list[str] = []
+        seen: set[str] = set()
+        for aid in source:
+            if aid in seen:
+                continue
+            seen.add(aid)
+            agent = state.agents.get(aid)
+            if agent is None or not agent.internal:
+                continue
+            if "dao" not in agent.capabilities:
+                continue
+            voters.append(aid)
+        return voters
 
     def should_close_vote(self, vote: Vote, *, tick: int) -> bool:
         """Нужно ли закрыть голосование на текущем тике."""

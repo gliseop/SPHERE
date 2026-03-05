@@ -1,6 +1,7 @@
 """Тесты JWT-аутентификации и FastAPI-зависимостей."""
 from __future__ import annotations
 
+import importlib
 import pytest
 from unittest.mock import patch
 
@@ -25,7 +26,8 @@ def test_create_and_decode_token():
 
 
 def test_expired_token_raises():
-    from jose import jwt, JWTError
+    import jwt
+    from jwt import InvalidTokenError
     from datetime import datetime, timezone
     expired_payload = {
         "sub": "admin",
@@ -33,8 +35,18 @@ def test_expired_token_raises():
         "exp": datetime(2000, 1, 1, tzinfo=timezone.utc),
     }
     token = jwt.encode(expired_payload, auth_module._JWT_SECRET, algorithm="HS256")
-    with pytest.raises(JWTError):
+    with pytest.raises(InvalidTokenError):
         auth_module.decode_token(token)
+
+
+def test_jwt_expire_hours_invalid_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("JWT_EXPIRE_HOURS", "not-a-number")
+    reloaded = importlib.reload(auth_module)
+    try:
+        assert reloaded._JWT_EXPIRE_HOURS == 24
+    finally:
+        monkeypatch.setenv("JWT_EXPIRE_HOURS", "24")
+        importlib.reload(reloaded)
 
 
 @pytest.mark.asyncio

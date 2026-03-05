@@ -12,6 +12,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+from .run_artifacts import list_run_artifacts, run_json_sidecar_candidates
+
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _RESULTS_DIR = _PROJECT_ROOT / "results"
 
@@ -26,9 +28,10 @@ try:
 except ValueError:
     _MAX_RUNNING = 5
 
-# Порог «живости» для внешних прогонов (секунды).
-# Если events-файл не обновлялся дольше этого интервала — считаем прогон завершённым.
-_EXTERNAL_ALIVE_THRESHOLD = 60
+try:
+    _EXTERNAL_ALIVE_THRESHOLD = max(60, int(os.environ.get("MAGISTRY_EXTERNAL_ALIVE_THRESHOLD", "300")))
+except ValueError:
+    _EXTERNAL_ALIVE_THRESHOLD = 300
 
 
 class TooManyRunsError(RuntimeError):
@@ -178,9 +181,9 @@ def launch_simulation(
 def _discover_external_runs() -> list[dict]:
     """Обнаружить внешние (CLI-запущенные) прогоны по файловой системе.
 
-    Сканирует ``_RESULTS_DIR`` на предмет JSONL-файлов событий, для которых
-    отсутствует summary-файл и которые были обновлены недавно. Такие прогоны
-    считаются «живыми», но не управляются бэкендом (нет Popen-объекта).
+    Сканирует ``_RESULTS_DIR`` на предмет событий в двух форматах:
+    ``*_events.jsonl`` и ``{run}/events.jsonl``. Прогон считается внешним,
+    если отсутствует summary и events-файл обновлялся недавно.
 
     Returns:
         Список словарей с информацией о внешних прогонах.
@@ -192,24 +195,17 @@ def _discover_external_runs() -> list[dict]:
     active_names: set[str] = set(_active)
     external: list[dict] = []
 
-    for events_path in _RESULTS_DIR.glob("*_events.jsonl"):
-        stem = events_path.name  # e.g. "S2_G1_seed1_cognitive_events.jsonl"
-        if not stem.endswith("_events.jsonl"):
-            continue
-        run_name = stem[: -len("_events.jsonl")]
-
-        # Не дублировать API-запущенные прогоны
+    for ref in list_run_artifacts(results_dir=_RESULTS_DIR):
+        run_name = ref.name
         if run_name in active_names:
             continue
 
-        # Если summary уже есть — прогон завершён
-        summary_path = _RESULTS_DIR / f"{run_name}_summary.json"
-        if summary_path.exists():
+        summary_paths = run_json_sidecar_candidates(ref, "summary", results_dir=_RESULTS_DIR)
+        if any(path.exists() for path in summary_paths):
             continue
 
-        # Проверить свежесть файла
         try:
-            mtime = events_path.stat().st_mtime
+            mtime = ref.events_path.stat().st_mtime
         except OSError:
             continue
 
@@ -222,6 +218,7 @@ def _discover_external_runs() -> list[dict]:
                 "pid": 0,
                 "status": "running",
                 "external": True,
+                "stop_supported": False,
             }
         )
 
@@ -248,6 +245,8 @@ def list_active() -> list[dict]:
                         "run_name": name,
                         "pid": proc.pid,
                         "status": "running",
+                        "external": False,
+                        "stop_supported": True,
                         "stdout_log": f"{name}_stdout.log",
                         "stderr_log": f"{name}_stderr.log",
                     }
@@ -258,6 +257,8 @@ def list_active() -> list[dict]:
                         "run_name": name,
                         "pid": proc.pid,
                         "status": "finished",
+                        "external": False,
+                        "stop_supported": True,
                         "returncode": poll,
                         "stdout_log": f"{name}_stdout.log",
                         "stderr_log": f"{name}_stderr.log",

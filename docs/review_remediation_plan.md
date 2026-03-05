@@ -10,6 +10,13 @@
 2. Убрать системные причины `approved -> op_failed` там, где это детерминируемо заранее.
 3. Привести веб-контракт и документацию к фактическому состоянию системы.
 
+## Статус выполнения (2026-03-05)
+
+- Этап 1 (Safety / P1) — выполнен.
+- Этап 2 (Инварианты движка / P2) — выполнен.
+- Этап 3 (Веб-интеграция / P2) — выполнен.
+- Этап 4 (Документация и контракт / P2-P3) — выполнен.
+
 ---
 
 ## Этап 1 — Safety / P1 (приоритет: максимальный)
@@ -83,9 +90,9 @@
 
 `arbiter.py:346–365` (CreateWorkItemAction) не проверяет, что `action.participants` содержат существующих агентов. `CreateWorkItemOp.apply:122–126` проверяет `ensure_kind(pid, AGENT)` и `pid not in state.agents` → ValueError → `arbiter_op_failed`. Детерминированный пробел: нужна ранняя проверка в арбитре.
 
-**closes_tick — корректная семантика, нуждается в документировании.**
+**closes_tick — семантика консистентна, но контринтуитивна и нуждается в явной фиксации.**
 
-`dao.py:26`: `tick >= vote.closes_tick`. С `closes_tick = tick + vote_duration_ticks`, голосование длится ровно `vote_duration_ticks` тиков (от tick создания включительно, до closes_tick не включительно). Закрытие происходит в начале тика `closes_tick`, до сбора действий агентов. Семантика корректна и согласована с `engine.py:234` (DAO-закрытие вызывается после apply_actions каждого тика). Нужна фиксация в документации/комментариях.
+`dao.py:26`: `tick >= vote.closes_tick`. С `closes_tick = tick + vote_duration_ticks`, закрытие вызывается после `apply_actions` (`engine.py:233–235`), поэтому на тике `closes_tick` агент ещё может проголосовать до закрытия. Это допустимое поведение, но его нужно явно задокументировать как контракт движка.
 
 **ПРОПУЩЕНО: CastVoteAction — арбитр не проверяет, что агент в списке голосующих (P2).**
 
@@ -183,7 +190,7 @@
 
 ### Аудит: статус
 
-Документация (`README.md`, `AGENTS.md`, `docs/overview.md`, `docs/architecture_guide.md`, `docs/simulation_engine.md`, `docs/data_formats.md`, `docs/cli_reference.md`, `docs/getting_started.md`, `docs/web_interface.md`, `docs/persona_interview_design.md`, `docs/testing.md`) была полностью обновлена в рамках предыдущей сессии рефакторинга. Все ссылки на `magistry_sim`, `ARCHITECTURE.md` и `CognitiveAgentRunner` исправлены. Блок «Завершённые миграции» добавлен в `AGENTS.md`.
+Документация (`README.md`, `AGENTS.md`, `docs/overview.md`, `docs/architecture_guide.md`, `docs/simulation_engine.md`, `docs/data_formats.md`, `docs/cli_reference.md`, `docs/getting_started.md`, `docs/web_interface.md`, `docs/persona_interview_design.md`, `docs/testing.md`) была в основном обновлена в рамках предыдущей сессии рефакторинга. Большинство ссылок на `magistry_sim`, `ARCHITECTURE.md` и `CognitiveAgentRunner` исправлены, блок «Завершённые миграции» добавлен в `AGENTS.md`.
 
 Оставшиеся пробелы: (1) `docs/web_interface.md` указывает PyJWT, но код использует python-jose; (2) документация не описывает поведение stub-эндпоинтов `run_scenario` и `launch_run` из клиентской стороны; (3) нет секции «Известные ограничения веб-слоя» с перечнем того, что не работает (запуск, остановка внешних, удаление magistry_lc прогонов).
 

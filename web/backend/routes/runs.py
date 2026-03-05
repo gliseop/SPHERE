@@ -13,9 +13,14 @@ from fastapi.responses import JSONResponse
 from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User
 from web.backend.graph_state import GraphStateBuilder
+from web.backend.run_artifacts import (
+    list_run_artifacts,
+    parse_run_name,
+    resolve_run_artifact,
+    run_json_sidecar_candidates,
+)
 from web.backend.settings import ARTIFACTS_DIR, DOC_ID_RE, RESULTS_DIR
 from web.backend.validators import validate_run_name
-from web.backend.websocket import _parse_run_name
 
 router = APIRouter(tags=["runs"])
 
@@ -31,16 +36,17 @@ async def list_runs(_user: User = Depends(require_viewer)) -> list[dict]:
         Список словарей с метаданными прогонов.
     """
     runs = []
-    paths = sorted(
-        RESULTS_DIR.glob("*_events.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    for p in paths:
-        stat = p.stat()
-        meta = _parse_run_name(p.name)
-        meta["name"] = p.stem.replace("_events", "")
-        meta["filename"] = p.name
+    for ref in list_run_artifacts(results_dir=RESULTS_DIR):
+        try:
+            stat = ref.events_path.stat()
+        except OSError:
+            continue
+        meta = parse_run_name(ref.name)
+        meta["name"] = ref.name
+        if ref.format == "directory":
+            meta["filename"] = f"{ref.name}/events.jsonl"
+        else:
+            meta["filename"] = ref.events_path.name
         meta["size_kb"] = round(stat.st_size / 1024, 1)
         meta["created_at"] = stat.st_mtime
         runs.append(meta)
@@ -75,13 +81,13 @@ async def get_run(
         raise HTTPException(status_code=400, detail="Limit too large")
 
     validate_run_name(name)
-    path = RESULTS_DIR / f"{name}_events.jsonl"
-    if not path.exists():
+    ref = resolve_run_artifact(name, results_dir=RESULTS_DIR)
+    if ref is None:
         raise HTTPException(status_code=404, detail="Run not found")
     builder = GraphStateBuilder()
     events: list[dict] = []
     total = 0
-    async with aiofiles.open(path, encoding="utf-8") as f:
+    async with aiofiles.open(ref.events_path, encoding="utf-8") as f:
         async for line in f:
             line = line.strip()
             if not line:
@@ -101,7 +107,7 @@ async def get_run(
         "limit": limit,
         "total_events": total,
         "graph": builder.state(),
-        "meta": _parse_run_name(f"{name}_events.jsonl"),
+        "meta": parse_run_name(name),
     }
 
 
@@ -123,13 +129,9 @@ async def get_artifact(doc_id: str, _user: User = Depends(require_viewer)) -> di
             "content": path.read_text(encoding="utf-8"),
         }
 
-    for jsonl_path in sorted(
-        RESULTS_DIR.glob("*_events.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    ):
+    for ref in list_run_artifacts(results_dir=RESULTS_DIR):
         try:
-            async with aiofiles.open(jsonl_path, encoding="utf-8") as handle:
+            async with aiofiles.open(ref.events_path, encoding="utf-8") as handle:
                 async for line in handle:
                     line = line.strip()
                     if not line:
@@ -164,13 +166,13 @@ async def export_run(name: str, _user: User = Depends(require_viewer)) -> JSONRe
         JSON с полями events, scenario, names, summary и meta.
     """
     validate_run_name(name)
-    events_path = RESULTS_DIR / f"{name}_events.jsonl"
-    if not events_path.exists():
+    ref = resolve_run_artifact(name, results_dir=RESULTS_DIR)
+    if ref is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
     events: list[dict] = []
     try:
-        async with aiofiles.open(events_path, encoding="utf-8") as f:
+        async with aiofiles.open(ref.events_path, encoding="utf-8") as f:
             async for line in f:
                 line = line.strip()
                 if not line:
@@ -183,17 +185,19 @@ async def export_run(name: str, _user: User = Depends(require_viewer)) -> JSONRe
         raise HTTPException(status_code=404, detail="Run file not found")
 
     def _read_json(suffix: str) -> dict | None:
-        p = RESULTS_DIR / f"{name}{suffix}"
-        if p.exists():
+        stem = suffix.removeprefix("_").removesuffix(".json")
+        for p in run_json_sidecar_candidates(ref, stem, results_dir=RESULTS_DIR):
+            if not p.exists():
+                continue
             try:
                 return json.loads(p.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
-                return None
+                continue
         return None
 
     result = {
         "name": name,
-        "meta": _parse_run_name(f"{name}_events.jsonl"),
+        "meta": parse_run_name(name),
         "events": events,
         "scenario": _read_json("_scenario.json"),
         "names": _read_json("_names.json"),
@@ -220,10 +224,17 @@ async def get_run_scenario(name: str, _user: User = Depends(require_viewer)) -> 
         Конфигурация сценария (ScenarioConfig).
     """
     validate_run_name(name)
-    path = RESULTS_DIR / f"{name}_scenario.json"
-    if not path.exists():
+    ref = resolve_run_artifact(name, results_dir=RESULTS_DIR)
+    if ref is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    scenario_path: Path | None = None
+    for candidate in run_json_sidecar_candidates(ref, "scenario", results_dir=RESULTS_DIR):
+        if candidate.exists():
+            scenario_path = candidate
+            break
+    if scenario_path is None:
         raise HTTPException(status_code=404, detail="Scenario config not found for this run")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(scenario_path.read_text(encoding="utf-8"))
 
 
 @router.get("/api/run/{name}/prompts")
@@ -233,7 +244,7 @@ async def get_run_prompts(
     round: int | None = None,
     timestamp: str | None = None,
     limit: int = 50,
-    _user: User = Depends(require_viewer),
+    _user: User = Depends(require_admin),
 ) -> list[dict]:
     """Получить записи вызовов LLM для указанного прогона.
 
@@ -248,14 +259,19 @@ async def get_run_prompts(
     Returns:
         Список событий llm_call с полными данными промптов.
     """
+    if limit < 0:
+        raise HTTPException(status_code=400, detail="Invalid limit")
+    if limit > 1_000:
+        raise HTTPException(status_code=400, detail="Limit too large")
+
     validate_run_name(name)
-    path = RESULTS_DIR / f"{name}_events.jsonl"
-    if not path.exists():
+    ref = resolve_run_artifact(name, results_dir=RESULTS_DIR)
+    if ref is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
     results: list[dict] = []
     try:
-        async with aiofiles.open(path, encoding="utf-8") as f:
+        async with aiofiles.open(ref.events_path, encoding="utf-8") as f:
             async for line in f:
                 line = line.strip()
                 if not line:
@@ -288,7 +304,7 @@ async def get_llm_debug_log(
 ) -> list[dict]:
     """Вернуть хвост debug-лога LLM (JSONL).
 
-    Лог пишется провайдером ``magistry_sim.llm.OpenAICompatibleProvider``
+    Лог пишется провайдером ``magistry_lc.llm.OpenAICompatibleProvider``
     в файл ``results/llm_debug.jsonl`` (или ``MAGISTRY_LLM_LOG_PATH``).
     """
     try:

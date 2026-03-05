@@ -32,8 +32,11 @@ def validate_run_name(name: str) -> None:
     """
     if not RUN_NAME_RE.fullmatch(name):
         raise HTTPException(status_code=400, detail="Invalid run name")
-    resolved = (RESULTS_DIR / f"{name}_events.jsonl").resolve()
-    if not str(resolved).startswith(str(RESULTS_DIR)):
+    legacy_resolved = (RESULTS_DIR / f"{name}_events.jsonl").resolve()
+    dir_resolved = (RESULTS_DIR / name / "events.jsonl").resolve()
+    if not str(legacy_resolved).startswith(str(RESULTS_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid run name")
+    if not str(dir_resolved).startswith(str(RESULTS_DIR)):
         raise HTTPException(status_code=400, detail="Invalid run name")
 
 

@@ -54,6 +54,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
+async function readApiErrorMessage(res: Response): Promise<string> {
+  try {
+    const payload = await res.json()
+    if (isRecord(payload) && typeof payload.detail === 'string' && payload.detail.trim()) {
+      return payload.detail
+    }
+  } catch {
+    // ignore parse errors
+  }
+  try {
+    const text = await res.text()
+    if (text.trim()) {
+      return text
+    }
+  } catch {
+    // ignore read errors
+  }
+  return ''
+}
+
 const EMPTY_SCENARIO: Scenario = {
   name: '',
   description: '',
@@ -274,13 +294,16 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
           runner: 'cognitive',
           rounds: s.rounds,
         })
-      if (res.ok) {
-        const data = await res.json().catch(() => null) as { run_name?: string } | null
-        onLaunch?.()
-        if (data?.run_name) onGoLive?.(data.run_name)
+      if (!res.ok) {
+        const message = await readApiErrorMessage(res)
+        window.alert(message || 'Не удалось запустить прогон')
+        return
       }
+      const data = await res.json().catch(() => null) as { run_name?: string } | null
+      onLaunch?.()
+      if (data?.run_name) onGoLive?.(data.run_name)
     } catch {
-      // Ошибка сети — молча обрабатываем
+      window.alert('Ошибка сети при запуске прогона')
     }
   }
 
