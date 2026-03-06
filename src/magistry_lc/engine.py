@@ -20,6 +20,7 @@ from .config import ScenarioConfig
 from .dao import DaoEngine
 from .embeddings import embed_texts_cached
 from .entities import EntityRecord, EntityRegistry
+from .evaluation import evaluate_run, save_evaluation
 from .events import Event, EventLog
 from .id_alloc import IdAllocator
 from .ids import (
@@ -44,6 +45,7 @@ from .persona import (
 )
 from .state import AgentState, WorkItem, WorldState
 from .tracing import TraceLog
+from .truth import TruthDetector, TruthLog
 from .utils import redact_numbers
 from .worldgen import SpawnSuggestion, WorldGenerator, WorldgenOutput
 
@@ -60,6 +62,8 @@ class RunArtifacts:
     out_dir: Path
     events_path: Path
     trace_path: Path
+    truth_path: Path | None = None
+    evaluation_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -72,6 +76,10 @@ class WorldEngine:
 
     def __post_init__(self) -> None:
         self.artifacts.out_dir.mkdir(parents=True, exist_ok=True)
+        if self.artifacts.truth_path is None:
+            self.artifacts.truth_path = self.artifacts.out_dir / "truth.jsonl"
+        if self.artifacts.evaluation_path is None:
+            self.artifacts.evaluation_path = self.artifacts.out_dir / "evaluation.json"
 
     async def run(self) -> WorldState:
         """Запустить симуляцию и вернуть финальный WorldState."""
@@ -80,6 +88,7 @@ class WorldEngine:
         llm = LLMCaller(provider=provider, trace=trace)
 
         event_log = EventLog(self.artifacts.events_path)
+        truth_log = TruthLog(self.artifacts.truth_path)
 
         state = self._init_state(event_log=event_log)
         if self.cfg.runtime.enrich_personas:
@@ -101,6 +110,9 @@ class WorldEngine:
                     exc,
                 )
         journal = WorldJournal.from_state(state=state)
+        truth_detector = TruthDetector(
+            private_contact_window_ticks=self.cfg.governance.audit.private_contact_window_ticks
+        )
 
         # Memory: embeddings provider (по умолчанию mock — без ключей API).
         env_key = self.cfg.memory.embeddings_api_key_env
@@ -302,6 +314,16 @@ class WorldEngine:
                                 embed_cache=embed_cache,
                             )
 
+            truth_window = int(self.cfg.governance.audit.lookback_events)
+            truth_recent = (events_history + tick_events)[-truth_window:] if truth_window > 0 else list(tick_events)
+            truth_records = truth_detector.detect_tick(
+                state=state,
+                tick_events=tick_events,
+                recent_events=truth_recent,
+            )
+            if truth_records:
+                truth_log.extend(truth_records)
+
             if self.cfg.governance.audit.enabled:
                 audit_window = int(self.cfg.governance.audit.lookback_events)
                 combined_events = events_history + tick_events
@@ -346,6 +368,12 @@ class WorldEngine:
                 events_history = events_history[-self.cfg.runtime.tick_events_history :]
 
         state.clamp_reputation()
+        if self.artifacts.truth_path is not None and self.artifacts.evaluation_path is not None:
+            summary = evaluate_run(
+                events_path=self.artifacts.events_path,
+                truth_path=self.artifacts.truth_path,
+            )
+            save_evaluation(summary, self.artifacts.evaluation_path)
         return state
 
     def _agent_order(self, *, state: WorldState, tick: int) -> list[str]:
@@ -1267,4 +1295,6 @@ def default_artifacts(out_dir: str | Path) -> RunArtifacts:
         out_dir=d,
         events_path=d / "events.jsonl",
         trace_path=d / "trace.jsonl",
+        truth_path=d / "truth.jsonl",
+        evaluation_path=d / "evaluation.json",
     )

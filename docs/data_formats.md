@@ -310,6 +310,54 @@ JSON-файлы с результатами нарративных интерв�
 
 Отдельный журнал всех LLM-вызовов: промпт, ответ, длительность. Хранится в отдельном файле, чтобы не утекать в контекст симуляции.
 
+### Truth-layer (`truth.jsonl`)
+
+Отдельный deterministic sidecar с каноническими truth-records для post-hoc оценки runtime-аудита.
+
+Пример записи:
+
+```json
+{
+  "tick": 2,
+  "subject_agent_id": "agent:auditor",
+  "violation_type": "self_reputation_award",
+  "status": "committed",
+  "severity": "high",
+  "confidence": 1.0,
+  "target_agent_id": "agent:auditor",
+  "evidence_refs": [{"tick": 2, "event_type": "reputation_modified"}],
+  "rationale": "Агент повысил собственную репутацию."
+}
+```
+
+Ключевая особенность:
+
+- `truth.jsonl` не является продолжением `events.jsonl`;
+- он пишется отдельно и не подаётся агентам;
+- он используется для формального post-hoc сравнения governance-treatment и truth-layer.
+
+### Post-hoc evaluation (`evaluation.json`)
+
+Итоговая сводка сравнения runtime-аудита и truth-layer.
+
+Пример:
+
+```json
+{
+  "truth_total": 3,
+  "runtime_flagged_total": 4,
+  "true_positive": 2,
+  "false_positive": 2,
+  "false_negative": 1,
+  "precision": 0.5,
+  "recall": 0.6667,
+  "f1": 0.5714,
+  "by_violation_type": {
+    "self_reputation_award": {"truth": 1, "signals": 1, "tp": 1, "fp": 0, "fn": 0}
+  }
+}
+```
+
 ### Нарушения (violations.json)
 
 Результат работы оракула — JSON-массив выявленных нарушений:

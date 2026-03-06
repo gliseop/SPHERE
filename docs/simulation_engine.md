@@ -33,13 +33,15 @@ flowchart TD
     WGEN -->|да| WGEVT[WorldGenerator: события + spawn suggestions]
     WGEN -->|нет| AUDIT
 
-    WGEVT --> AUDIT[RuntimeAuditor: detection + audit events + ops]
+    WGEVT --> TRUTH[TruthDetector: truth.jsonl]
+    TRUTH --> AUDIT[RuntimeAuditor: detection + audit events + ops]
     AUDIT --> LOG[EventLog: запись в JSONL]
     LOG --> MEM[Обновление памяти агента]
 
     MEM --> NEXT{Ещё тики?}
     NEXT -->|да| TICK
-    NEXT -->|нет| RESULT[Финал: WorldState + events.jsonl + trace.jsonl]
+    NEXT -->|нет| EVAL[Post-hoc evaluation.json]
+    EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + evaluation.json]
 ```
 
 Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry` и запускает цикл тиков.
@@ -115,6 +117,27 @@ flowchart TD
    - `StateOp` для заморозки или штрафа репутации.
 
 Runtime-аудитор не подменяет собой `ViolationOracle` и не создаёт ground truth эксперимента. Его выход — это часть governance-treatment, а не пост-фактум измерение качества режима.
+
+## Truth-layer и evaluation
+
+После формирования фактических `tick_events`, но до эмиссии audit-интервенций, движок прогоняет deterministic `TruthDetector`. Он пишет sidecar `truth.jsonl` с каноническими `TruthRecord`, которые не зависят от того, сработал ли runtime-аудитор.
+
+По завершении прогона движок вызывает post-hoc `evaluation.py`, который сравнивает:
+
+- `audit_flagged` из `events.jsonl`;
+- `TruthRecord` из `truth.jsonl`.
+
+Результат сохраняется в `evaluation.json` и содержит:
+
+- `truth_total`;
+- `runtime_flagged_total`;
+- `true_positive`;
+- `false_positive`;
+- `false_negative`;
+- `precision`;
+- `recall`;
+- `f1`;
+- сводку `by_violation_type`.
 
 ## Операции состояния (StateOp → Event)
 
@@ -194,6 +217,11 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 ## Оракул (ViolationOracle)
 
 Пост-фактум анализ нарушений. Читает `events.jsonl`, разбивает на окна по `window_ticks` тиков, отправляет каждый чанк в LLM для обнаружения нарушений. Результат — JSON с описаниями выявленных отклонений.
+
+Важно: `ViolationOracle` и `evaluation.py` решают разные задачи.
+
+- `ViolationOracle` — narrative / LLM post-hoc analysis.
+- `evaluation.py` — формальное сравнение runtime-аудита с deterministic truth-layer.
 
 ## Конфигурация сценария (ScenarioConfig)
 

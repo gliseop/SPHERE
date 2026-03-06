@@ -41,6 +41,8 @@ MAGISTRY/
 │   ├── worldgen.py             # WorldGenerator (external events + spawn suggestions, без приватных утечек)
 │   ├── composer.py             # WorldComposer (LLM → ScenarioConfig + persona enrichment)
 │   ├── oracle.py               # ViolationOracle (чанкинг по events.jsonl)
+│   ├── truth.py                # TruthDetector + TruthLog (deterministic truth-layer sidecar)
+│   ├── evaluation.py           # Post-hoc evaluation against truth.jsonl
 │   ├── events.py               # EventLog (JSONL) — "истина" мира
 │   ├── tracing.py              # TraceLog (JSONL) — prompts/responses отдельно
 │   ├── llm/                    # LLM-провайдеры и утилиты (пакет)
@@ -175,6 +177,7 @@ cd web && bash start.sh                   # сервер + фронтенд
 | Добавить сценарий | `scenarios/` (YAML), `config.py` |
 | Изменить арбитра | `arbiter.py`, `journal.py`, `ops.py` |
 | Изменить runtime-аудит | `auditor.py`, `engine.py`, `ops.py`, `config.py` |
+| Изменить truth/evaluation | `truth.py`, `evaluation.py`, `engine.py`, `docs/data_formats.md` |
 | Изменить агентский цикл | `agent.py`, `memory.py`, `actions.py` |
 | Изменить социальный граф / динамический спавн | `persona.py`, `engine.py`, `actions.py`, `ops.py`, `worldgen.py` |
 | Добавить LLM-провайдера | `llm/providers.py`, `llm/__init__.py` |
@@ -191,6 +194,7 @@ cd web && bash start.sh                   # сервер + фронтенд
 - **Эмбеддинги**: поддерживаются mock-режим и реальные провайдеры через OpenAI-совместимый API. Тесты используют `MockEmbeddingProvider`.
 - **Динамический спавн**: вторичные и runtime-спавненные агенты получают только безопасный capability-набор (`message`/`work`), без `audit` и без права порождать следующих агентов.
 - **Runtime-аудитор v1**: `RuntimeAuditor` реализован как отдельный rules-first модуль, а не как обычный `AgentRunner`; он пишет audit-сигналы и может замораживать репутацию, но не заменяет post-hoc `ViolationOracle`.
+- **Truth/evaluation sidecars**: каждый прогон теперь может писать `truth.jsonl` (deterministic truth-layer) и `evaluation.json` (precision/recall runtime-аудита против truth), отдельно от `events.jsonl` и `trace.jsonl`.
 - **Веб-интерфейс**: ряд эндпоинтов, зависевших от удалённого `magistry_sim`, возвращают HTTP 501 (заглушки).
 - **Legacy launcher в backend**: `web/backend/runner.py` функции `launch_simulation*` отключены и явно бросают `RuntimeError`, пока веб-запуск не мигрирован на `magistry_lc`.
 - **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.

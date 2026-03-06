@@ -35,7 +35,10 @@ def _cmd_run(args: argparse.Namespace) -> None:
     engine = WorldEngine(cfg=cfg, artifacts=artifacts)
     console.print(f"[bold]MAGISTRY-LC run[/bold] scenario={args.scenario} ticks={cfg.ticks} out={out_dir}")
     asyncio.run(engine.run())
-    console.print(f"[green]Done[/green] events={artifacts.events_path} trace={artifacts.trace_path}")
+    console.print(
+        f"[green]Done[/green] events={artifacts.events_path} trace={artifacts.trace_path} "
+        f"truth={artifacts.truth_path} evaluation={artifacts.evaluation_path}"
+    )
 
 
 def _llm_config_from_args(args: argparse.Namespace) -> LLMConfig:

@@ -35,6 +35,8 @@ graph TB
         WORLDGEN[worldgen.py<br/>WorldGenerator]
         COMPOSER[composer.py<br/>WorldComposer]
         ORACLE[oracle.py<br/>ViolationOracle]
+        TRUTH[truth.py<br/>TruthDetector + TruthLog]
+        EVAL[evaluation.py<br/>EvaluationSummary]
     end
 
     subgraph LLM["LLM-подсистема (llm/)"]
@@ -87,6 +89,8 @@ graph TB
 
     COMPOSER --> CALLER
     ORACLE --> CALLER
+    ENGINE --> TRUTH
+    ENGINE --> EVAL
 
     CALLER --> PROVIDERS
     CALLER --> TRACING
@@ -118,6 +122,8 @@ graph TB
 | Детерминированный apply | `ops.py` → `StateOp` преобразуется в `Event` |
 | Как генерируется сценарий через LLM | `composer.py` → `WorldComposer.compose()` |
 | Как работает генератор мира | `worldgen.py` → внешние события + spawn suggestions без приватных утечек |
+| Как пишется truth-layer | `truth.py` → deterministic truth records в `truth.jsonl` |
+| Как считается post-hoc evaluation | `evaluation.py` → precision/recall runtime-аудита vs truth |
 | Как оракул анализирует нарушения | `oracle.py` → чанкинг по events.jsonl |
 | Как устроена память агента | `memory.py` → working buffer + long-term hybrid index |
 | Как работает гибридный поиск | `memory.py` (retrieval) + `bm25.py` (лексический) + `embeddings.py` (векторный) |
