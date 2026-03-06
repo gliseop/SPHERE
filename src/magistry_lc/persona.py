@@ -139,8 +139,54 @@ class SocialLink:
 def social_link_name_key(name: str) -> str:
     """Нормализованный ключ для дедупликации ссылок на одного человека."""
 
-    key = _NAME_KEY_RE.sub("", (name or "").casefold()).strip("_")
-    return key
+    parts = [p for p in _NAME_KEY_RE.split((name or "").casefold()) if p]
+    return "_".join(sorted(parts))
+
+
+def _levenshtein_distance(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        curr = [i]
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            curr.append(
+                min(
+                    prev[j] + 1,
+                    curr[j - 1] + 1,
+                    prev[j - 1] + cost,
+                )
+            )
+        prev = curr
+    return prev[-1]
+
+
+def social_link_match_key(name: str, existing_keys: list[str]) -> str:
+    """Подобрать ключ уже встречавшегося имени по нечёткому совпадению."""
+
+    key = social_link_name_key(name)
+    if not key:
+        return ""
+
+    best_key = key
+    best_distance: int | None = None
+    for candidate in existing_keys:
+        if not candidate:
+            continue
+        dist = _levenshtein_distance(key, candidate)
+        max_len = max(len(key), len(candidate))
+        if dist == 0:
+            return candidate
+        if max_len > 0 and (dist <= 2 or (dist / max_len) <= 0.18):
+            if best_distance is None or dist < best_distance:
+                best_key = candidate
+                best_distance = dist
+    return best_key
 
 
 @dataclass(slots=True)

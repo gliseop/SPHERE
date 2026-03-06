@@ -84,7 +84,7 @@ def _worldgen_schema() -> dict[str, Any]:
                 },
             },
         },
-        "required": ["events", "spawns"],
+        "required": ["events"],
     }
 
 

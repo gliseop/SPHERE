@@ -38,6 +38,7 @@ from .persona import (
     SocialGraphExtractor,
     SocialLink,
     chunk_text,
+    social_link_match_key,
     social_link_name_key,
 )
 from .state import AgentState, WorkItem, WorldState
@@ -509,11 +510,12 @@ class WorldEngine:
         for primary_id, links in extraction:
             primary = state.agents[primary_id]
             for link in links:
-                key = (
+                raw_key = (
                     social_link_name_key(link.name)
                     or social_link_name_key(link.relation)
                     or normalize_slug(link.name, fallback="person")
                 )
+                key = social_link_match_key(raw_key, list(buckets.keys())) or raw_key
                 bucket = buckets.get(key)
                 if bucket is None:
                     bucket = {
@@ -780,39 +782,13 @@ class WorldEngine:
             )
             return
 
-        mode = self.cfg.runtime.persona_enrich_mode
-        generator = PersonaGenerator(llm=llm, temperature=self.cfg.llm.temperature)
-
-        async def _one(agent_id: str) -> tuple[str, PersonaArtifact | None]:
-            agent = state.agents[agent_id]
-            try:
-                if mode == "core":
-                    persona = await generator.generate_core(
-                        agent_id=agent.agent_id,
-                        name=agent.name,
-                        internal=agent.internal,
-                        persona_hint=agent.persona.summary,
-                        scenario_description=self.cfg.description,
-                        language=self.cfg.runtime.language,
-                    )
-                else:
-                    persona = await generator.generate(
-                        agent_id=agent.agent_id,
-                        name=agent.name,
-                        internal=agent.internal,
-                        persona_hint=agent.persona.summary,
-                        scenario_description=self.cfg.description,
-                        language=self.cfg.runtime.language,
-                    )
-                return agent_id, persona
-            except Exception as exc:
-                logger.warning("Persona enrichment failed for %s: %s", agent_id, exc)
-                return agent_id, None
-
-        results = await asyncio.gather(*[_one(aid) for aid in pending])
-        for aid, persona in results:
-            if persona is None:
-                continue
+        enriched = await self._generate_personas_batch(
+            state=state,
+            llm=llm,
+            agent_ids=pending,
+            mode=self.cfg.runtime.persona_enrich_mode,
+        )
+        for aid, persona in enriched.items():
             state.agents[aid].persona = persona
 
         all_enriched = all(state.agents[aid].persona.biography.strip() for aid in to_enrich_ids)

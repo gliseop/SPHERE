@@ -289,6 +289,20 @@ class _LegacyWorldgenProvider(MockLLMProvider):
         )
 
 
+class _OptionalSpawnsWorldgenProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data={"events": [{"audience": "public", "description": "Optional spawns worldgen event"}]},
+            model="mock",
+        )
+
+
 def test_engine_spawns_secondary_agents_before_first_tick(tmp_path: Path) -> None:
     cfg = ScenarioConfig.model_validate(
         {
@@ -401,6 +415,95 @@ def test_engine_limits_secondary_agents_by_max_agents(tmp_path: Path) -> None:
         WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=_TwoLinksProvider()).run()
     )
     assert len(state.agents) == 2
+
+
+def test_engine_fuzzy_deduplicates_social_links(tmp_path: Path) -> None:
+    class _FuzzyLinksProvider(MockLLMProvider):
+        def generate_structured(self, system: str, user: str, schema: dict, temperature: float = 0.0):
+            if "Выдели до" in user and "agent:head" in user:
+                return StructuredLLMResponse(
+                    data={
+                        "links": [
+                            {
+                                "name": "Волкова Наталья Ивановна",
+                                "relation": "жена",
+                                "relevance": "Близкий человек, знает бытовой фон.",
+                                "persona_hint": "Учительница математики.",
+                                "internal": False,
+                                "capabilities": ["message"],
+                            }
+                        ]
+                    },
+                    model="mock",
+                )
+            if "Выдели до" in user and "agent:spec" in user:
+                return StructuredLLMResponse(
+                    data={
+                        "links": [
+                            {
+                                "name": "Наталья Ивановна Волкова",
+                                "relation": "знакомая семьи",
+                                "relevance": "Связана с тем же домохозяйством.",
+                                "persona_hint": "Работает в школе, пересекается с героем.",
+                                "internal": False,
+                                "capabilities": ["message"],
+                            }
+                        ]
+                    },
+                    model="mock",
+                )
+            if "Выдели до" in user:
+                return StructuredLLMResponse(data={"links": []}, model="mock")
+            return super().generate_structured(system, user, schema, temperature)
+
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "secondary-fuzzy-dedup",
+            "ticks": 1,
+            "runtime": {
+                "max_actions_per_turn": 1,
+                "spawn_secondary": True,
+                "max_secondary_per_agent": 1,
+                "max_agents": 4,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:head",
+                    "name": "Волков",
+                    "internal": True,
+                    "persona": {
+                        "summary": "Руководитель закупок.",
+                        "biography": "Женат на Наталье Ивановне Волковой.",
+                        "interview": [],
+                    },
+                    "capabilities": ["message"],
+                },
+                {
+                    "agent_id": "agent:spec",
+                    "name": "Новикова",
+                    "internal": True,
+                    "persona": {
+                        "summary": "Специалист отдела.",
+                        "biography": "Хорошо знает Наталью Волкову по школьным мероприятиям.",
+                        "interview": [],
+                    },
+                    "capabilities": ["message"],
+                },
+            ],
+            "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    state = asyncio.run(
+        WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=_FuzzyLinksProvider()).run()
+    )
+    secondary_ids = [aid for aid in state.agents if aid.startswith("agent:sec_")]
+    assert len(secondary_ids) == 1
 
 
 def test_runtime_spawn_registers_new_agent_for_next_tick(tmp_path: Path) -> None:
@@ -587,4 +690,13 @@ def test_worldgen_accepts_legacy_list_response(tmp_path: Path) -> None:
     )
     assert len(out.events) == 1
     assert out.events[0].event_type == "world_event"
+    assert out.spawns == []
+
+
+def test_worldgen_accepts_object_without_spawns(tmp_path: Path) -> None:
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    llm = LLMCaller(provider=_OptionalSpawnsWorldgenProvider(), trace=trace)
+    wg = WorldGenerator(llm=llm, temperature=0.0)
+    out = asyncio.run(wg.generate(tick=0, recent_events=[], language="ru"))
+    assert len(out.events) == 1
     assert out.spawns == []
