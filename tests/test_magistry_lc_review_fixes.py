@@ -29,6 +29,7 @@ from magistry_lc.journal import WorldJournal
 from magistry_lc.llm import LLMCaller
 from magistry_lc.llm.caller import create_llm_provider
 from magistry_lc.memory import AgentMemory
+from magistry_lc.ops import CreateAgentOp
 from magistry_lc.state import AgentState, Vote, WorkItem, WorldState
 from magistry_lc.tracing import TraceLog
 from magistry_lc.worldgen import WorldGenerator
@@ -342,6 +343,25 @@ def test_worldgen_does_not_receive_private_message_text(tmp_path: Path) -> None:
     user_payload = spans[-1]["user"]
     assert INTERNAL_AUDIENCE not in user_payload  # worldgen input uses normalized json, not audience tokens
     assert PUBLIC_AUDIENCE not in user_payload
+
+
+def test_create_agent_op_emits_initial_reputation_snapshot() -> None:
+    state = WorldState(tick=3, registry=EntityRegistry())
+
+    events = CreateAgentOp(
+        entity_id="agent:spawned",
+        name="Spawned",
+        internal=True,
+        persona_hint="helper",
+        capabilities=["message"],
+        created_by="agent:spawner",
+        created_tick=3,
+    ).apply(state)
+
+    assert [event.event_type for event in events] == ["entity_created", "reputation_snapshot"]
+    assert events[1].payload["target_agent_id"] == "agent:spawned"
+    assert events[1].payload["score"] == 0.0
+    assert events[1].payload["title"] == "специалист"
 
 
 def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) -> None:

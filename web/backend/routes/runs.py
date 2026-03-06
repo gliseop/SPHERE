@@ -12,17 +12,108 @@ from fastapi.responses import JSONResponse
 
 from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User
-from web.backend.graph_state import GraphStateBuilder
+from web.backend.graph_state import GraphStateBuilder, normalize_event_compat
 from web.backend.run_artifacts import (
     list_run_artifacts,
     parse_run_name,
     resolve_run_artifact,
     run_json_sidecar_candidates,
+    run_jsonl_sidecar_candidates,
 )
 from web.backend.settings import ARTIFACTS_DIR, DOC_ID_RE, RESULTS_DIR
 from web.backend.validators import validate_run_name
 
 router = APIRouter(tags=["runs"])
+
+
+def _trace_span_to_prompt_record(span: dict) -> dict:
+    """Преобразовать LC trace-span в legacy-подобную запись prompt inspector."""
+    agent_id = str(span.get("agent_id", span.get("name", "")) or "")
+    round_value = span.get("round", span.get("tick"))
+    return {
+        "event_type": "llm_call",
+        "agent_id": agent_id,
+        "round": round_value,
+        "tick": round_value,
+        "timestamp": span.get("timestamp", ""),
+        "system_prompt": span.get("system", ""),
+        "user_prompt": span.get("user", ""),
+        "response": span.get("response", ""),
+        "role": span.get("role", ""),
+        "name": span.get("name", ""),
+        "model": span.get("model", ""),
+        "usage": span.get("usage", {}) or {},
+        "duration_ms": span.get("duration_ms", 0.0),
+        "error": span.get("error"),
+    }
+
+
+async def _read_prompt_records_from_trace(
+    path: Path,
+    *,
+    agent_id: str | None,
+    round: int | None,
+    timestamp: str | None,
+    limit: int,
+) -> list[dict]:
+    results: list[dict] = []
+    async with aiofiles.open(path, encoding="utf-8") as f:
+        async for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                span = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(span, dict):
+                continue
+            record = _trace_span_to_prompt_record(span)
+            if agent_id and record.get("agent_id") != agent_id:
+                continue
+            if round is not None and record.get("round") != round:
+                continue
+            if timestamp and record.get("timestamp") != timestamp:
+                continue
+            results.append(record)
+            if len(results) >= limit:
+                break
+    return results
+
+
+async def _read_prompt_records_from_events(
+    path: Path,
+    *,
+    agent_id: str | None,
+    round: int | None,
+    timestamp: str | None,
+    limit: int,
+) -> list[dict]:
+    results: list[dict] = []
+    async with aiofiles.open(path, encoding="utf-8") as f:
+        async for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            event = normalize_event_compat(event)
+            if event.get("event_type") != "llm_call":
+                continue
+            if agent_id and event.get("agent_id") != agent_id:
+                continue
+            if round is not None and event.get("round") != round:
+                continue
+            if timestamp and event.get("timestamp") != timestamp:
+                continue
+            results.append(event)
+            if len(results) >= limit:
+                break
+    return results
 
 
 @router.get("/api/runs")
@@ -98,7 +189,7 @@ async def get_run(
                 continue
             builder.ingest(event)
             if include_events and total >= offset and len(events) < limit:
-                events.append(event)
+                events.append(normalize_event_compat(event))
             total += 1
     return {
         "name": name,
@@ -178,9 +269,12 @@ async def export_run(name: str, _user: User = Depends(require_viewer)) -> JSONRe
                 if not line:
                     continue
                 try:
-                    events.append(json.loads(line))
+                    event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if isinstance(event, dict):
+                    event = normalize_event_compat(event)
+                events.append(event)
     except OSError:
         raise HTTPException(status_code=404, detail="Run file not found")
 
@@ -269,32 +363,26 @@ async def get_run_prompts(
     if ref is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    results: list[dict] = []
     try:
-        async with aiofiles.open(ref.events_path, encoding="utf-8") as f:
-            async for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if event.get("event_type") != "llm_call":
-                    continue
-                if agent_id and event.get("agent_id") != agent_id:
-                    continue
-                if round is not None and event.get("round") != round:
-                    continue
-                if timestamp and event.get("timestamp") != timestamp:
-                    continue
-                results.append(event)
-                if len(results) >= limit:
-                    break
+        for trace_path in run_jsonl_sidecar_candidates(ref, "trace", results_dir=RESULTS_DIR):
+            if not trace_path.exists():
+                continue
+            return await _read_prompt_records_from_trace(
+                trace_path,
+                agent_id=agent_id,
+                round=round,
+                timestamp=timestamp,
+                limit=limit,
+            )
+        return await _read_prompt_records_from_events(
+            ref.events_path,
+            agent_id=agent_id,
+            round=round,
+            timestamp=timestamp,
+            limit=limit,
+        )
     except OSError:
         raise HTTPException(status_code=404, detail="Run file not found")
-
-    return results
 
 
 @router.get("/api/debug/llm-log")

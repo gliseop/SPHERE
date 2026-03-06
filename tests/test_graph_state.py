@@ -1,6 +1,6 @@
 """Tests for web graph state reconstruction (dependency-free module)."""
 
-from web.backend.graph_state import build_graph_state
+from web.backend.graph_state import build_graph_state, normalize_event_compat
 
 
 def test_graph_state_adds_edge_from_message_sent():
@@ -80,3 +80,35 @@ def test_graph_state_sums_across_threads():
     graph = build_graph_state(events)
     assert len(graph["edges"]) == 1
     assert graph["edges"][0]["strength"] == 2.0
+
+
+def test_normalize_event_compat_maps_lc_fields_to_legacy_aliases():
+    event = normalize_event_compat(
+        {
+            "tick": 3,
+            "event_type": "message_sent",
+            "actor_id": "agent:off_1",
+            "payload": {"to_id": "agent:off_2", "text": "hello"},
+        }
+    )
+
+    assert event["round"] == 3
+    assert event["agent_id"] == "agent:off_1"
+    assert event["payload"]["content"] == "hello"
+
+
+def test_graph_state_applies_lc_reputation_changes_to_target_agent():
+    graph = build_graph_state(
+        [
+            {
+                "tick": 2,
+                "event_type": "reputation_modified",
+                "actor_id": "agent:auditor",
+                "payload": {"target_agent_id": "agent:off_1", "delta": -2.5},
+            }
+        ]
+    )
+
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    assert nodes["agent:off_1"]["reputation"] == 7.5
+    assert nodes["agent:auditor"]["reputation"] == 10.0

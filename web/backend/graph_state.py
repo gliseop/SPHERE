@@ -19,6 +19,31 @@ THREAD_MESSAGE_DELTA = 0.1
 THREAD_MAX_DELTA = 1.0
 
 
+def normalize_event_compat(event: dict[str, Any]) -> dict[str, Any]:
+    """Add legacy aliases expected by the current web client."""
+    result = dict(event)
+    payload = result.get("payload", {}) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    compat_payload = dict(payload)
+    if "target" not in compat_payload and "target_agent_id" in compat_payload:
+        compat_payload["target"] = compat_payload["target_agent_id"]
+    if "content" not in compat_payload and "text" in compat_payload:
+        compat_payload["content"] = compat_payload["text"]
+    result["payload"] = compat_payload
+
+    if result.get("round") is None and "tick" in result:
+        result["round"] = result.get("tick")
+
+    if not result.get("agent_id"):
+        agent_id = _compat_agent_id(result, compat_payload)
+        if agent_id:
+            result["agent_id"] = agent_id
+
+    return result
+
+
 def _is_governance_agent(agent_id: str) -> bool:
     """Return True for governance agents that should not display reputation."""
     return agent_id in ("auditor",) or agent_id.startswith(("aud_", "juror_"))
@@ -41,6 +66,7 @@ class GraphStateBuilder:
     _thread_strength: dict[str, float] = field(default_factory=dict)
 
     def ingest(self, e: dict[str, Any]) -> None:
+        e = normalize_event_compat(e)
         aid = str(e.get("agent_id", e.get("actor_id", "")) or "")
         if aid and aid != "system":
             self._ensure_agent(aid)
@@ -78,7 +104,7 @@ class GraphStateBuilder:
             return
 
         if event_type == "reputation_modified":
-            target = str(payload.get("target", aid) or aid)
+            target = str(payload.get("target", payload.get("target_agent_id", aid)) or aid)
             delta = _as_float(payload.get("delta", 0.0), default=0.0)
             if target:
                 self._ensure_agent(target)
@@ -170,3 +196,16 @@ def _as_float(value: Any, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _compat_agent_id(event: dict[str, Any], payload: dict[str, Any]) -> str:
+    event_type = str(event.get("event_type", "") or "")
+    if event_type == "reputation_snapshot":
+        target = payload.get("target_agent_id") or payload.get("target")
+        if isinstance(target, str) and target:
+            return target
+
+    actor_id = event.get("actor_id")
+    if isinstance(actor_id, str):
+        return actor_id
+    return ""

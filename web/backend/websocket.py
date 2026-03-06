@@ -13,7 +13,7 @@ import aiofiles
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .auth import verify_ws_token
-from .graph_state import GraphStateBuilder
+from .graph_state import GraphStateBuilder, normalize_event_compat
 from .run_artifacts import (
     parse_run_name,
     resolve_run_artifact,
@@ -131,6 +131,7 @@ def _event_for_ws(
     Если передан словарь names, добавляет agent_name и to_name
     для удобства отображения на фронтенде.
     """
+    event = normalize_event_compat(event)
     if event.get("event_type") == "llm_call":
         payload = event.get("payload", {})
         out: dict[str, Any] = {

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from .ids import INTERNAL_AUDIENCE, PUBLIC_AUDIENCE, is_audience_ref
 
@@ -29,6 +29,22 @@ class Event(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     audience: list[str] = Field(default_factory=lambda: [INTERNAL_AUDIENCE])
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @computed_field(return_type=int)
+    @property
+    def round(self) -> int:
+        """Совместимый alias для legacy web/UI слоя."""
+        return self.tick
+
+    @computed_field(return_type=str)
+    @property
+    def agent_id(self) -> str:
+        """Совместимый alias для legacy web/UI слоя."""
+        if self.event_type == "reputation_snapshot":
+            target = self.payload.get("target_agent_id")
+            if isinstance(target, str) and target:
+                return target
+        return self.actor_id or ""
 
     def validate_audience(self) -> None:
         """Проверить корректность ссылок на аудиторию.
@@ -93,5 +109,9 @@ class EventLog:
             line = line.strip()
             if not line:
                 continue
-            events.append(Event.model_validate_json(line))
+            data = json.loads(line)
+            if isinstance(data, dict):
+                data.pop("round", None)
+                data.pop("agent_id", None)
+            events.append(Event.model_validate(data))
         return events

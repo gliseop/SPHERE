@@ -98,6 +98,31 @@ def test_get_run_reads_directory_events(tmp_path: Path):
     assert isinstance(payload["events"], list) and len(payload["events"]) == 1
 
 
+def test_get_run_normalizes_lc_events_for_frontend_compat(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        (
+            '{"tick":4,"event_type":"reputation_modified","actor_id":"agent:auditor",'
+            '"payload":{"target_agent_id":"agent:off_1","delta":-1.5}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run?include_events=true",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+    assert r.status_code == 200
+    event = r.json()["events"][0]
+    assert event["round"] == 4
+    assert event["agent_id"] == "agent:auditor"
+    assert event["payload"]["target"] == "agent:off_1"
+
+
 def test_export_run_reads_directory_sidecars(tmp_path: Path):
     run_dir = tmp_path / "lc_run"
     run_dir.mkdir()
@@ -149,6 +174,36 @@ def test_prompts_endpoint_caps_limit(tmp_path: Path):
                     headers={"Authorization": f"Bearer {admin_token()}"},
                 )
     assert r.status_code == 400
+
+
+def test_prompts_endpoint_reads_trace_sidecar_for_lc_run(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+    (run_dir / "trace.jsonl").write_text(
+        (
+            '{"role":"agent","name":"agent:off_1","tick":2,'
+            '"system":"SYS","user":"USER","response":"RESP",'
+            '"timestamp":"2026-03-06T10:00:00+00:00"}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/prompts?agent_id=agent:off_1&round=2",
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+    assert r.status_code == 200
+    payload = r.json()
+    assert len(payload) == 1
+    assert payload[0]["agent_id"] == "agent:off_1"
+    assert payload[0]["round"] == 2
+    assert payload[0]["system_prompt"] == "SYS"
+    assert payload[0]["user_prompt"] == "USER"
+    assert payload[0]["response"] == "RESP"
 
 
 def test_create_scenario_viewer_gets_403():

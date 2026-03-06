@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import asyncio
@@ -32,6 +33,17 @@ def test_magistry_lc_runs_one_tick(tmp_path: Path) -> None:
     assert state.tick == 0
     assert artifacts.events_path.exists()
     assert artifacts.trace_path.exists()
+
+    events = [
+        json.loads(line)
+        for line in artifacts.events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    snapshots = [e for e in events if e.get("event_type") == "reputation_snapshot"]
+    assert snapshots
+    assert snapshots[0]["agent_id"] == "agent:off_1"
+    assert snapshots[0]["payload"]["target_agent_id"] == "agent:off_1"
+    assert snapshots[0]["payload"]["score"] == 0.0
 
 
 def test_magistry_lc_rejects_phantom_message(tmp_path: Path) -> None:

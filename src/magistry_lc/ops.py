@@ -113,7 +113,19 @@ class CreateAgentOp:
                 actor_id=self.created_by,
                 payload={"entity_id": self.entity_id, "kind": EntityKind.AGENT.value, "meta": meta},
                 audience=[INTERNAL_AUDIENCE],
-            )
+            ),
+            Event(
+                tick=state.tick,
+                event_type="reputation_snapshot",
+                actor_id=None,
+                payload={
+                    "target_agent_id": self.entity_id,
+                    "score": state.agents[self.entity_id].reputation,
+                    "frozen": False,
+                    "title": state.agents[self.entity_id].title,
+                },
+                audience=[INTERNAL_AUDIENCE],
+            ),
         ]
 
 

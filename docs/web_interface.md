@@ -57,6 +57,7 @@ web/backend/
 | DELETE | `/api/runs/{run_name}` | Удалить прогон |
 
 `/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`.
+Для MAGISTRY-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl` если они вынесены из `events.jsonl`.
 
 #### Живая симуляция
 

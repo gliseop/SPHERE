@@ -135,6 +135,21 @@ def run_log_sidecar_candidates(
     return legacy, directory
 
 
+def run_jsonl_sidecar_candidates(
+    ref: RunArtifactRef,
+    stem: str,
+    *,
+    results_dir: Path | None = None,
+) -> tuple[Path, Path]:
+    """Кандидаты JSONL sidecar-файла для прогона (primary, fallback)."""
+    base = RESULTS_DIR if results_dir is None else results_dir
+    legacy = base / f"{ref.name}_{stem}.jsonl"
+    directory = base / ref.name / f"{stem}.jsonl"
+    if ref.format == "directory":
+        return directory, legacy
+    return legacy, directory
+
+
 def _put_newer(refs: dict[str, RunArtifactRef], candidate: RunArtifactRef) -> None:
     existing = refs.get(candidate.name)
     if existing is None or candidate.mtime() >= existing.mtime():

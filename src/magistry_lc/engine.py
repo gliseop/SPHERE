@@ -853,14 +853,28 @@ class WorldEngine:
                 title=a.initial_title,
                 wants_promotion=a.wants_promotion,
             )
-            event_log.append(
-                Event(
-                    tick=0,
-                    event_type="entity_created",
-                    actor_id=None,
-                    payload={"entity_id": a.agent_id, "kind": EntityKind.AGENT.value, "meta": {"name": a.name}},
-                    audience=[INTERNAL_AUDIENCE],
-                )
+            event_log.extend(
+                [
+                    Event(
+                        tick=0,
+                        event_type="entity_created",
+                        actor_id=None,
+                        payload={"entity_id": a.agent_id, "kind": EntityKind.AGENT.value, "meta": {"name": a.name}},
+                        audience=[INTERNAL_AUDIENCE],
+                    ),
+                    Event(
+                        tick=0,
+                        event_type="reputation_snapshot",
+                        actor_id=None,
+                        payload={
+                            "target_agent_id": a.agent_id,
+                            "score": state.agents[a.agent_id].reputation,
+                            "frozen": False,
+                            "title": state.agents[a.agent_id].title,
+                        },
+                        audience=[INTERNAL_AUDIENCE],
+                    ),
+                ]
             )
 
         for w in self.cfg.world.work_items:

@@ -242,10 +242,12 @@ JSON-файлы с результатами нарративных интерв�
 Каждая строка — JSON-объект с событием:
 
 ```json
-{"tick": 1, "event_type": "entity_created", "actor_id": null, "payload": {"entity_id": "agent:off_1", "kind": "agent"}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
-{"tick": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "payload": {"to": "agent:auditor", "text": "..."}, "audience": ["agent:off_1", "agent:auditor"], "timestamp": "..."}
-{"tick": 2, "event_type": "arbiter_approved", "actor_id": "agent:off_1", "payload": {"action_type": "send_message"}, "audience": ["aud:internal"], "timestamp": "..."}
+{"tick": 1, "round": 1, "event_type": "entity_created", "actor_id": null, "agent_id": "", "payload": {"entity_id": "agent:off_1", "kind": "agent"}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
+{"tick": 2, "round": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"to": "agent:auditor", "text": "..."}, "audience": ["agent:off_1", "agent:auditor"], "timestamp": "..."}
+{"tick": 2, "round": 2, "event_type": "arbiter_approved", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"action_type": "send_message"}, "audience": ["aud:internal"], "timestamp": "..."}
 ```
+
+Поля `tick` и `actor_id` остаются каноническими для движка. Поля `round` и `agent_id` сериализуются как compatibility-aliases для текущего web/UI слоя и legacy-клиентов.
 
 Типы событий:
 
