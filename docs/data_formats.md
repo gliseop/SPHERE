@@ -38,6 +38,17 @@ governance:
   pass_threshold: 0.5
   vote_duration_ticks: 2
   require_consent: true
+  audit:
+    enabled: true
+    actor_id: "agent:auditor"
+    mode: "rules"
+    lookback_events: 120
+    private_contact_window_ticks: 3
+    min_confidence_to_flag: 0.6
+    min_confidence_to_freeze: 0.85
+    freeze_duration_ticks: 3
+    reputation_freeze_enabled: true
+    reputation_penalty_delta: null
 
 agents:
   - agent_id: "agent:off_1"
@@ -75,7 +86,7 @@ world:
 |---|---|
 | `llm` | Модель, API, провайдер, температура |
 | `runtime` | Язык, лимит действий за ход, генератор мира, обогащение персон |
-| `governance` | Политика должностей, кворум, порог, голосование |
+| `governance` | Политика должностей, кворум, порог, голосование и runtime-аудит |
 | `memory` | Рабочий буфер, долгосрочный индекс, веса retrieval, эмбеддинги |
 | `agents` | Список агентов с ID, именем, персоной, полномочиями |
 | `world` | Каналы, организации, рабочие элементы |
@@ -110,10 +121,28 @@ world:
 | `message` | `send_message`, `publish` |
 | `work` | `create_work_item`, `add_work_note`, `submit_work_proposal` |
 | `dao` | `nominate_position_change`, `cast_vote` |
-| `audit` | Доступ к расширенной информации при `perform` |
+| `audit` | Право на audit-related действия (`modify_reputation` через `perform`) и роль видимого аудитора в событиях |
 | `spawn` | `spawn_agent` — создать нового участника в рантайме |
 
 Вторичные и runtime-спавненные агенты проходят фильтрацию capability-набора: движок оставляет только безопасный поднабор `message`/`work`, чтобы новые агенты не получали `audit` или право порождать следующих агентов.
+
+Важно: capability `audit` и `RuntimeAuditor` — не одно и то же. В версии v1 runtime-аудит реализован отдельным rules-first модулем `auditor.py`, который может использовать `actor_id` аудитора из конфигурации, но не сводится к обычному `AgentRunner`.
+
+### Ключевые поля `governance.audit`
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `enabled` | `bool` | Включить runtime-аудитор |
+| `actor_id` | `agent:* \| null` | Какой agent ID использовать как `actor_id` в audit-событиях |
+| `mode` | `rules` / `hybrid` / `llm` | Режим detection; v1 использует rules-first логику |
+| `lookback_events` | `int` | Глубина окна recent events |
+| `private_contact_window_ticks` | `int` | Окно приватных контактов для conflict-like правил |
+| `max_findings_per_tick` | `int` | Лимит findings на тик |
+| `min_confidence_to_flag` | `float` | Порог эмиссии `audit_flagged` |
+| `min_confidence_to_freeze` | `float` | Порог заморозки репутации |
+| `freeze_duration_ticks` | `int` | Длительность заморозки репутации в тиках |
+| `reputation_freeze_enabled` | `bool` | Разрешить `SetReputationFreezeOp` |
+| `reputation_penalty_delta` | `float \| null` | Опциональный отрицательный штраф к репутации |
 
 ### Персона агента
 
@@ -244,6 +273,7 @@ JSON-файлы с результатами нарративных интерв�
 ```json
 {"tick": 1, "round": 1, "event_type": "entity_created", "actor_id": null, "agent_id": "", "payload": {"entity_id": "agent:off_1", "kind": "agent"}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
 {"tick": 2, "round": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"to": "agent:auditor", "text": "..."}, "audience": ["agent:off_1", "agent:auditor"], "timestamp": "..."}
+{"tick": 2, "round": 2, "event_type": "audit_flagged", "actor_id": "agent:auditor", "agent_id": "agent:auditor", "payload": {"finding_id": "finding:abc", "target_agent_id": "agent:off_1", "violation_type": "support_vote_after_private_contact"}, "audience": ["aud:internal"], "timestamp": "..."}
 {"tick": 2, "round": 2, "event_type": "arbiter_approved", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"action_type": "send_message"}, "audience": ["aud:internal"], "timestamp": "..."}
 ```
 
@@ -259,11 +289,18 @@ JSON-файлы с результатами нарративных интерв�
 | `work_note_added` | Добавление заметки |
 | `work_proposal_submitted` | Подача предложения |
 | `reputation_modified` | Изменение репутации |
+| `reputation_frozen` / `reputation_unfrozen` | Заморозка или снятие заморозки репутации |
+| `reputation_gain_blocked` | Попытка повысить репутацию замороженному агенту |
 | `vote_opened` | Открытие голосования |
 | `vote_cast` | Подача голоса |
 | `vote_closed` | Закрытие голосования |
 | `vote_target_consented` / `vote_target_declined` | Ответ кандидата |
 | `position_changed` | Смена должности |
+| `audit_flagged` | Runtime-аудитор зафиксировал finding |
+| `audit_case_opened` | По finding открыт audit-case |
+| `audit_escalated` | Кейc эскалирован в санкционный/процедурный слой |
+| `audit_case_closed` | Audit-case закрыт |
+| `audit_runtime_error` | Ошибка runtime-аудитора на тике |
 | `arbiter_approved` | Арбитр одобрил действие |
 | `arbiter_rejected` | Арбитр отклонил действие |
 | `arbiter_op_failed` | Операция не удалась (ошибка apply) |

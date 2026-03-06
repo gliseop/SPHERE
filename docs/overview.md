@@ -18,6 +18,7 @@ C4Context
         System(eng, "WorldEngine", "Параллельные ходы агентов + детерминированный apply")
         System(agent, "AgentRunner", "Структурированные действия, 1 LLM-вызов на ход")
         System(arb, "Arbiter", "Гибридный арбитр: полномочия + YAML-журнал + LLM")
+        System(aud, "RuntimeAuditor", "Rules-first detection + audit events + freeze")
         System(ent, "EntityRegistry", "Антифантомная защита, типизированные ID")
     }
 
@@ -36,6 +37,7 @@ C4Context
     Rel(api, react, "REST / WebSocket")
     Rel(agent, eng, "Принимает решения")
     Rel(arb, eng, "Оценивает действия")
+    Rel(aud, eng, "Выявляет governance-сигналы")
     Rel(ent, arb, "Валидация сущностей")
 ```
 
@@ -49,9 +51,11 @@ C4Context
 
 **Действие** (`Action`) — структурированная команда агента: `send_message`, `add_work_note`, `submit_work_proposal`, `cast_vote`, `spawn_agent`, `perform` (произвольное). Каждое действие проходит через арбитр, который проверяет полномочия и валидность.
 
-**Полномочие** (`Capability`) — право агента совершать определённый класс действий: `message` (коммуникация), `work` (рабочие записи и предложения), `dao` (голосование), `audit` (проверка), `spawn` (введение новых участников). Один агент может обладать несколькими полномочиями.
+**Полномочие** (`Capability`) — право агента совершать определённый класс действий: `message` (коммуникация), `work` (рабочие записи и предложения), `dao` (голосование), `audit` (audit-related действия, например `modify_reputation` через `perform`), `spawn` (введение новых участников). Один агент может обладать несколькими полномочиями.
 
 **Арбитр** (`Arbiter`) — гибридный механизм: сначала детерминированная проверка полномочий и существования адресатов, затем (для `perform`-действий) LLM-оценка допустимости на основе YAML-журнала мира.
+
+**Runtime-аудитор** (`RuntimeAuditor`) — отдельный governance-компонент, который анализирует уже совершённые события тика, формирует findings (`audit_flagged`, `audit_case_opened`) и может запускать интервенции (`reputation_frozen`). Он не подменяет `Arbiter` и не заменяет post-hoc `ViolationOracle`.
 
 Подробное описание — в [architecture_guide.md](./architecture_guide.md) и [simulation_engine.md](./simulation_engine.md).
 

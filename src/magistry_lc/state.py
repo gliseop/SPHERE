@@ -25,6 +25,8 @@ class AgentState:
     capabilities: list[str] = field(default_factory=list)
 
     reputation: float = 0.0  # clamp >= 0
+    reputation_frozen: bool = False
+    reputation_frozen_until_tick: int | None = None
     title: str = "специалист"
     wants_promotion: bool = True
 
@@ -106,6 +108,9 @@ class WorldState:
                     "name": a.name,
                     "internal": a.internal,
                     "title": a.title if a.internal else "",
+                    "reputation": round(float(a.reputation), 3) if a.internal else None,
+                    "reputation_frozen": bool(a.reputation_frozen) if a.internal else None,
+                    "reputation_frozen_until_tick": a.reputation_frozen_until_tick if a.internal else None,
                     "capabilities": list(a.capabilities),
                 }
             )

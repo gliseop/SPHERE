@@ -17,24 +17,27 @@ flowchart TD
     SG --> BOOT[Bootstrap persona/interview в долгосрочную память + создание runners]
     BOOT --> TICK[Тик N]
 
-    TICK --> SHUFFLE[Перемешать порядок агентов]
+    TICK --> THAW[Снять истёкшие заморозки репутации]
+    THAW --> SHUFFLE[Перемешать порядок агентов]
     SHUFFLE --> DECIDE[AgentRunner.decide: промпт → Action JSON]
     DECIDE --> ARBITER[Arbiter: валидация + перевод в StateOp]
     ARBITER --> APPLY[ops.apply: StateOp → Event]
     APPLY --> REGNEW[Регистрация новых runners]
-    REGNEW --> LOG[EventLog: запись в JSONL]
-    LOG --> MEM[Обновление памяти агента]
 
-    MEM --> DAO{Есть открытые голосования?}
+    REGNEW --> DAO{Есть открытые голосования?}
     DAO -->|да| CLOSE[DaoEngine: проверка кворума, закрытие]
     DAO -->|нет| WGEN
     CLOSE --> WGEN
 
     WGEN{Генератор мира включён?}
     WGEN -->|да| WGEVT[WorldGenerator: события + spawn suggestions]
-    WGEN -->|нет| NEXT
+    WGEN -->|нет| AUDIT
 
-    WGEVT --> NEXT{Ещё тики?}
+    WGEVT --> AUDIT[RuntimeAuditor: detection + audit events + ops]
+    AUDIT --> LOG[EventLog: запись в JSONL]
+    LOG --> MEM[Обновление памяти агента]
+
+    MEM --> NEXT{Ещё тики?}
     NEXT -->|да| TICK
     NEXT -->|нет| RESULT[Финал: WorldState + events.jsonl + trace.jsonl]
 ```
@@ -90,11 +93,36 @@ flowchart TD
 2. LLM оценивает допустимость и формирует набор `StateOp[]` как результат.
 3. Действия, адресованные несуществующим сущностям, отклоняются до обращения к LLM.
 
+Важно: арбитр не является runtime-аудитором. Он отвечает за допустимость и перевод действий в операции, но не за поиск содержательных нарушений по уже совершённым событиям.
+
+## Runtime-аудитор (RuntimeAuditor)
+
+`RuntimeAuditor` — отдельный governance-компонент, запускаемый в конце тика после применения действий, закрытия DAO-голосований и worldgen. Его задача — выявлять rules-first сигналы риска по уже совершённым событиям и, при необходимости, инициировать управленческие последствия.
+
+В версии v1 аудитор:
+
+1. Анализирует `tick_events` текущего тика и ограниченное окно `recent_events`.
+2. Ищет generic governance-паттерны:
+   - self-reputation award;
+   - nomination after private contact;
+   - support vote after private contact;
+   - reputation reward after private contact.
+3. Формирует `AuditFinding[]`.
+4. Детерминированно преобразует findings в:
+   - `audit_flagged`;
+   - `audit_case_opened`;
+   - `audit_escalated`;
+   - `StateOp` для заморозки или штрафа репутации.
+
+Runtime-аудитор не подменяет собой `ViolationOracle` и не создаёт ground truth эксперимента. Его выход — это часть governance-treatment, а не пост-фактум измерение качества режима.
+
 ## Операции состояния (StateOp → Event)
 
-`ops.py` определяет детерминированные операции: `SendMessageOp`, `CreateEntityOp`, `CreateAgentOp`, `CreateWorkItemOp`, `AddWorkNoteOp`, `SubmitWorkProposalOp`, `CastVoteOp`, `OpenVoteOp`, `ModifyReputationOp`, `SetVoteConsentOp`. Каждая операция применяется к `WorldState` и порождает `Event`, записываемый в `EventLog` (JSONL). Последовательное применение гарантирует детерминизм при фиксированном зерне.
+`ops.py` определяет детерминированные операции: `SendMessageOp`, `CreateEntityOp`, `CreateAgentOp`, `CreateWorkItemOp`, `AddWorkNoteOp`, `SubmitWorkProposalOp`, `CastVoteOp`, `OpenVoteOp`, `ModifyReputationOp`, `SetVoteConsentOp`, `SetReputationFreezeOp`. Каждая операция применяется к `WorldState` и порождает `Event`, записываемый в `EventLog` (JSONL). Последовательное применение гарантирует детерминизм при фиксированном зерне.
 
 `CreateAgentOp` создаёт `AgentState` и `entity_created`, а полноценный `AgentRunner` и bootstrap памяти для нового агента регистрируются отдельным шагом после применения ops. Новый участник начинает ходить со следующего тика.
+
+`SetReputationFreezeOp` меняет состояние `AgentState.reputation_frozen` / `reputation_frozen_until_tick` и эмитит `reputation_frozen` или `reputation_unfrozen`. При активной заморозке positive reputation changes блокируются, а DAO не продвигает замороженного агента на новую должность.
 
 ## Память агента (AgentMemory)
 
@@ -135,6 +163,8 @@ flowchart TD
 
 При одобрении должность агента меняется через `StateOp`. При необходимости согласия кандидата (`require_consent`) ожидается `respond_nomination`.
 
+Если у цели активна заморозка репутации (`reputation_frozen=true`), голосование не проходит: `DaoEngine` возвращает `canceled`.
+
 ## Подсистема LLM
 
 ### LLMProvider (протокол)
@@ -174,7 +204,7 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 | `llm` | `LLMConfig` | Модель, провайдер, температура, трассировка |
 | `memory` | `MemoryConfig` | Буфер, индекс, веса, эмбеддинги |
 | `runtime` | `RuntimeConfig` | Язык, лимит действий, история тиков, LangGraph |
-| `governance` | `GovernanceConfig` | Политика должностей, кворум, порог, голосование |
+| `governance` | `GovernanceConfig` | Политика должностей, голосование и настройки runtime-аудита |
 | `agents` | `AgentConfig[]` | Агенты: ID, имя, персона, полномочия, должность |
 | `world` | `WorldConfig` | Каналы, организации, рабочие элементы |
 
@@ -185,3 +215,14 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 - `max_secondary_per_agent`: лимит связей, извлекаемых из одной персоны.
 - `max_agents`: общий потолок числа агентов в мире.
 - `allow_runtime_spawn`: разрешить `spawn_agent` и worldgen-spawn в ходе симуляции.
+
+Ключевые поля `governance.audit`:
+- `enabled`: включить runtime-аудитор.
+- `actor_id`: какой агент-идентификатор использовать как `actor_id` audit-событий.
+- `mode`: `rules`/`hybrid`/`llm` (в v1 основная логика rules-first).
+- `lookback_events`: глубина окна истории для audit detection.
+- `private_contact_window_ticks`: окно приватных контактов для conflict-like heuristics.
+- `min_confidence_to_flag`: минимальная уверенность для `audit_flagged`.
+- `min_confidence_to_freeze`: минимальная уверенность для `reputation_frozen`.
+- `freeze_duration_ticks`: длительность заморозки в тиках.
+- `reputation_penalty_delta`: опциональный отрицательный штраф к репутации поверх freeze.

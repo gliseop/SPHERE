@@ -68,6 +68,8 @@ class DaoEngine:
         target = state.agents.get(vote.target_agent_id)
         if target is None:
             return "canceled"
+        if target.reputation_frozen:
+            return "canceled"
         if not target.wants_promotion:
             return "canceled"
 

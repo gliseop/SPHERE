@@ -72,10 +72,18 @@ class MemoryConfig(BaseModel):
             "vote_closed": 7.0,
             "message_sent": 6.0,
             "reputation_modified": 6.0,
+            "reputation_frozen": 7.0,
+            "reputation_unfrozen": 5.0,
+            "reputation_gain_blocked": 6.0,
             "work_item_created": 5.0,
             "work_note_added": 5.0,
             "work_proposal_submitted": 5.0,
             "world_event": 5.0,
+            "audit_flagged": 7.0,
+            "audit_case_opened": 7.0,
+            "audit_escalated": 7.0,
+            "audit_case_closed": 5.0,
+            "audit_runtime_error": 7.0,
         }
     )
 
@@ -176,6 +184,56 @@ class RuntimeConfig(BaseModel):
             raise ValueError("max_agents must be > 0")
         return v
 
+
+class AuditRuntimeConfig(BaseModel):
+    """Настройки runtime-аудита в governance-слое."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    actor_id: str | None = None
+    mode: Literal["rules", "hybrid", "llm"] = "rules"
+    lookback_events: int = 120
+    private_contact_window_ticks: int = 3
+    max_findings_per_tick: int = 8
+    min_confidence_to_flag: float = 0.6
+    min_confidence_to_freeze: float = 0.85
+    freeze_duration_ticks: int = 3
+    reputation_freeze_enabled: bool = True
+    reputation_penalty_delta: float | None = None
+
+    @field_validator("actor_id")
+    @classmethod
+    def _validate_actor_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.AGENT)
+        return v
+
+    @field_validator("lookback_events", "private_contact_window_ticks", "max_findings_per_tick", "freeze_duration_ticks")
+    @classmethod
+    def _validate_non_negative_int(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("value must be >= 0")
+        return v
+
+    @field_validator("min_confidence_to_flag", "min_confidence_to_freeze")
+    @classmethod
+    def _validate_confidence(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("confidence threshold must be in [0, 1]")
+        return float(v)
+
+    @field_validator("reputation_penalty_delta")
+    @classmethod
+    def _validate_penalty_delta(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        if v > 0.0:
+            raise ValueError("reputation_penalty_delta must be <= 0")
+        return float(v)
+
+
 class GovernanceConfig(BaseModel):
     """Механизм управления должностями и голосованиями."""
 
@@ -187,6 +245,7 @@ class GovernanceConfig(BaseModel):
     pass_threshold: float = 0.5
     vote_duration_ticks: int = 3
     require_consent: bool = True
+    audit: AuditRuntimeConfig = Field(default_factory=AuditRuntimeConfig)
 
     @field_validator("quorum", "pass_threshold")
     @classmethod

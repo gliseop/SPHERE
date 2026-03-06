@@ -112,3 +112,25 @@ def test_graph_state_applies_lc_reputation_changes_to_target_agent():
     nodes = {node["id"]: node for node in graph["nodes"]}
     assert nodes["agent:off_1"]["reputation"] == 7.5
     assert nodes["agent:auditor"]["reputation"] == 10.0
+
+
+def test_graph_state_unfreezes_target_agent_from_lc_event():
+    graph = build_graph_state(
+        [
+            {
+                "tick": 1,
+                "event_type": "reputation_frozen",
+                "actor_id": "agent:auditor",
+                "payload": {"target_agent_id": "agent:off_1"},
+            },
+            {
+                "tick": 2,
+                "event_type": "reputation_unfrozen",
+                "actor_id": None,
+                "payload": {"target_agent_id": "agent:off_1"},
+            },
+        ]
+    )
+
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    assert nodes["agent:off_1"]["reputation_frozen"] is False

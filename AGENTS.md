@@ -35,6 +35,7 @@ MAGISTRY/
 │   ├── agent.py                # AgentRunner (1 LLM-вызов на ход)
 │   ├── ops.py                  # Детерминированные StateOp -> Event, включая CreateAgentOp
 │   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM perform)
+│   ├── auditor.py              # RuntimeAuditor (rules-first detection + governance interventions)
 │   ├── dao.py                  # DAO vote closure + position policy
 │   ├── engine.py               # WorldEngine (enrichment, social graph, динамический spawn, детерминированный apply)
 │   ├── worldgen.py             # WorldGenerator (external events + spawn suggestions, без приватных утечек)
@@ -73,7 +74,7 @@ MAGISTRY/
 │           ├── components/     # SimGraph, EventFeed, AgentPanel и др.
 │           ├── hooks/          # useAuth, useSimulation
 │           └── utils/          # apiClient, payload, time
-├── tests/                      # Тесты (9 файлов: движок, эмбеддинги, веб)
+├── tests/                      # Тесты (10+ файлов: движок, аудит, эмбеддинги, веб)
 ├── data/
 │   ├── agent_types/            # Шаблоны типов агентов (JSON)
 │   ├── personalities/          # Архетипы личности (JSON)
@@ -173,6 +174,7 @@ cd web && bash start.sh                   # сервер + фронтенд
 |---|---|
 | Добавить сценарий | `scenarios/` (YAML), `config.py` |
 | Изменить арбитра | `arbiter.py`, `journal.py`, `ops.py` |
+| Изменить runtime-аудит | `auditor.py`, `engine.py`, `ops.py`, `config.py` |
 | Изменить агентский цикл | `agent.py`, `memory.py`, `actions.py` |
 | Изменить социальный граф / динамический спавн | `persona.py`, `engine.py`, `actions.py`, `ops.py`, `worldgen.py` |
 | Добавить LLM-провайдера | `llm/providers.py`, `llm/__init__.py` |
@@ -188,6 +190,7 @@ cd web && bash start.sh                   # сервер + фронтенд
 - **Зависимость от OpenAI-совместимого API**: для запуска симуляции требуется `OPENAI_API_KEY` (или совместимый эндпоинт, например OpenRouter). Тесты используют `MockLLMProvider` и не требуют ключа.
 - **Эмбеддинги**: поддерживаются mock-режим и реальные провайдеры через OpenAI-совместимый API. Тесты используют `MockEmbeddingProvider`.
 - **Динамический спавн**: вторичные и runtime-спавненные агенты получают только безопасный capability-набор (`message`/`work`), без `audit` и без права порождать следующих агентов.
+- **Runtime-аудитор v1**: `RuntimeAuditor` реализован как отдельный rules-first модуль, а не как обычный `AgentRunner`; он пишет audit-сигналы и может замораживать репутацию, но не заменяет post-hoc `ViolationOracle`.
 - **Веб-интерфейс**: ряд эндпоинтов, зависевших от удалённого `magistry_sim`, возвращают HTTP 501 (заглушки).
 - **Legacy launcher в backend**: `web/backend/runner.py` функции `launch_simulation*` отключены и явно бросают `RuntimeError`, пока веб-запуск не мигрирован на `magistry_lc`.
 - **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.

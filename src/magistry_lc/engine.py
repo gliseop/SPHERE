@@ -15,6 +15,7 @@ from typing import Any, Iterable
 from .actions import Action, SendMessageAction
 from .agent import AgentRunner, event_visible_to_agent
 from .arbiter import Arbiter, ActionResult
+from .auditor import RuntimeAuditor
 from .config import ScenarioConfig
 from .dao import DaoEngine
 from .embeddings import embed_texts_cached
@@ -31,7 +32,7 @@ from .ids import (
 )
 from .journal import WorldJournal
 from .llm import LLMCaller, create_llm_provider
-from .ops import CreateAgentOp, CreateEntityOp, StateOp
+from .ops import CreateAgentOp, CreateEntityOp, SetReputationFreezeOp, StateOp
 from .persona import (
     PersonaArtifact,
     PersonaGenerator,
@@ -139,6 +140,10 @@ class WorldEngine:
             runtime=self.cfg.runtime,
             temperature=self.cfg.llm.temperature,
         )
+        auditor = RuntimeAuditor(
+            cfg=self.cfg.governance.audit,
+            llm=llm if self.cfg.governance.audit.mode != "rules" else None,
+        )
         worldgen = WorldGenerator(llm=llm, temperature=self.cfg.llm.temperature)
 
         runners: dict[str, AgentRunner] = {}
@@ -197,10 +202,11 @@ class WorldEngine:
             logger.info("tick=%s", tick)
 
             agent_order = self._agent_order(state=state, tick=tick)
+            tick_events = self._expire_reputation_freezes(state=state, event_log=event_log)
 
             if graph_app is not None:
                 out = await graph_app.ainvoke({"world": state, "events_history": events_history})
-                tick_events = list(out.get("tick_events") or [])
+                tick_events.extend(list(out.get("tick_events") or []))
             else:
                 # Сбор действий агентов параллельно.
                 proposed, gather_errors = await self._gather_actions(
@@ -209,7 +215,6 @@ class WorldEngine:
                     events_history=events_history,
                     agent_order=agent_order,
                 )
-                tick_events: list[Event] = []
                 if gather_errors:
                     event_log.extend(gather_errors)
                     tick_events.extend(gather_errors)
@@ -296,6 +301,42 @@ class WorldEngine:
                                 embedder=embedder,
                                 embed_cache=embed_cache,
                             )
+
+            if self.cfg.governance.audit.enabled:
+                audit_window = int(self.cfg.governance.audit.lookback_events)
+                combined_events = events_history + tick_events
+                audit_recent = combined_events[-audit_window:] if audit_window > 0 else list(tick_events)
+                try:
+                    audit_outcome = await auditor.inspect_tick(
+                        state=state,
+                        tick_events=tick_events,
+                        recent_events=audit_recent,
+                    )
+                except Exception as exc:
+                    logger.warning("Runtime auditor failed on tick %s: %s", state.tick, exc)
+                    audit_outcome = None
+                    audit_err = Event(
+                        tick=state.tick,
+                        event_type="audit_runtime_error",
+                        actor_id=None,
+                        payload={"error": {"type": exc.__class__.__name__, "message": str(exc)}},
+                        audience=[INTERNAL_AUDIENCE],
+                    )
+                    event_log.append(audit_err)
+                    tick_events.append(audit_err)
+                if audit_outcome is not None:
+                    if audit_outcome.events:
+                        event_log.extend(audit_outcome.events)
+                        tick_events.extend(audit_outcome.events)
+                    if audit_outcome.ops:
+                        tick_events.extend(
+                            self._apply_ops(
+                                state=state,
+                                ops=audit_outcome.ops,
+                                event_log=event_log,
+                                origin="runtime_audit",
+                            )
+                        )
 
             journal.apply_events(state=state, events=tick_events)
 
@@ -869,7 +910,8 @@ class WorldEngine:
                         payload={
                             "target_agent_id": a.agent_id,
                             "score": state.agents[a.agent_id].reputation,
-                            "frozen": False,
+                            "frozen": state.agents[a.agent_id].reputation_frozen,
+                            "frozen_until_tick": state.agents[a.agent_id].reputation_frozen_until_tick,
                             "title": state.agents[a.agent_id].title,
                         },
                         audience=[INTERNAL_AUDIENCE],
@@ -1033,6 +1075,33 @@ class WorldEngine:
                 events.append(ev)
         return events
 
+    def _expire_reputation_freezes(
+        self,
+        *,
+        state: WorldState,
+        event_log: EventLog,
+    ) -> list[Event]:
+        """Снять истёкшие заморозки репутации в начале тика."""
+        ops: list[StateOp] = []
+        for aid in sorted(state.agents.keys()):
+            agent = state.agents[aid]
+            until_tick = agent.reputation_frozen_until_tick
+            if not agent.reputation_frozen or until_tick is None:
+                continue
+            if state.tick < until_tick:
+                continue
+            ops.append(
+                SetReputationFreezeOp(
+                    actor_id=None,
+                    target_agent_id=aid,
+                    frozen=False,
+                    reason="freeze_duration_elapsed",
+                )
+            )
+        if not ops:
+            return []
+        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="freeze_expire")
+
     @staticmethod
     def _event_action_repr(action: Action | None) -> str:
         """Безопасная строка действия для event payload."""
@@ -1078,6 +1147,16 @@ class WorldEngine:
                 return f"Голосование закрыто {ev.payload.get('vote_id','')} result={ev.payload.get('result','')}"
             if ev.event_type == "position_changed":
                 return f"Должность изменена: {ev.payload.get('target_agent_id','')} -> {ev.payload.get('new_title','')}"
+            if ev.event_type == "audit_flagged":
+                return f"Аудит пометил агента {ev.payload.get('target_agent_id','')}: {ev.payload.get('violation_type','')}"
+            if ev.event_type == "audit_case_opened":
+                return f"Открыт аудит-кейс {ev.payload.get('case_id','')} для {ev.payload.get('target_agent_id','')}"
+            if ev.event_type == "audit_escalated":
+                return f"Аудит эскалировал кейс {ev.payload.get('case_id','')} route={ev.payload.get('route','')}"
+            if ev.event_type == "reputation_frozen":
+                return f"Репутация заморожена для {ev.payload.get('target_agent_id','')}"
+            if ev.event_type == "reputation_unfrozen":
+                return f"Репутация разморожена для {ev.payload.get('target_agent_id','')}"
             if ev.event_type == "world_event":
                 return f"Внешнее событие: {ev.payload.get('description','')}"
 

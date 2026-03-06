@@ -26,6 +26,7 @@ graph TB
 
     subgraph Управление["Управление и арбитраж"]
         ARBITER[arbiter.py<br/>HybridArbiter]
+        AUDITOR[auditor.py<br/>RuntimeAuditor]
         JOURNAL[journal.py<br/>YAMLJournal]
         DAO[dao.py<br/>DAO vote + policy]
     end
@@ -63,6 +64,7 @@ graph TB
     ENGINE --> STATE
     ENGINE --> AGENT
     ENGINE --> ARBITER
+    ENGINE --> AUDITOR
     ENGINE --> OPS
     ENGINE --> EVENTS
     ENGINE --> WORLDGEN
@@ -76,6 +78,9 @@ graph TB
     ARBITER --> JOURNAL
     ARBITER --> ENTITIES
     ARBITER --> CALLER
+    AUDITOR --> OPS
+    AUDITOR --> EVENTS
+    AUDITOR --> CALLER
 
     DAO --> OPS
     DAO --> STATE
@@ -106,6 +111,7 @@ graph TB
 | Как агент принимает решение | `agent.py` → `AgentRunner`, `memory.py` → гибридный retrieval |
 | Какие действия доступны агенту | `actions.py` → structured actions, `spawn_agent`, `perform` |
 | Как арбитр проверяет действия | `arbiter.py` → полномочия + антифантомы + LLM-perform |
+| Как runtime-аудитор выявляет сигналы риска | `auditor.py` → rules-first detection + audit events + freeze/penalty ops |
 | Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра |
 | Как устроено DAO-голосование | `dao.py` → кворум, порог, закрытие голосования |
 | Типизированные ID и антифантомы | `ids.py` + `entities.py` → `EntityRegistry` |
@@ -130,6 +136,7 @@ sequenceDiagram
     participant A as AgentRunner
     participant M as AgentMemory
     participant Arb as Arbiter
+    participant Aud as RuntimeAuditor
     participant Ent as EntityRegistry
     participant O as Ops
     participant S as WorldState
@@ -153,6 +160,13 @@ sequenceDiagram
             E->>EL: запись события
         end
     end
+
+    E->>Aud: inspect_tick(tick_events, recent_events)
+    Aud-->>E: audit events + StateOp[]
+    E->>O: apply(audit ops, state)
+    O->>S: update reputation freeze/penalties
+    O-->>E: Event
+    E->>EL: запись audit-событий
 
     E->>M: store(events для агента)
 ```

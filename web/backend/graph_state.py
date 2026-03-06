@@ -97,10 +97,17 @@ class GraphStateBuilder:
             return
 
         if event_type == "reputation_frozen":
-            target = aid
+            target = str(payload.get("target", payload.get("target_agent_id", aid)) or aid)
             if target:
                 self._ensure_agent(target)
                 self.agents[target]["reputation_frozen"] = True
+            return
+
+        if event_type == "reputation_unfrozen":
+            target = str(payload.get("target", payload.get("target_agent_id", aid)) or aid)
+            if target:
+                self._ensure_agent(target)
+                self.agents[target]["reputation_frozen"] = False
             return
 
         if event_type == "reputation_modified":

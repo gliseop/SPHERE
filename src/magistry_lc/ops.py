@@ -121,7 +121,8 @@ class CreateAgentOp:
                 payload={
                     "target_agent_id": self.entity_id,
                     "score": state.agents[self.entity_id].reputation,
-                    "frozen": False,
+                    "frozen": state.agents[self.entity_id].reputation_frozen,
+                    "frozen_until_tick": state.agents[self.entity_id].reputation_frozen_until_tick,
                     "title": state.agents[self.entity_id].title,
                 },
                 audience=[INTERNAL_AUDIENCE],
@@ -292,6 +293,16 @@ class ModifyReputationOp:
                     audience=[INTERNAL_AUDIENCE],
                 )
             ]
+        if agent.reputation_frozen and self.delta > 0:
+            return [
+                Event(
+                    tick=state.tick,
+                    event_type="reputation_gain_blocked",
+                    actor_id=self.actor_id,
+                    payload={"target_agent_id": self.target_agent_id, "delta": self.delta, "reason": self.reason},
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            ]
         agent.reputation = max(0.0, agent.reputation + self.delta)
         return [
             Event(
@@ -299,6 +310,67 @@ class ModifyReputationOp:
                 event_type="reputation_modified",
                 actor_id=self.actor_id,
                 payload={"target_agent_id": self.target_agent_id, "delta": self.delta, "reason": self.reason},
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class SetReputationFreezeOp:
+    """Заморозить или разморозить репутацию внутреннего агента."""
+
+    actor_id: str | None
+    target_agent_id: str
+    frozen: bool
+    reason: str = ""
+    until_tick: int | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        ensure_kind(self.target_agent_id, EntityKind.AGENT)
+        agent = state.agents.get(self.target_agent_id)
+        if agent is None:
+            raise ValueError(f"Agent not found: {self.target_agent_id!r}")
+        if not agent.internal:
+            return [
+                Event(
+                    tick=state.tick,
+                    event_type="reputation_ignored_external",
+                    actor_id=self.actor_id,
+                    payload={
+                        "target_agent_id": self.target_agent_id,
+                        "frozen": self.frozen,
+                        "reason": self.reason,
+                        "until_tick": self.until_tick,
+                    },
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            ]
+
+        if self.frozen:
+            agent.reputation_frozen = True
+            agent.reputation_frozen_until_tick = self.until_tick
+            return [
+                Event(
+                    tick=state.tick,
+                    event_type="reputation_frozen",
+                    actor_id=self.actor_id,
+                    payload={
+                        "target_agent_id": self.target_agent_id,
+                        "reason": self.reason,
+                        "until_tick": self.until_tick,
+                    },
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            ]
+
+        agent.reputation_frozen = False
+        agent.reputation_frozen_until_tick = None
+        return [
+            Event(
+                tick=state.tick,
+                event_type="reputation_unfrozen",
+                actor_id=self.actor_id,
+                payload={"target_agent_id": self.target_agent_id, "reason": self.reason},
                 audience=[INTERNAL_AUDIENCE],
             )
         ]

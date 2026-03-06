@@ -185,7 +185,12 @@ class WorldJournal:
                     changed = True
                 continue
 
-            if ev.event_type in ("position_changed", "reputation_modified"):
+            if ev.event_type in (
+                "position_changed",
+                "reputation_modified",
+                "reputation_frozen",
+                "reputation_unfrozen",
+            ):
                 target = str((ev.payload or {}).get("target_agent_id") or "").strip()
                 if target and target in state.agents:
                     if target not in self.agents:
@@ -403,6 +408,29 @@ class WorldJournal:
                 "reason": self._truncate(str(p.get("reason") or ""), 180),
             }
 
+        if t in ("reputation_frozen", "reputation_unfrozen"):
+            return {
+                "tick": int(ev.tick),
+                "type": t,
+                "actor_id": ev.actor_id,
+                "target_agent_id": str(p.get("target_agent_id") or ""),
+                "reason": self._truncate(str(p.get("reason") or ""), 180),
+                "until_tick": p.get("until_tick"),
+            }
+
+        if t in ("audit_flagged", "audit_case_opened", "audit_escalated", "audit_case_closed"):
+            return {
+                "tick": int(ev.tick),
+                "type": t,
+                "actor_id": ev.actor_id,
+                "finding_id": self._truncate(str(p.get("finding_id") or ""), 120),
+                "target_agent_id": str(p.get("target_agent_id") or ""),
+                "violation_type": self._truncate(str(p.get("violation_type") or ""), 120),
+                "severity": self._truncate(str(p.get("severity") or ""), 32),
+                "summary": self._truncate(str(p.get("summary") or ""), 220),
+                "route": self._truncate(str(p.get("route") or ""), 64),
+            }
+
         if t == "entity_created":
             return {
                 "tick": int(ev.tick),
@@ -422,6 +450,8 @@ class WorldJournal:
             "internal": a.internal,
             "title": a.title if a.internal else "",
             "reputation": round(float(a.reputation), 3) if a.internal else None,
+            "reputation_frozen": bool(a.reputation_frozen) if a.internal else None,
+            "reputation_frozen_until_tick": a.reputation_frozen_until_tick if a.internal else None,
             "capabilities": list(a.capabilities),
         }
 
