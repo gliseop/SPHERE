@@ -273,10 +273,13 @@ class WorldEngine:
             # Внешние события мира (без утечки промптов).
             if self.cfg.runtime.enable_worldgen and (tick % self.cfg.runtime.worldgen_every_ticks == 0):
                 try:
+                    simulated_date = self.cfg.runtime.simulated_date(state.tick)
                     generated = await worldgen.generate(
                         tick=state.tick,
                         recent_events=tick_events,
                         language=self.cfg.runtime.language,
+                        current_date=simulated_date.isoformat() if simulated_date is not None else None,
+                        tick_duration_days=self.cfg.runtime.tick_duration_days,
                     )
                 except Exception as exc:
                     logger.warning("World generator failed on tick %s: %s", state.tick, exc)
@@ -496,6 +499,45 @@ class WorldEngine:
             meta={"source": "social_link"},
         )
 
+    @staticmethod
+    def _match_existing_agent_for_social_link(
+        *,
+        state: WorldState,
+        link_name: str,
+    ) -> str | None:
+        """Найти уже существующего агента по имени social-link.
+
+        Это защищает симуляцию от онтологических дублей вида
+        "agent:contractor" + "agent:sec_petrov_d_n", когда extractor
+        повторно выделяет уже существующего участника мира.
+        """
+        key = social_link_name_key(link_name)
+        if not key:
+            return None
+
+        key_to_ids: dict[str, list[str]] = {}
+        for aid, agent in state.agents.items():
+            agent_key = social_link_name_key(agent.name)
+            if not agent_key:
+                continue
+            key_to_ids.setdefault(agent_key, []).append(aid)
+
+        matched_key = social_link_match_key(key, list(key_to_ids.keys()))
+        if not matched_key:
+            return None
+
+        candidate_ids = key_to_ids.get(matched_key) or []
+        if not candidate_ids:
+            return None
+        if len(candidate_ids) == 1:
+            return candidate_ids[0]
+
+        exact_name = (link_name or "").casefold()
+        for aid in candidate_ids:
+            if state.agents[aid].name.casefold() == exact_name:
+                return aid
+        return candidate_ids[0]
+
     async def _generate_personas_batch(
         self,
         *,
@@ -575,10 +617,39 @@ class WorldEngine:
 
         extraction = await asyncio.gather(*[_one(aid) for aid in primary_ids])
         buckets: dict[str, dict[str, Any]] = {}
+        existing_refs: dict[str, dict[str, Any]] = {}
         order = 0
         for primary_id, links in extraction:
             primary = state.agents[primary_id]
             for link in links:
+                matched_agent_id = self._match_existing_agent_for_social_link(
+                    state=state,
+                    link_name=link.name,
+                )
+                if matched_agent_id is not None:
+                    # Не создаём "теневых" клонов уже существующих агентов.
+                    if matched_agent_id == primary_id:
+                        logger.info(
+                            "Skipping self-link secondary spawn for %s -> %s",
+                            primary_id,
+                            link.name,
+                        )
+                        continue
+                    ref_bucket = existing_refs.setdefault(
+                        matched_agent_id,
+                        {
+                            "link_name": link.name,
+                            "sources": [],
+                        },
+                    )
+                    ref_bucket["sources"].append((primary_id, primary.name, link.relation))
+                    logger.info(
+                        "Reusing existing agent %s for social link %r from %s",
+                        matched_agent_id,
+                        link.name,
+                        primary_id,
+                    )
+                    continue
                 raw_key = (
                     social_link_name_key(link.name)
                     or social_link_name_key(link.relation)
@@ -597,6 +668,24 @@ class WorldEngine:
                 bucket["count"] = int(bucket["count"]) + 1
                 bucket["sources"].append((primary_id, primary.name, link.relation))
                 order += 1
+
+        for existing_agent_id, meta in existing_refs.items():
+            existing_agent = state.agents.get(existing_agent_id)
+            if existing_agent is None:
+                continue
+            for primary_id, primary_name, relation in meta["sources"]:
+                primary = state.agents.get(primary_id)
+                if primary is not None:
+                    self._attach_relation_memory(
+                        agent=primary,
+                        tick=state.tick,
+                        text=f"{relation}: {existing_agent.name} ({existing_agent.agent_id})",
+                    )
+                self._attach_relation_memory(
+                    agent=existing_agent,
+                    tick=state.tick,
+                    text=f"Связь: {relation} агента {primary_name} ({primary_id})",
+                )
 
         if not buckets:
             return []
@@ -1166,7 +1255,11 @@ class WorldEngine:
                 return f"Публичное сообщение {ev.actor_id} -> {to_id}: {text}"
 
             if ev.event_type == "arbiter_rejected":
-                return f"Арбитр отклонил действие: {ev.payload.get('reason','')}"
+                reason = str(ev.payload.get("reason", "") or "")
+                action = str(ev.payload.get("action", "") or "")
+                if action:
+                    return f"Арбитр отклонил действие {action}: {reason}"
+                return f"Арбитр отклонил действие: {reason}"
             if ev.event_type == "arbiter_op_failed":
                 return f"Операция провалилась: {redact_numbers(ev.payload.get('error',{}))}"
             if ev.event_type == "vote_opened":

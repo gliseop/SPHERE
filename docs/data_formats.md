@@ -22,6 +22,8 @@ llm:
 
 runtime:
   language: "ru"
+  start_date: "2026-01-01"
+  tick_duration_days: 1
   max_actions_per_turn: 2
   tick_events_history: 200
   enable_worldgen: false
@@ -95,6 +97,8 @@ world:
 
 | Поле | Тип | Назначение |
 |---|---|---|
+| `start_date` | `YYYY-MM-DD \| null` | Каноническая дата тика `0`; если не задана, агент и worldgen видят только номер тика |
+| `tick_duration_days` | `int` | Сколько календарных дней проходит за один тик симуляции |
 | `enrich_personas` | `bool` | Runtime-обогащение summary → biography/interview перед первым тиком |
 | `persona_enrich_mode` | `full`/`core` | `full` = summary+biography+interview, `core` = summary+biography |
 | `spawn_secondary` | `bool` | Извлекать вторичных агентов из социального графа биографий до первого тика |

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -52,6 +53,13 @@ from .ops import (
     StateOp,
 )
 from .state import WorldState
+
+
+_WORK_TOKEN_RE = re.compile(r"[^A-Za-zА-Яа-я0-9_]+")
+
+
+def _work_tokens(text: str) -> set[str]:
+    return {t for t in _WORK_TOKEN_RE.split((text or "").casefold()) if t}
 
 
 @dataclass(slots=True)
@@ -336,6 +344,48 @@ class Arbiter:
             return out
         return ["message", "work"] if internal else ["message"]
 
+    @staticmethod
+    def _find_duplicate_open_work_item(
+        *,
+        state: WorldState,
+        work_type: str,
+        title: str,
+    ) -> str | None:
+        """Найти похожее открытое дело, если оно уже существует.
+
+        Это подавляет бюрократические дубли, когда агенты многократно
+        создают почти одинаковые work items вместо работы в уже открытом деле.
+        """
+        new_title_tokens = _work_tokens(title)
+        new_work_type = (work_type or "").strip().casefold()
+        new_title_norm = " ".join(sorted(new_title_tokens))
+        if not new_title_tokens:
+            return None
+
+        best_work_id: str | None = None
+        best_score = 0.0
+        for wid, work in state.work_items.items():
+            if (work.status or "open") != "open":
+                continue
+            existing_tokens = _work_tokens(work.title)
+            if not existing_tokens:
+                continue
+            existing_norm = " ".join(sorted(existing_tokens))
+            if new_title_norm == existing_norm:
+                return wid
+            if new_work_type and (work.work_type or "").strip().casefold() != new_work_type:
+                continue
+            intersection = new_title_tokens & existing_tokens
+            if not intersection:
+                continue
+            containment = len(intersection) / max(1, min(len(new_title_tokens), len(existing_tokens)))
+            jaccard = len(intersection) / max(1, len(new_title_tokens | existing_tokens))
+            score = containment + jaccard
+            if containment >= 0.8 and jaccard >= 0.5 and score > best_score:
+                best_score = score
+                best_work_id = wid
+        return best_work_id
+
     async def _arbitrate_one(
         self,
         *,
@@ -412,6 +462,18 @@ class Arbiter:
             )
             if participants_error:
                 return ActionResult(action_index, False, participants_error, [])
+            duplicate_work_id = self._find_duplicate_open_work_item(
+                state=state,
+                work_type=action.work_type,
+                title=action.title,
+            )
+            if duplicate_work_id is not None:
+                return ActionResult(
+                    action_index,
+                    False,
+                    f"duplicate_open_work_item:{duplicate_work_id}",
+                    [],
+                )
             wid = self.id_alloc.next_id(EntityKind.WORK_ITEM, tick=state.tick)
             return ActionResult(
                 action_index,
@@ -778,6 +840,13 @@ class Arbiter:
             )
             if participants_error:
                 raise ValueError(participants_error)
+            duplicate_work_id = self._find_duplicate_open_work_item(
+                state=state,
+                work_type=str(args.get("work_type") or ""),
+                title=str(args.get("title") or ""),
+            )
+            if duplicate_work_id is not None:
+                raise ValueError(f"duplicate_open_work_item:{duplicate_work_id}")
             return [
                 CreateWorkItemOp(
                     created_by=agent_id,

@@ -24,6 +24,8 @@ from .utils import redact_numbers
 
 _WS_RE = re.compile(r"\s+")
 _ACTION_ADAPTER = TypeAdapter(Action)
+_ACTION_WORK_ID_RE = re.compile(r"'work_id': '([^']+)'")
+_ACTION_TO_ID_RE = re.compile(r"'to_id': '([^']+)'")
 
 
 def _norm(text: str) -> str:
@@ -35,6 +37,55 @@ def _truncate(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[: max(0, max_chars - 1)].rstrip() + "…"
+
+
+def _recent_rejection_hints(visible_events: list[Event]) -> list[str]:
+    """Собрать краткие подсказки по недавним отклонённым действиям.
+
+    Это помогает агенту не жить вокруг phantom-work_id и других сущностей,
+    которые арбитр уже отклонил как несуществующие или недопустимые.
+    """
+    hints: list[str] = []
+    seen: set[str] = set()
+    for ev in reversed(visible_events[-50:]):
+        if ev.event_type != "arbiter_rejected":
+            continue
+        payload = ev.payload or {}
+        reason = str(payload.get("reason") or "")
+        action = str(payload.get("action") or "")
+        hint = ""
+        if reason.startswith("unknown work_id: "):
+            work_id = reason.split(": ", 1)[1].strip()
+            hint = f"work_id {work_id} не существует; не используй его повторно"
+        elif reason.startswith("unknown to_id: "):
+            to_id = reason.split(": ", 1)[1].strip()
+            hint = f"to_id {to_id} не существует; выбери существующую цель"
+        elif reason.startswith("unknown channel_id: "):
+            channel_id = reason.split(": ", 1)[1].strip()
+            hint = f"channel_id {channel_id} не существует; публиковать можно только в существующий канал"
+        elif reason.startswith("private_message_requires_agent_target:"):
+            to_id = reason.split(":", 1)[1].strip()
+            hint = f"private=true нельзя использовать для {to_id}; приватные сообщения допустимы только агентам"
+        elif reason.startswith("public_message_requires_chan_or_org_target:"):
+            to_id = reason.split(":", 1)[1].strip()
+            hint = f"private=false нельзя использовать для {to_id}; публичные сообщения адресуются только chan:* или org:*"
+        elif reason.startswith("missing_capability:work"):
+            match = _ACTION_WORK_ID_RE.search(action)
+            if match:
+                hint = (
+                    f"у тебя нет capability work; не пытайся работать с {match.group(1)} "
+                    "через create_work_item/add_work_note/submit_work_proposal"
+                )
+        elif reason.startswith("missing_capability:message"):
+            match = _ACTION_TO_ID_RE.search(action)
+            if match:
+                hint = f"у тебя нет capability message; не пытайся отправлять сообщения в {match.group(1)}"
+        if not hint or hint in seen:
+            continue
+        seen.add(hint)
+        hints.append(hint)
+    hints.reverse()
+    return hints
 
 
 @dataclass(slots=True)
@@ -71,6 +122,18 @@ class AgentRunner:
         org_ids = ", ".join(state.registry.list_ids(EntityKind.ORG)) or "(нет)"
         open_votes = [vid for vid, v in state.votes.items() if v.status == "open"]
         vote_ids = ", ".join(sorted(open_votes)) or "(нет)"
+        work_summaries = []
+        for wid in sorted(state.work_items.keys())[:12]:
+            work = state.work_items[wid]
+            work_summaries.append(f"- {wid}: {work.title} [{work.status}]")
+        work_summaries_text = "\n".join(work_summaries) if work_summaries else "- (нет)"
+        simulated_date = self.runtime.simulated_date(state.tick)
+        time_line = (
+            f"Каноническая дата мира: {simulated_date.isoformat()} "
+            f"(1 tick = {self.runtime.tick_duration_days} дн.)\n"
+            if simulated_date is not None
+            else ""
+        )
 
         # Для MVP даём события как короткие факты.
         facts = []
@@ -78,6 +141,8 @@ class AgentRunner:
             # не показываем сырые числа репутации и т.п.
             facts.append(f"- [{ev.event_type}] {redact_numbers(ev.payload)}")
         facts_text = "\n".join(facts) if facts else "- (нет)"
+        rejection_hints = _recent_rejection_hints(visible_events)
+        rejection_hints_text = "\n".join(f"- {item}" for item in rejection_hints) if rejection_hints else "- (нет)"
 
         # Инструкция по действиям.
         max_actions = self.runtime.max_actions_per_turn
@@ -109,6 +174,7 @@ class AgentRunner:
 
         return (
             f"Раунд (tick): {state.tick}\n"
+            f"{time_line}"
             f"Ты: {agent.name} ({agent.agent_id}).\n"
             f"Твоя должность: {agent.title if agent.internal else '(внешний)'}.\n\n"
             "Доступные сущности (используй только эти ID):\n"
@@ -117,14 +183,19 @@ class AgentRunner:
             f"- Channels: {channel_ids}\n"
             f"- Orgs: {org_ids}\n"
             f"{votes_line}\n"
+            "Открытые/известные дела (кратко):\n"
+            f"{work_summaries_text}\n\n"
             "Наблюдения (последние события, доступные тебе):\n"
             f"{facts_text}\n\n"
+            "Недавние недопустимые действия / ID:\n"
+            f"{rejection_hints_text}\n\n"
             f"Память:\n{mem_text}\n\n"
             "Доступные типы действий:\n"
             f"{actions_block}\n\n"
             "Сгенерируй действия на этот тик.\n"
             f"Правила:\n"
             f"- максимум {max_actions} действий\n"
+            "- если упоминаешь даты или сроки, не противоречь канонической дате мира\n"
             "- ПРЕДПОЧИТАЙ структурированные действия (send_message, add_work_note и др.) вместо perform\n"
             "- perform используй ТОЛЬКО когда нет подходящего структурированного типа\n"
             "- не выдумывай новые ID; если нужна новая организация/канал — используй request_entity\n"

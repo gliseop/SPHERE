@@ -95,7 +95,15 @@ class WorldGenerator:
     llm: LLMCaller
     temperature: float = 0.0
 
-    async def generate(self, *, tick: int, recent_events: list[Event], language: str) -> WorldgenOutput:
+    async def generate(
+        self,
+        *,
+        tick: int,
+        recent_events: list[Event],
+        language: str,
+        current_date: str | None = None,
+        tick_duration_days: int = 1,
+    ) -> WorldgenOutput:
         """Сгенерировать внешние события и предложения спавна."""
         compact = []
         for ev in recent_events[-200:]:
@@ -115,10 +123,17 @@ class WorldGenerator:
             "Сгенерируй 0–3 внешних события, которые логично следуют из ситуации.\n"
             "При необходимости предложи 0–2 новых персонажей, которые логично появляются в сюжете именно сейчас.\n"
             "Новый персонаж должен быть релевантен текущим событиям и иметь краткий persona_hint.\n"
+            "Если упоминаешь даты, не противоречь канонической временной линии сценария.\n"
             f"Пиши на языке: {language!r}.\n"
             "Ответ: JSON по схеме.\n"
         )
-        user = json.dumps({"tick": tick, "events": compact}, ensure_ascii=False)
+        payload = {
+            "tick": tick,
+            "current_date": current_date,
+            "tick_duration_days": tick_duration_days,
+            "events": compact,
+        }
+        user = json.dumps(payload, ensure_ascii=False)
         resp = await self.llm.generate_structured(
             role="worldgen",
             name="world_generator",

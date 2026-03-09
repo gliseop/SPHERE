@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ..config import LLMConfig
@@ -19,8 +20,26 @@ from .providers import OpenAICompatibleProvider
 from ..tracing import TraceLog, TraceSpan
 
 
+def _load_dotenv_if_available() -> None:
+    """Подгрузить `.env`, если библиотека доступна.
+
+    Это выравнивает поведение CLI/движка с web backend, который уже
+    подхватывает `.env` автоматически.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    cwd_env = Path.cwd() / ".env"
+    if cwd_env.exists():
+        load_dotenv(dotenv_path=cwd_env)
+        return
+    load_dotenv()
+
+
 def create_llm_provider(cfg: LLMConfig) -> LLMProvider:
     """Создать LLM провайдер по конфигу."""
+    _load_dotenv_if_available()
     api_key = os.getenv(cfg.api_key_env)
     if not api_key:
         raise RuntimeError(f"{cfg.api_key_env} is not set")

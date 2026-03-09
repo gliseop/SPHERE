@@ -183,6 +183,39 @@ def test_arbiter_rejects_work_item_with_unknown_participant(tmp_path: Path) -> N
     assert "unknown_participant_agent_id" in res[0].reason
 
 
+def test_arbiter_rejects_duplicate_open_work_item(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["work"], off_2_caps=["work"])
+    state.work_items["work:existing"] = WorkItem(
+        work_id="work:existing",
+        work_type="procurement_review",
+        title="Подписание договора с ООО СтройГарант",
+        description="",
+        participants=["agent:off_1"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="work:existing",
+            kind=EntityKind.WORK_ITEM,
+            created_by=None,
+            created_tick=0,
+            meta={"work_type": "procurement_review", "title": "Подписание договора с ООО СтройГарант"},
+        )
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    act = CreateWorkItemAction(
+        type=ActionType.CREATE_WORK_ITEM,
+        work_type="procurement_review",
+        title="Подготовка и подписание договора с ООО СтройГарант",
+        description="",
+        participants=["agent:off_1"],
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert res[0].reason == "duplicate_open_work_item:work:existing"
+
+
 def test_arbiter_rejects_vote_from_non_voter(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
     state.votes["vote:1"] = Vote(
@@ -376,6 +409,30 @@ def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
     _ = create_llm_provider(LLMConfig(model="gpt-4o-mini", base_url=None))
     assert captured["base_url"] == "https://example.test/v1"
+
+
+def test_create_llm_provider_loads_dotenv_from_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProvider:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("magistry_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "OPENAI_API_KEY=dotenv-test-key\nOPENAI_BASE_URL=https://dotenv.example/v1\n",
+        encoding="utf-8",
+    )
+
+    _ = create_llm_provider(LLMConfig(model="gpt-4o-mini", base_url=None))
+
+    assert captured["api_key"] == "dotenv-test-key"
+    assert captured["base_url"] == "https://dotenv.example/v1"
 
 
 def test_memory_summarizes_working_buffer(tmp_path: Path) -> None:

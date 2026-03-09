@@ -19,6 +19,8 @@ llm:
 
 runtime:
   language: "ru"
+  start_date: "2026-03-09"
+  tick_duration_days: 1
   max_actions_per_turn: 3
   tick_events_history: 300
   enrich_personas: true

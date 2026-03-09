@@ -11,7 +11,7 @@ from magistry_lc.engine import RunArtifacts, WorldEngine
 from magistry_lc.entities import EntityRegistry
 from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
 from magistry_lc.persona import PersonaArtifact
-from magistry_lc.state import AgentState, WorldState
+from magistry_lc.state import AgentState, WorkItem, WorldState
 from magistry_lc.tracing import TraceLog
 from magistry_lc.worldgen import WorldGenerator
 
@@ -136,6 +136,99 @@ def test_render_memory_keeps_full_summary_and_adds_biography_excerpt(tmp_path: P
     assert summary[-20:] in mem_text
     assert "Биография (начало):" in mem_text
     assert "…" in mem_text
+
+
+def test_build_user_surfaces_recent_invalid_work_id(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Краткая персона"),
+        capabilities=["message", "work"],
+    )
+    state = WorldState(tick=1, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+    rejected = Event(
+        tick=0,
+        event_type="arbiter_rejected",
+        actor_id=agent.agent_id,
+        payload={
+            "reason": "unknown work_id: work:ghost",
+            "action": "{'type': 'add_work_note', 'work_id': 'work:ghost', 'text': '...'}",
+        },
+        audience=[agent.agent_id],
+    )
+
+    user = runner._build_user(
+        agent=agent,
+        state=state,
+        visible_events=[rejected],
+        mem_text="(пусто)",
+    )
+
+    assert "Недавние недопустимые действия / ID:" in user
+    assert "work_id work:ghost не существует" in user
+
+
+def test_build_user_includes_canonical_date(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Краткая персона"),
+        capabilities=["message"],
+    )
+    state = WorldState(tick=2, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(start_date="2026-03-09", tick_duration_days=1),
+        memory=MemoryConfig(),
+    )
+
+    user = runner._build_user(
+        agent=agent,
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    assert "Каноническая дата мира: 2026-03-11" in user
+
+
+def test_build_user_includes_work_item_titles(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Краткая персона"),
+        capabilities=["message", "work"],
+    )
+    state = WorldState(tick=0, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    state.work_items["work:alpha"] = WorkItem(
+        work_id="work:alpha",
+        work_type="review",
+        title="Проверка документации тендера",
+        participants=[agent.agent_id],
+    )
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    user = runner._build_user(
+        agent=agent,
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    assert "Открытые/известные дела (кратко):" in user
+    assert "work:alpha: Проверка документации тендера [open]" in user
 
 
 class _SocialGraphProvider(MockLLMProvider):
@@ -301,6 +394,22 @@ class _OptionalSpawnsWorldgenProvider(MockLLMProvider):
             data={"events": [{"audience": "public", "description": "Optional spawns worldgen event"}]},
             model="mock",
         )
+
+
+class _CaptureWorldgenPromptProvider(MockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_user = ""
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        self.last_user = user
+        return StructuredLLMResponse(data={"events": []}, model="mock")
 
 
 def test_engine_spawns_secondary_agents_before_first_tick(tmp_path: Path) -> None:
@@ -506,6 +615,82 @@ def test_engine_fuzzy_deduplicates_social_links(tmp_path: Path) -> None:
     assert len(secondary_ids) == 1
 
 
+def test_engine_reuses_existing_agent_instead_of_spawning_clone(tmp_path: Path) -> None:
+    class _ExistingAgentLinkProvider(MockLLMProvider):
+        def generate_structured(self, system: str, user: str, schema: dict, temperature: float = 0.0):
+            if "Выдели до" in user and "agent:head" in user:
+                return StructuredLLMResponse(
+                    data={
+                        "links": [
+                            {
+                                "name": "Петров Д.Н.",
+                                "relation": "давний знакомый подрядчик",
+                                "relevance": "Имеет значение для решений по тендеру.",
+                                "persona_hint": "Директор подрядной организации.",
+                                "internal": False,
+                                "capabilities": ["message"],
+                            }
+                        ]
+                    },
+                    model="mock",
+                )
+            if "Выдели до" in user:
+                return StructuredLLMResponse(data={"links": []}, model="mock")
+            return super().generate_structured(system, user, schema, temperature)
+
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "secondary-existing-agent-reuse",
+            "ticks": 1,
+            "runtime": {
+                "max_actions_per_turn": 1,
+                "spawn_secondary": True,
+                "max_secondary_per_agent": 1,
+                "max_agents": 4,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:head",
+                    "name": "Волков А.С.",
+                    "internal": True,
+                    "persona": {
+                        "summary": "Руководитель закупок.",
+                        "biography": "Давно знаком с Петровым Д.Н., директором подрядной организации.",
+                        "interview": [],
+                    },
+                    "capabilities": ["message"],
+                },
+                {
+                    "agent_id": "agent:contractor",
+                    "name": "Петров Д.Н.",
+                    "internal": False,
+                    "persona": {
+                        "summary": "Подрядчик.",
+                        "biography": "Руководит строительной компанией.",
+                        "interview": [],
+                    },
+                    "capabilities": ["message"],
+                },
+            ],
+            "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    state = asyncio.run(
+        WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=_ExistingAgentLinkProvider()).run()
+    )
+
+    secondary_ids = [aid for aid in state.agents if aid.startswith("agent:sec_")]
+    assert secondary_ids == []
+    assert any("agent:contractor" in doc.text for doc in state.agents["agent:head"].memory.docs)
+    assert any("agent:head" in doc.text for doc in state.agents["agent:contractor"].memory.docs)
+
+
 def test_runtime_spawn_registers_new_agent_for_next_tick(tmp_path: Path) -> None:
     cfg = ScenarioConfig.model_validate(
         {
@@ -700,3 +885,22 @@ def test_worldgen_accepts_object_without_spawns(tmp_path: Path) -> None:
     out = asyncio.run(wg.generate(tick=0, recent_events=[], language="ru"))
     assert len(out.events) == 1
     assert out.spawns == []
+
+
+def test_worldgen_prompt_includes_canonical_date(tmp_path: Path) -> None:
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    provider = _CaptureWorldgenPromptProvider()
+    llm = LLMCaller(provider=provider, trace=trace)
+    wg = WorldGenerator(llm=llm, temperature=0.0)
+
+    _ = asyncio.run(
+        wg.generate(
+            tick=3,
+            recent_events=[],
+            language="ru",
+            current_date="2026-03-12",
+            tick_duration_days=1,
+        )
+    )
+
+    assert '"current_date": "2026-03-12"' in provider.last_user

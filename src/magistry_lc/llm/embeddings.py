@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -129,6 +130,19 @@ class OpenAIEmbeddingProvider:
         return [d.embedding for d in sorted(resp.data, key=lambda x: x.index)]
 
 
+def _load_dotenv_if_available() -> None:
+    """Подгрузить `.env`, если библиотека доступна."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    cwd_env = Path.cwd() / ".env"
+    if cwd_env.exists():
+        load_dotenv(dotenv_path=cwd_env)
+        return
+    load_dotenv()
+
+
 def create_embedding_provider(
     mock: bool = True,
     model_name: str | None = None,
@@ -151,6 +165,7 @@ def create_embedding_provider(
 
     import os
 
+    _load_dotenv_if_available()
     resolved_key = api_key or os.getenv("OPENAI_API_KEY")
     resolved_url = base_url or os.getenv("OPENAI_BASE_URL")
     resolved_model = model_name or os.getenv(

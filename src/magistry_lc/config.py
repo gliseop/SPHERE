@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -148,6 +149,8 @@ class RuntimeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     language: str = "ru"
+    start_date: date | None = None
+    tick_duration_days: int = 1
     max_actions_per_turn: int = 3
     tick_events_history: int = 200
     enable_worldgen: bool = False
@@ -170,6 +173,13 @@ class RuntimeConfig(BaseModel):
             raise ValueError("max_actions_per_turn too large")
         return v
 
+    @field_validator("tick_duration_days")
+    @classmethod
+    def _validate_tick_duration_days(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("tick_duration_days must be > 0")
+        return v
+
     @field_validator("max_secondary_per_agent")
     @classmethod
     def _validate_secondary_limit(cls, v: int) -> int:
@@ -183,6 +193,12 @@ class RuntimeConfig(BaseModel):
         if v <= 0:
             raise ValueError("max_agents must be > 0")
         return v
+
+    def simulated_date(self, tick: int) -> date | None:
+        """Каноническая дата симуляции для данного тика."""
+        if self.start_date is None:
+            return None
+        return self.start_date + timedelta(days=int(tick) * int(self.tick_duration_days))
 
 
 class AuditRuntimeConfig(BaseModel):
