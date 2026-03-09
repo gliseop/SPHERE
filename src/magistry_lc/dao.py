@@ -9,25 +9,36 @@ from .ops import ChangePositionOp, CloseVoteOp, StateOp
 from .state import Vote, WorldState
 
 
+@dataclass(slots=True, frozen=True)
+class VoteDecision:
+    """Детерминированный исход DAO-голосования."""
+
+    result: str
+    reason: str
+
+
 @dataclass(slots=True)
 class DaoEngine:
     """Детерминированная обработка DAO голосований."""
 
     cfg: GovernanceConfig
 
-    def eligible_voters(self, state: WorldState) -> list[str]:
+    def eligible_voters(self, state: WorldState, *, exclude_agent_ids: set[str] | None = None) -> list[str]:
         """Список голосующих (внутренние агенты с capability ``dao``)."""
         if self.cfg.dao_voters:
             source = [aid for aid in self.cfg.dao_voters if aid in state.agents]
         else:
             source = state.get_internal_agent_ids()
 
+        excluded = set(exclude_agent_ids or set())
         voters: list[str] = []
         seen: set[str] = set()
         for aid in source:
             if aid in seen:
                 continue
             seen.add(aid)
+            if aid in excluded:
+                continue
             agent = state.agents.get(aid)
             if agent is None or not agent.internal:
                 continue
@@ -51,9 +62,9 @@ class DaoEngine:
             vote = state.votes[vote_id]
             if not self.should_close_vote(vote, tick=state.tick):
                 continue
-            result = self._compute_result(state, vote)
-            ops.append(CloseVoteOp(vote_id=vote_id, result=result))
-            if result == "passed":
+            decision = self._compute_result(state, vote)
+            ops.append(CloseVoteOp(vote_id=vote_id, result=decision.result, reason=decision.reason))
+            if decision.result == "passed":
                 ops.append(
                     ChangePositionOp(
                         actor_id=None,
@@ -64,27 +75,27 @@ class DaoEngine:
                 )
         return ops
 
-    def _compute_result(self, state: WorldState, vote: Vote) -> str:
+    def _compute_result(self, state: WorldState, vote: Vote) -> VoteDecision:
         target = state.agents.get(vote.target_agent_id)
         if target is None:
-            return "canceled"
+            return VoteDecision(result="canceled", reason="target_missing")
         if target.reputation_frozen:
-            return "canceled"
+            return VoteDecision(result="canceled", reason="reputation_frozen")
         if not target.wants_promotion:
-            return "canceled"
+            return VoteDecision(result="canceled", reason="target_declines_promotion")
 
         # Consent gate.
         if self.cfg.require_consent and vote.target_consented is not True:
-            return "canceled"
+            return VoteDecision(result="canceled", reason="consent_missing")
 
         voters_total = max(1, len(vote.voters))
         cast_total = len(vote.votes)
         if (cast_total / voters_total) < self.cfg.quorum:
-            return "failed"
+            return VoteDecision(result="failed", reason="quorum_not_reached")
 
         yes = sum(1 for c in vote.votes.values() if c == "yes")
         no = sum(1 for c in vote.votes.values() if c == "no")
         denom = max(1, yes + no)
         if (yes / denom) >= self.cfg.pass_threshold and yes > no:
-            return "passed"
-        return "failed"
+            return VoteDecision(result="passed", reason="threshold_passed")
+        return VoteDecision(result="failed", reason="threshold_failed")

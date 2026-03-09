@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from magistry_lc.actions import (
     PerformAction,
     RespondNominationAction,
     SendMessageAction,
+    SpawnAgentAction,
 )
 from magistry_lc.arbiter import Arbiter
 from magistry_lc.config import GovernanceConfig, LLMConfig, MemoryConfig, ScenarioConfig
@@ -166,6 +168,22 @@ def test_arbiter_blocks_nomination_when_target_declines_promotion(tmp_path: Path
     assert "target_declines_promotion" in res[0].reason
 
 
+def test_arbiter_blocks_self_nomination_by_default(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    act = NominatePositionChangeAction(
+        type=ActionType.NOMINATE_POSITION_CHANGE,
+        target_agent_id="agent:off_1",
+        new_title="начальник",
+        reason="test",
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert res[0].reason == "self_nomination_disabled"
+
+
 def test_arbiter_rejects_work_item_with_unknown_participant(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["work"], off_2_caps=["work"])
     arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
@@ -241,6 +259,31 @@ def test_arbiter_rejects_vote_from_non_voter(tmp_path: Path) -> None:
     assert "agent_is_not_eligible_voter" in res[0].reason
 
 
+def test_arbiter_rejects_target_self_vote_by_default(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_2",
+        created_tick=0,
+        closes_tick=2,
+        target_agent_id="agent:off_1",
+        new_title="lead",
+        voters=["agent:off_1", "agent:off_2"],
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    act = CastVoteAction(
+        type=ActionType.CAST_VOTE,
+        vote_id="vote:1",
+        choice="yes",
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert res[0].reason == "target_self_vote_disabled"
+
+
 def test_arbiter_rejects_nomination_response_from_non_target(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
     state.votes["vote:1"] = Vote(
@@ -298,6 +341,23 @@ def test_arbiter_rejects_second_open_vote_for_same_target_in_tick(tmp_path: Path
     assert "open_vote_already_exists_for_target" in out["agent:off_1"][1].reason
 
 
+def test_arbiter_open_vote_excludes_target_from_voters_by_default(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    act = NominatePositionChangeAction(
+        type=ActionType.NOMINATE_POSITION_CHANGE,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        reason="normal vote",
+        justification="",
+    )
+    out = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert out[0].approved is True
+    open_vote_op = out[0].ops[0]
+    assert open_vote_op.voters == ["agent:off_1"]
+
+
 def test_perform_invalid_op_is_rejected_not_silently_skipped(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
     mock = MockLLMProvider(
@@ -323,11 +383,103 @@ def test_perform_invalid_op_is_rejected_not_silently_skipped(tmp_path: Path) -> 
     assert "perform_op_invalid" in res[0].reason
 
 
+def test_arbiter_rejects_temporally_backdated_message(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state.tick = 5
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+    arbiter.runtime.start_date = date(2026, 3, 9)
+    arbiter.runtime.tick_duration_days = 1
+
+    act = SendMessageAction(
+        type=ActionType.SEND_MESSAGE,
+        to_id="agent:off_2",
+        text="Встреча подтверждена на 2026-03-09.",
+        private=True,
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert res[0].reason == "temporal_date_before_current_tick:2026-03-09"
+
+
+def test_arbiter_rejects_role_based_runtime_spawn_name(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["spawn"], off_2_caps=["message"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+    arbiter.runtime.allow_runtime_spawn = True
+    arbiter.runtime.max_agents = 5
+
+    act = SpawnAgentAction(
+        type=ActionType.SPAWN_AGENT,
+        slug="witness",
+        name="Свидетель А",
+        internal=False,
+        persona_hint="Знает детали сделки.",
+        capabilities=["message"],
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert res[0].reason == "spawn_name_is_role_alias"
+
+
 def test_dao_eligible_voters_filters_by_dao_capability() -> None:
     state = _mk_state(off_1_caps=["dao"], off_2_caps=["message"])
     dao = DaoEngine(cfg=GovernanceConfig())
     voters = dao.eligible_voters(state)
     assert voters == ["agent:off_1"]
+
+
+def test_dao_passes_vote_with_consent_and_non_self_nomination() -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_1",
+        created_tick=0,
+        closes_tick=1,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1"],
+        votes={"agent:off_1": "yes"},
+        target_consented=True,
+    )
+    state.tick = 1
+    dao = DaoEngine(cfg=GovernanceConfig())
+
+    ops = dao.close_votes(state)
+    close_ops = [op for op in ops if op.__class__.__name__ == "CloseVoteOp"]
+    position_ops = [op for op in ops if op.__class__.__name__ == "ChangePositionOp"]
+
+    assert close_ops
+    assert close_ops[0].result == "passed"
+    assert close_ops[0].reason == "threshold_passed"
+    assert position_ops
+
+
+def test_dao_cancels_vote_for_frozen_target_with_reason() -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    state.agents["agent:off_2"].reputation_frozen = True
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_1",
+        created_tick=0,
+        closes_tick=1,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1"],
+        votes={"agent:off_1": "yes"},
+        target_consented=True,
+    )
+    state.tick = 1
+    dao = DaoEngine(cfg=GovernanceConfig())
+
+    ops = dao.close_votes(state)
+    close_ops = [op for op in ops if op.__class__.__name__ == "CloseVoteOp"]
+
+    assert close_ops
+    assert close_ops[0].result == "canceled"
+    assert close_ops[0].reason == "reputation_frozen"
 
 
 def test_arbiter_continues_when_perform_llm_fails(tmp_path: Path) -> None:

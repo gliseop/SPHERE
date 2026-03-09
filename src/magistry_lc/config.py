@@ -163,6 +163,9 @@ class RuntimeConfig(BaseModel):
     max_secondary_per_agent: int = 2
     max_agents: int = 15
     allow_runtime_spawn: bool = False
+    worldgen_allow_internal_spawns: bool = False
+    temporal_past_slack_days: int = 1
+    temporal_future_horizon_days: int = 120
 
     @field_validator("max_actions_per_turn")
     @classmethod
@@ -192,6 +195,13 @@ class RuntimeConfig(BaseModel):
     def _validate_max_agents(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("max_agents must be > 0")
+        return v
+
+    @field_validator("temporal_past_slack_days", "temporal_future_horizon_days")
+    @classmethod
+    def _validate_temporal_window(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("temporal validation window must be >= 0")
         return v
 
     def simulated_date(self, tick: int) -> date | None:
@@ -261,6 +271,8 @@ class GovernanceConfig(BaseModel):
     pass_threshold: float = 0.5
     vote_duration_ticks: int = 3
     require_consent: bool = True
+    allow_self_nomination: bool = False
+    allow_target_self_vote: bool = False
     audit: AuditRuntimeConfig = Field(default_factory=AuditRuntimeConfig)
 
     @field_validator("quorum", "pass_threshold")

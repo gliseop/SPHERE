@@ -40,8 +40,8 @@ flowchart TD
 
     MEM --> NEXT{Ещё тики?}
     NEXT -->|да| TICK
-    NEXT -->|нет| EVAL[Post-hoc evaluation.json]
-    EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + evaluation.json]
+    NEXT -->|нет| EVAL[Governance eval + fidelity sidecars]
+    EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + evaluation.json + fidelity.json + summary.json]
 ```
 
 Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry` и запускает цикл тиков.
@@ -56,9 +56,9 @@ flowchart TD
 
 Агент возвращает JSON-массив `Action[]` (до `max_actions_per_turn` действий за ход). Ответ парсится через Pydantic-модель с дискриминатором по полю `type`.
 
-Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью). Результат сохраняется в `{out_dir}/personas.json` и повторно используется при совпадении fingerprint входов (seed, язык, модель, режим, описание сценария и базовые данные агентов).
+Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью + expert reflection). Результат сохраняется в `{out_dir}/personas.json` и повторно используется при совпадении fingerprint входов (seed, язык, модель, режим, описание сценария и базовые данные агентов).
 
-Если `runtime.spawn_secondary=true`, после enrichment запускается `SocialGraphExtractor`: он извлекает из биографий и интервью значимых людей, создаёт вторичных агентов до первого тика, обогащает их персоны в `core`-режиме и связывает первичные/вторичные пары через память.
+Если `runtime.spawn_secondary=true`, после enrichment запускается `SocialGraphExtractor`: он извлекает из биографий и интервью значимых людей, создаёт вторичных агентов до первого тика, обогащает их персоны в том же режиме, что и основной сценарий (`core` или `full`), и связывает первичные/вторичные пары через память. Role-only ссылки и alias-дубли существующих должностей не материализуются в новых агентов.
 
 ### Действия (Action)
 
@@ -91,7 +91,7 @@ flowchart TD
 3. Проверка на явные бюрократические дубли для `create_work_item` (по сильному сходству заголовка с уже открытым делом).
 4. Преобразование `Action` в набор `StateOp[]` — детерминированных операций над состоянием мира.
 
-Для `spawn_agent` дополнительно проверяются `runtime.allow_runtime_spawn`, лимит `runtime.max_agents`, отсутствие конфликта по `agent:{slug}` и безопасный набор capabilities (`message`/`work`).
+Для `spawn_agent` дополнительно проверяются `runtime.allow_runtime_spawn`, лимит `runtime.max_agents`, отсутствие конфликта по `agent:{slug}`, temporal-validation по абсолютным датам и безопасный набор capabilities (`message`/`work`). Арбитр также отклоняет self-nomination, self-vote цели голосования и role-based display-name для новых агентов.
 
 Для свободных действий (`perform`) арбитр обращается к LLM:
 1. Формируется промпт с YAML-журналом мира (`WorldJournal`) и описанием действия.
@@ -106,7 +106,7 @@ flowchart TD
 
 В версии v1 аудитор:
 
-1. Анализирует `tick_events` текущего тика и ограниченное окно `recent_events`.
+1. Анализирует `tick_events` текущего тика и ограниченное окно `recent_events`, учитывая только события, которые реально произошли раньше рассматриваемого события внутри тика.
 2. Ищет generic governance-паттерны:
    - self-reputation award;
    - nomination after private contact;
@@ -121,11 +121,20 @@ flowchart TD
 
 Runtime-аудитор не подменяет собой `ViolationOracle` и не создаёт ground truth эксперимента. Его выход — это часть governance-treatment, а не пост-фактум измерение качества режима.
 
+Для кейса `support_vote_after_private_contact` аудитор может переводить finding напрямую в `freeze_and_penalize`, если уверенность превышает `min_confidence_to_freeze`.
+
 ## Truth-layer и evaluation
 
 После формирования фактических `tick_events`, но до эмиссии audit-интервенций, движок прогоняет deterministic `TruthDetector`. Он пишет sidecar `truth.jsonl` с каноническими `TruthRecord`, которые не зависят от того, сработал ли runtime-аудитор.
 
-По завершении прогона движок вызывает post-hoc `evaluation.py`, который сравнивает:
+По завершении прогона движок пишет два независимых sidecar-контура:
+
+- `evaluation.json` — governance-eval: сравнение runtime-аудита и deterministic truth-layer;
+- `fidelity.json` — метрики правдоподобия (`temporal consistency`, `identity drift`, `phantom drift`, `bureaucratic loop`).
+
+Сводка `summary.json` просто объединяет оба блока, не смешивая governance-treatment и fidelity.
+
+`evaluation.py` сравнивает:
 
 - `audit_flagged` из `events.jsonl`;
 - `TruthRecord` из `truth.jsonl`.
@@ -173,6 +182,8 @@ Runtime-аудитор не подменяет собой `ViolationOracle` и �
 
 Типы записей: `persona`, `interview`, `summary`, `observation`, `result`, `reflection`.
 
+Agent prompt использует не один общий retrieval-блок, а несколько секций: якоря персоны (`persona`), фрагменты интервью (`interview`), экспертную рефлексию (`reflection`) и оперативную память (`observation`/`result`).
+
 ## Генератор мира (WorldGenerator)
 
 При включении (`enable_worldgen`) генератор создаёт внешние события каждые `worldgen_every_ticks` тиков. Он получает нормализованный список public/internal-событий тика, без приватных текстов сообщений. На выходе worldgen может вернуть:
@@ -181,15 +192,15 @@ Runtime-аудитор не подменяет собой `ViolationOracle` и �
 
 Если задана каноническая временная ось (`runtime.start_date`, `runtime.tick_duration_days`), движок дополнительно передаёт worldgen текущую дату симуляции. Это уменьшает temporal drift в описаниях совещаний, дедлайнов и публикаций.
 
-Движок принимает `spawns` только если `runtime.allow_runtime_spawn=true`. Для совместимости worldgen по-прежнему понимает legacy-формат `list[world_event]` без блока `spawns`.
+Движок принимает `spawns` только если `runtime.allow_runtime_spawn=true`. Для совместимости worldgen по-прежнему понимает legacy-формат `list[world_event]` без блока `spawns`. Дополнительно движок требует человеко-читаемый display-name, отсекает role-only ярлыки и не принимает внутренних акторов от worldgen, если `runtime.worldgen_allow_internal_spawns=false`.
 
 ## DAO-голосование (DaoEngine)
 
-Механизм коллегиального принятия решений. При номинации на смену должности (`nominate_position_change`) открывается голосование с участием агентов из списка `dao_voters`. Голосование закрывается, когда:
+Механизм коллегиального принятия решений. При номинации на смену должности (`nominate_position_change`) открывается голосование с участием агентов из списка `dao_voters`. По умолчанию self-nomination запрещена, а цель голосования исключается из списка голосующих и должна отвечать через `respond_nomination`. Голосование закрывается, когда:
 - достигнут кворум (`quorum`) и порог одобрения (`pass_threshold`); или
 - истекла длительность (`vote_duration_ticks`).
 
-При одобрении должность агента меняется через `StateOp`. При необходимости согласия кандидата (`require_consent`) ожидается `respond_nomination`.
+При одобрении должность агента меняется через `StateOp`. При необходимости согласия кандидата (`require_consent`) ожидается `respond_nomination`. Событие `vote_closed` теперь содержит не только результат, но и `reason` (`consent_missing`, `reputation_frozen`, `threshold_passed` и т.д.).
 
 Если у цели активна заморозка репутации (`reputation_frozen=true`), голосование не проходит: `DaoEngine` возвращает `canceled`.
 
@@ -244,12 +255,15 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 Ключевые поля `runtime`:
 - `start_date`: каноническая календарная дата тика `0`.
 - `tick_duration_days`: сколько календарных дней проходит за один тик.
+- `temporal_past_slack_days`: допустимый лаг для абсолютных дат в структурированных действиях.
+- `temporal_future_horizon_days`: допустимый горизонт будущих дат в структурированных действиях.
 - `enrich_personas`: включить обогащение персон перед первым тиком.
-- `persona_enrich_mode`: `core` (summary+biography) или `full` (summary+biography+interview).
+- `persona_enrich_mode`: `core` (summary+biography) или `full` (summary+biography+interview+reflection).
 - `spawn_secondary`: извлечь вторичных агентов из социального графа до первого тика.
 - `max_secondary_per_agent`: лимит связей, извлекаемых из одной персоны.
 - `max_agents`: общий потолок числа агентов в мире.
 - `allow_runtime_spawn`: разрешить `spawn_agent` и worldgen-spawn в ходе симуляции.
+- `worldgen_allow_internal_spawns`: разрешить worldgen создавать внутренних акторов.
 
 Ключевые поля `governance.audit`:
 - `enabled`: включить runtime-аудитор.
@@ -261,3 +275,8 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 - `min_confidence_to_freeze`: минимальная уверенность для `reputation_frozen`.
 - `freeze_duration_ticks`: длительность заморозки в тиках.
 - `reputation_penalty_delta`: опциональный отрицательный штраф к репутации поверх freeze.
+
+Ключевые поля `governance`:
+- `require_consent`: требовать явное согласие кандидата.
+- `allow_self_nomination`: разрешить или запретить self-nomination.
+- `allow_target_self_vote`: разрешить или запретить голос цели за собственную номинацию.

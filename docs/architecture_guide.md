@@ -37,6 +37,7 @@ graph TB
         ORACLE[oracle.py<br/>ViolationOracle]
         TRUTH[truth.py<br/>TruthDetector + TruthLog]
         EVAL[evaluation.py<br/>EvaluationSummary]
+        FID[fidelity.py<br/>FidelitySummary]
     end
 
     subgraph LLM["LLM-подсистема (llm/)"]
@@ -91,6 +92,7 @@ graph TB
     ORACLE --> CALLER
     ENGINE --> TRUTH
     ENGINE --> EVAL
+    ENGINE --> FID
 
     CALLER --> PROVIDERS
     CALLER --> TRACING
@@ -121,16 +123,17 @@ graph TB
 | Типизированные ID и антифантомы | `ids.py` + `entities.py` → `EntityRegistry` |
 | Детерминированный apply | `ops.py` → `StateOp` преобразуется в `Event` |
 | Как генерируется сценарий через LLM | `composer.py` → `WorldComposer.compose()` |
-| Как работает генератор мира | `worldgen.py` → внешние события + spawn suggestions без приватных утечек |
+| Как работает генератор мира | `worldgen.py` → внешние события + spawn suggestions без приватных утечек, без role-only display-name |
 | Как пишется truth-layer | `truth.py` → deterministic truth records в `truth.jsonl` |
 | Как считается post-hoc evaluation | `evaluation.py` → precision/recall runtime-аудита vs truth |
+| Как считаются fidelity-метрики | `fidelity.py` → temporal/identity/phantom/bureaucratic sidecar |
 | Как оракул анализирует нарушения | `oracle.py` → чанкинг по events.jsonl |
 | Как устроена память агента | `memory.py` → working buffer + long-term hybrid index |
 | Как работает гибридный поиск | `memory.py` (retrieval) + `bm25.py` (лексический) + `embeddings.py` (векторный) |
 | Как устроены LLM-провайдеры | `llm/providers.py` → `OpenAICompatibleProvider`, `MockLLMProvider` |
 | Как устроен конфиг сценария | `config.py` → `ScenarioConfig` (Pydantic) |
 | Как загружается/сохраняется сценарий | `scenario.py` → YAML/JSON |
-| Как устроена личность агента и социальный граф | `persona.py` → `PersonaArtifact`, `PersonaGenerator`, `SocialGraphExtractor` |
+| Как устроена личность агента и социальный граф | `persona.py` → `PersonaArtifact`, `PersonaGenerator`, `SocialGraphExtractor`, expert reflection |
 | Как работает LangGraph-интеграция | `graphs.py` → tick graph + SqliteSaver checkpoints |
 | Как работает CLI | `cli.py` → `run`, `compose`, `oracle` |
 

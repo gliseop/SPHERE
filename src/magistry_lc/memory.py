@@ -208,9 +208,12 @@ class AgentMemory:
         query_embedding: list[float] | None,
         tick: int,
         cfg: MemoryConfig,
+        allowed_kinds: set[MemoryKind] | None = None,
+        top_k: int | None = None,
     ) -> list[MemoryDoc]:
         """Достать top-k документов по гибридному скорингу."""
-        if not self.docs:
+        docs = [doc for doc in self.docs if allowed_kinds is None or doc.kind in allowed_kinds]
+        if not docs:
             return []
 
         query_text = _norm_text(query_text)
@@ -219,9 +222,17 @@ class AgentMemory:
         self._rebuild_bm25_if_dirty()
         bm25_raw = []
         if self.bm25 is not None and query_text:
-            bm25_raw = list(self.bm25.get_scores(_tokenize(query_text)))
+            full_scores = list(self.bm25.get_scores(_tokenize(query_text)))
+            if allowed_kinds is None:
+                bm25_raw = full_scores
+            else:
+                bm25_raw = [
+                    score
+                    for score, doc in zip(full_scores, self.docs, strict=False)
+                    if doc.kind in allowed_kinds
+                ]
         else:
-            bm25_raw = [0.0] * len(self.docs)
+            bm25_raw = [0.0] * len(docs)
 
         # Нормализация BM25 в [0, 1] через min-max.
         bm25_max = max(bm25_raw) if bm25_raw else 0.0
@@ -234,7 +245,7 @@ class AgentMemory:
 
         w = cfg.weights
         scored: list[tuple[float, MemoryDoc]] = []
-        for i, doc in enumerate(self.docs):
+        for i, doc in enumerate(docs):
             # Recency: экспоненциальный decay по "последнему появлению".
             age = max(0, tick - doc.last_seen_tick)
             recency = cfg.recency_decay ** age
@@ -256,4 +267,5 @@ class AgentMemory:
             scored.append((float(score), doc))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [d for _, d in scored[: cfg.retrieval_top_k]]
+        limit = cfg.retrieval_top_k if top_k is None else max(0, int(top_k))
+        return [d for _, d in scored[:limit]]

@@ -22,6 +22,7 @@ from .embeddings import embed_texts_cached
 from .entities import EntityRecord, EntityRegistry
 from .evaluation import evaluate_run, save_evaluation
 from .events import Event, EventLog
+from .fidelity import evaluate_fidelity, save_fidelity
 from .id_alloc import IdAllocator
 from .ids import (
     EntityKind,
@@ -33,8 +34,9 @@ from .ids import (
 )
 from .journal import WorldJournal
 from .llm import LLMCaller, create_llm_provider
-from .ops import CreateAgentOp, CreateEntityOp, SetReputationFreezeOp, StateOp
+from .ops import CreateAgentOp, CreateEntityOp, ModifyReputationOp, SetReputationFreezeOp, StateOp
 from .persona import (
+    INTERVIEW_QUESTIONS_V2,
     PersonaArtifact,
     PersonaGenerator,
     SocialGraphExtractor,
@@ -46,7 +48,13 @@ from .persona import (
 from .state import AgentState, WorkItem, WorldState
 from .tracing import TraceLog
 from .truth import TruthDetector, TruthLog
-from .utils import redact_numbers
+from .utils import (
+    looks_like_machine_name,
+    looks_like_role_label,
+    normalize_agent_display_name,
+    redact_numbers,
+    social_name_key,
+)
 from .worldgen import SpawnSuggestion, WorldGenerator, WorldgenOutput
 
 from .llm import EmbeddingProvider, LLMProvider, create_embedding_provider
@@ -64,6 +72,8 @@ class RunArtifacts:
     trace_path: Path
     truth_path: Path | None = None
     evaluation_path: Path | None = None
+    fidelity_path: Path | None = None
+    summary_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -80,6 +90,10 @@ class WorldEngine:
             self.artifacts.truth_path = self.artifacts.out_dir / "truth.jsonl"
         if self.artifacts.evaluation_path is None:
             self.artifacts.evaluation_path = self.artifacts.out_dir / "evaluation.json"
+        if self.artifacts.fidelity_path is None:
+            self.artifacts.fidelity_path = self.artifacts.out_dir / "fidelity.json"
+        if self.artifacts.summary_path is None:
+            self.artifacts.summary_path = self.artifacts.out_dir / "summary.json"
 
     async def run(self) -> WorldState:
         """Запустить симуляцию и вернуть финальный WorldState."""
@@ -280,6 +294,7 @@ class WorldEngine:
                         language=self.cfg.runtime.language,
                         current_date=simulated_date.isoformat() if simulated_date is not None else None,
                         tick_duration_days=self.cfg.runtime.tick_duration_days,
+                        allow_internal_spawns=self.cfg.runtime.worldgen_allow_internal_spawns,
                     )
                 except Exception as exc:
                     logger.warning("World generator failed on tick %s: %s", state.tick, exc)
@@ -318,7 +333,7 @@ class WorldEngine:
                             )
 
             truth_window = int(self.cfg.governance.audit.lookback_events)
-            truth_recent = (events_history + tick_events)[-truth_window:] if truth_window > 0 else list(tick_events)
+            truth_recent = events_history[-truth_window:] if truth_window > 0 else list(events_history)
             truth_records = truth_detector.detect_tick(
                 state=state,
                 tick_events=tick_events,
@@ -329,8 +344,7 @@ class WorldEngine:
 
             if self.cfg.governance.audit.enabled:
                 audit_window = int(self.cfg.governance.audit.lookback_events)
-                combined_events = events_history + tick_events
-                audit_recent = combined_events[-audit_window:] if audit_window > 0 else list(tick_events)
+                audit_recent = events_history[-audit_window:] if audit_window > 0 else list(events_history)
                 try:
                     audit_outcome = await auditor.inspect_tick(
                         state=state,
@@ -363,6 +377,14 @@ class WorldEngine:
                             )
                         )
 
+            reputation_events = self._apply_reputation_consequences(
+                state=state,
+                tick_events=tick_events,
+                event_log=event_log,
+            )
+            if reputation_events:
+                tick_events.extend(reputation_events)
+
             journal.apply_events(state=state, events=tick_events)
 
             events_history.extend(tick_events)
@@ -371,12 +393,32 @@ class WorldEngine:
                 events_history = events_history[-self.cfg.runtime.tick_events_history :]
 
         state.clamp_reputation()
+        governance_summary = None
+        fidelity_summary = None
         if self.artifacts.truth_path is not None and self.artifacts.evaluation_path is not None:
-            summary = evaluate_run(
+            governance_summary = evaluate_run(
                 events_path=self.artifacts.events_path,
                 truth_path=self.artifacts.truth_path,
             )
-            save_evaluation(summary, self.artifacts.evaluation_path)
+            save_evaluation(governance_summary, self.artifacts.evaluation_path)
+        if self.artifacts.fidelity_path is not None:
+            fidelity_summary = evaluate_fidelity(
+                events_path=self.artifacts.events_path,
+                start_date=self.cfg.runtime.start_date,
+                tick_duration_days=self.cfg.runtime.tick_duration_days,
+                temporal_past_slack_days=self.cfg.runtime.temporal_past_slack_days,
+                temporal_future_horizon_days=self.cfg.runtime.temporal_future_horizon_days,
+            )
+            save_fidelity(fidelity_summary, self.artifacts.fidelity_path)
+        if self.artifacts.summary_path is not None:
+            payload = {
+                "governance": governance_summary.model_dump(mode="json") if governance_summary is not None else None,
+                "fidelity": fidelity_summary.model_dump(mode="json") if fidelity_summary is not None else None,
+            }
+            self.artifacts.summary_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
         return state
 
     def _agent_order(self, *, state: WorldState, tick: int) -> list[str]:
@@ -417,6 +459,24 @@ class WorldEngine:
                     7.0,
                     f"Q: {q}\nA: {a}",
                     {"source": "scenario", "part": "interview", "index": i},
+                )
+            )
+        for i, reflection in enumerate(agent.persona.reflections):
+            expert = (reflection.expert or "").strip()
+            summary = (reflection.summary or "").strip()
+            if not expert or not summary:
+                continue
+            docs_to_add.append(
+                (
+                    "reflection",
+                    8.5,
+                    f"{expert}: {summary}",
+                    {
+                        "source": "scenario",
+                        "part": "reflection",
+                        "index": i,
+                        "evidence_indices": list(reflection.evidence_indices),
+                    },
                 )
             )
 
@@ -498,6 +558,40 @@ class WorldEngine:
             embedding=[],
             meta={"source": "social_link"},
         )
+
+    @staticmethod
+    def _match_existing_agent_for_role_alias(
+        *,
+        state: WorldState,
+        link_name: str,
+        relation: str,
+    ) -> str | None:
+        normalized_name = normalize_agent_display_name(link_name)
+        if not normalized_name or not looks_like_role_label(normalized_name):
+            return None
+
+        name_key = social_name_key(normalized_name)
+        relation_key = social_name_key(relation)
+        for aid, agent in sorted(state.agents.items()):
+            title_key = social_name_key(agent.title)
+            if not title_key:
+                continue
+            if name_key and name_key == title_key:
+                return aid
+            if relation_key and relation_key == title_key:
+                return aid
+        return None
+
+    @staticmethod
+    def _secondary_link_is_concrete_person(link: SocialLink) -> bool:
+        normalized_name = normalize_agent_display_name(link.name)
+        if not normalized_name:
+            return False
+        if looks_like_machine_name(link.name):
+            return False
+        if looks_like_role_label(normalized_name):
+            return False
+        return True
 
     @staticmethod
     def _match_existing_agent_for_social_link(
@@ -622,6 +716,17 @@ class WorldEngine:
         for primary_id, links in extraction:
             primary = state.agents[primary_id]
             for link in links:
+                normalized_link_name = normalize_agent_display_name(link.name)
+                if not normalized_link_name:
+                    continue
+                link = SocialLink(
+                    name=normalized_link_name,
+                    relation=link.relation,
+                    relevance=link.relevance,
+                    persona_hint=link.persona_hint,
+                    internal=link.internal,
+                    capabilities=link.capabilities,
+                )
                 matched_agent_id = self._match_existing_agent_for_social_link(
                     state=state,
                     link_name=link.name,
@@ -647,6 +752,34 @@ class WorldEngine:
                         "Reusing existing agent %s for social link %r from %s",
                         matched_agent_id,
                         link.name,
+                        primary_id,
+                    )
+                    continue
+                role_alias_agent_id = self._match_existing_agent_for_role_alias(
+                    state=state,
+                    link_name=link.name,
+                    relation=link.relation,
+                )
+                if role_alias_agent_id is not None:
+                    existing_refs.setdefault(
+                        role_alias_agent_id,
+                        {
+                            "link_name": link.name,
+                            "sources": [],
+                        },
+                    )["sources"].append((primary_id, primary.name, link.relation))
+                    logger.info(
+                        "Skipping role-alias social link %r from %s; mapped to existing agent %s",
+                        link.name,
+                        primary_id,
+                        role_alias_agent_id,
+                    )
+                    continue
+                if not self._secondary_link_is_concrete_person(link):
+                    logger.info(
+                        "Skipping abstract secondary social link %r (%s) from %s",
+                        link.name,
+                        link.relation,
                         primary_id,
                     )
                     continue
@@ -738,7 +871,7 @@ class WorldEngine:
                 state=state,
                 llm=llm,
                 agent_ids=created_ids,
-                mode="core",
+                mode=self.cfg.runtime.persona_enrich_mode,
             )
             for aid, persona in enriched.items():
                 state.agents[aid].persona = persona
@@ -818,7 +951,14 @@ class WorldEngine:
         for spawn in spawns:
             if current_count + len(ops) >= self.cfg.runtime.max_agents:
                 break
-            slug = normalize_slug(spawn.slug, fallback=spawn.name or "spawned")
+            if spawn.internal and not self.cfg.runtime.worldgen_allow_internal_spawns:
+                continue
+            display_name = normalize_agent_display_name(spawn.name, fallback=spawn.slug)
+            if not display_name:
+                continue
+            if looks_like_role_label(display_name):
+                continue
+            slug = normalize_slug(spawn.slug, fallback=display_name or "spawned")
             entity_id = make_id(EntityKind.AGENT, slug)
             if entity_id in existing_ids:
                 continue
@@ -826,7 +966,7 @@ class WorldEngine:
             ops.append(
                 CreateAgentOp(
                     entity_id=entity_id,
-                    name=spawn.name,
+                    name=display_name,
                     internal=bool(spawn.internal),
                     persona_hint=spawn.persona_hint,
                     capabilities=Arbiter._sanitize_spawn_capabilities([], internal=bool(spawn.internal)),
@@ -866,6 +1006,19 @@ class WorldEngine:
         data = json.dumps(cache_input, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
+    def _persona_is_cache_complete(self, persona: PersonaArtifact) -> bool:
+        if not persona.biography.strip():
+            return False
+        if self.cfg.runtime.persona_enrich_mode != "full":
+            return True
+        if len([qa for qa in persona.interview if (qa.question or "").strip() and (qa.answer or "").strip()]) < len(
+            INTERVIEW_QUESTIONS_V2
+        ):
+            return False
+        if len([item for item in persona.reflections if (item.expert or "").strip() and (item.summary or "").strip()]) < 2:
+            return False
+        return True
+
     def _load_personas_cache(
         self, *, state: WorldState, cache_input: dict[str, Any]
     ) -> dict[str, PersonaArtifact]:
@@ -892,9 +1045,12 @@ class WorldEngine:
             if item is None:
                 continue
             try:
-                loaded[aid] = PersonaArtifact.model_validate(item)
+                persona = PersonaArtifact.model_validate(item)
             except Exception:
                 continue
+            if not self._persona_is_cache_complete(persona):
+                continue
+            loaded[aid] = persona
         return loaded
 
     def _save_personas_cache(
@@ -927,7 +1083,7 @@ class WorldEngine:
         pending: list[str] = []
         for aid in to_enrich_ids:
             cached_persona = cached.get(aid)
-            if cached_persona is None or not cached_persona.biography.strip():
+            if cached_persona is None or not self._persona_is_cache_complete(cached_persona):
                 pending.append(aid)
                 continue
             state.agents[aid].persona = cached_persona
@@ -949,7 +1105,7 @@ class WorldEngine:
         for aid, persona in enriched.items():
             state.agents[aid].persona = persona
 
-        all_enriched = all(state.agents[aid].persona.biography.strip() for aid in to_enrich_ids)
+        all_enriched = all(self._persona_is_cache_complete(state.agents[aid].persona) for aid in to_enrich_ids)
         if not all_enriched:
             return
         try:
@@ -1192,6 +1348,66 @@ class WorldEngine:
                 events.append(ev)
         return events
 
+    def _apply_reputation_consequences(
+        self,
+        *,
+        state: WorldState,
+        tick_events: list[Event],
+        event_log: EventLog,
+    ) -> list[Event]:
+        """Применить минимальный детерминированный цикл репутации."""
+        actor_id = self.cfg.governance.audit.actor_id
+        rewards: dict[str, float] = {}
+        rewarded_keys: set[tuple[str, str]] = set()
+        vote_target_rewards: set[str] = set()
+
+        for ev in tick_events:
+            if ev.event_type == "work_proposal_submitted":
+                aid = str(ev.actor_id or "")
+                if aid in state.agents and (aid, ev.event_type) not in rewarded_keys:
+                    rewarded_keys.add((aid, ev.event_type))
+                    rewards[aid] = rewards.get(aid, 0.0) + 0.25
+                continue
+
+            if ev.event_type == "vote_target_consented":
+                aid = str(ev.actor_id or "")
+                if aid in state.agents and (aid, ev.event_type) not in rewarded_keys:
+                    rewarded_keys.add((aid, ev.event_type))
+                    rewards[aid] = rewards.get(aid, 0.0) + 0.1
+                continue
+
+            if ev.event_type == "vote_closed":
+                payload = ev.payload or {}
+                if str(payload.get("result") or "") != "passed":
+                    continue
+                vote_id = str(payload.get("vote_id") or "")
+                if vote_id in vote_target_rewards:
+                    continue
+                vote = state.votes.get(vote_id)
+                if vote is None:
+                    continue
+                vote_target_rewards.add(vote_id)
+                target_id = vote.target_agent_id
+                if target_id in state.agents:
+                    rewards[target_id] = rewards.get(target_id, 0.0) + 0.75
+
+        ops: list[StateOp] = []
+        for aid, delta in sorted(rewards.items()):
+            if delta <= 0.0:
+                continue
+            ops.append(
+                ModifyReputationOp(
+                    actor_id=actor_id,
+                    target_agent_id=aid,
+                    delta=min(delta, 0.75),
+                    reason="governance_positive_contribution",
+                )
+            )
+
+        if not ops:
+            return []
+        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="reputation_cycle")
+
     def _expire_reputation_freezes(
         self,
         *,
@@ -1257,15 +1473,29 @@ class WorldEngine:
             if ev.event_type == "arbiter_rejected":
                 reason = str(ev.payload.get("reason", "") or "")
                 action = str(ev.payload.get("action", "") or "")
+                next_step = ""
+                if reason.startswith("unknown work_id: "):
+                    next_step = " Следующее действие: выбери существующий work_id из списка открытых дел."
+                elif reason.startswith("duplicate_open_work_item:"):
+                    next_step = " Следующее действие: продолжай уже существующее дело, а не открывай клон."
+                elif reason == "self_nomination_disabled":
+                    next_step = " Следующее действие: номинируй другого агента или используй respond_nomination для своей кандидатуры."
+                elif reason == "target_self_vote_disabled":
+                    next_step = " Следующее действие: цель голосования должна ответить через respond_nomination, а не голосовать за себя."
+                elif reason.startswith("temporal_date_"):
+                    next_step = " Следующее действие: укажи срок внутри разумного окна от текущей канонической даты."
                 if action:
-                    return f"Арбитр отклонил действие {action}: {reason}"
-                return f"Арбитр отклонил действие: {reason}"
+                    return f"Арбитр отклонил действие {action}: {reason}.{next_step}".strip()
+                return f"Арбитр отклонил действие: {reason}.{next_step}".strip()
             if ev.event_type == "arbiter_op_failed":
                 return f"Операция провалилась: {redact_numbers(ev.payload.get('error',{}))}"
             if ev.event_type == "vote_opened":
                 return f"Открыто голосование {ev.payload.get('vote_id','')} за {ev.payload.get('target_agent_id','')} -> {ev.payload.get('new_title','')}"
             if ev.event_type == "vote_closed":
-                return f"Голосование закрыто {ev.payload.get('vote_id','')} result={ev.payload.get('result','')}"
+                return (
+                    f"Голосование закрыто {ev.payload.get('vote_id','')} "
+                    f"result={ev.payload.get('result','')} reason={ev.payload.get('reason','')}"
+                )
             if ev.event_type == "position_changed":
                 return f"Должность изменена: {ev.payload.get('target_agent_id','')} -> {ev.payload.get('new_title','')}"
             if ev.event_type == "audit_flagged":
@@ -1274,6 +1504,11 @@ class WorldEngine:
                 return f"Открыт аудит-кейс {ev.payload.get('case_id','')} для {ev.payload.get('target_agent_id','')}"
             if ev.event_type == "audit_escalated":
                 return f"Аудит эскалировал кейс {ev.payload.get('case_id','')} route={ev.payload.get('route','')}"
+            if ev.event_type == "reputation_modified":
+                return (
+                    f"Репутация изменена для {ev.payload.get('target_agent_id','')}: "
+                    f"delta={ev.payload.get('delta','')} reason={ev.payload.get('reason','')}"
+                )
             if ev.event_type == "reputation_frozen":
                 return f"Репутация заморожена для {ev.payload.get('target_agent_id','')}"
             if ev.event_type == "reputation_unfrozen":

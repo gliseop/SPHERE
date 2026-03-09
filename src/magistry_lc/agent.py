@@ -200,6 +200,8 @@ class AgentRunner:
             "- perform используй ТОЛЬКО когда нет подходящего структурированного типа\n"
             "- не выдумывай новые ID; если нужна новая организация/канал — используй request_entity\n"
             "- если у тебя есть capability spawn, создавай новых агентов только через spawn_agent и с кратким persona_hint\n"
+            "- самономинация на должность запрещена; инициировать голосование можно только за другого агента\n"
+            "- цель голосования не голосует сама за себя; если тебя номинировали, используй respond_nomination\n"
         )
 
     async def _render_memory(
@@ -234,18 +236,62 @@ class AgentRunner:
                 query_embedding = list(vecs[0]) if vecs else []
             except Exception:
                 query_embedding = None
+        persona_anchors = mem.retrieve(
+            query_text=query_text,
+            query_embedding=query_embedding,
+            tick=state.tick,
+            cfg=self.memory,
+            allowed_kinds={"persona"},
+            top_k=4,
+        )
+        if persona_anchors:
+            parts.append(
+                "Якоря персоны:\n"
+                + "\n".join(f"- {_truncate(item.text, 220)}" for item in persona_anchors)
+            )
+
+        interview_fragments = mem.retrieve(
+            query_text=query_text,
+            query_embedding=query_embedding,
+            tick=state.tick,
+            cfg=self.memory,
+            allowed_kinds={"interview"},
+            top_k=4,
+        )
+        if interview_fragments:
+            parts.append(
+                "Фрагменты интервью:\n"
+                + "\n".join(f"- {_truncate(item.text, 220)}" for item in interview_fragments)
+            )
+
+        reflections = mem.retrieve(
+            query_text=query_text,
+            query_embedding=query_embedding,
+            tick=state.tick,
+            cfg=self.memory,
+            allowed_kinds={"reflection"},
+            top_k=3,
+        )
+        if reflections:
+            parts.append(
+                "Экспертная рефлексия:\n"
+                + "\n".join(f"- {_truncate(item.text, 220)}" for item in reflections)
+            )
+
         retrieved = mem.retrieve(
             query_text=query_text,
             query_embedding=query_embedding,
             tick=state.tick,
             cfg=self.memory,
+            allowed_kinds={"observation", "result", "summary"},
+            top_k=6,
         )
         if retrieved:
             lines = []
             for d in retrieved:
                 rep = f" x{d.repeats}" if d.repeats > 1 else ""
                 lines.append(f"- [{d.kind}{rep}] {_truncate(d.text, 220)}")
-            parts.append("Релевантные факты (долгосрочная память):\n" + "\n".join(lines))
+            parts.append("Оперативная память:\n" + "\n".join(lines))
 
         return "\n\n".join(parts) if parts else "(пусто)"
 

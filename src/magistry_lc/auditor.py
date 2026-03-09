@@ -190,12 +190,13 @@ class RuntimeAuditor:
         current_tick: int,
     ) -> list[AuditFinding]:
         findings: list[AuditFinding] = []
-        for ev in tick_events:
+        base_recent = list(recent_events)
+        for idx, ev in enumerate(tick_events):
             findings.extend(
                 self._findings_for_event(
                     state=state,
                     event=ev,
-                    recent_events=recent_events,
+                    recent_events=base_recent + tick_events[:idx],
                     current_tick=current_tick,
                 )
             )
@@ -310,7 +311,7 @@ class RuntimeAuditor:
                     current_tick=current_tick,
                 )
                 if contacts:
-                    confidence = min(0.65 + 0.08 * contacts, 0.89)
+                    confidence = min(0.78 + 0.08 * contacts, 0.94)
                     out.append(
                         self._make_finding(
                             tick=current_tick,
@@ -319,7 +320,11 @@ class RuntimeAuditor:
                             severity="high" if contacts >= 2 else "medium",
                             confidence=confidence,
                             summary="Агент поддержал голосование после недавних приватных контактов с целью голосования.",
-                            recommended_action="flag",
+                            recommended_action=(
+                                "freeze_and_penalize"
+                                if confidence >= self.cfg.min_confidence_to_freeze
+                                else "flag"
+                            ),
                             target_agent_id=actor_id,
                             related_agent_ids=[target_id],
                             evidence_refs=[_event_ref(event)],

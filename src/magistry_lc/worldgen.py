@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from .events import Event
 from .ids import INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from .llm import LLMCaller
+from .utils import normalize_agent_display_name
 
 
 class _WorldEventModel(BaseModel):
@@ -103,6 +104,7 @@ class WorldGenerator:
         language: str,
         current_date: str | None = None,
         tick_duration_days: int = 1,
+        allow_internal_spawns: bool = False,
     ) -> WorldgenOutput:
         """Сгенерировать внешние события и предложения спавна."""
         compact = []
@@ -123,6 +125,8 @@ class WorldGenerator:
             "Сгенерируй 0–3 внешних события, которые логично следуют из ситуации.\n"
             "При необходимости предложи 0–2 новых персонажей, которые логично появляются в сюжете именно сейчас.\n"
             "Новый персонаж должен быть релевантен текущим событиям и иметь краткий persona_hint.\n"
+            "Используй человеко-читаемые имена людей, а не agent:* и не машинные slug-строки.\n"
+            "Не предлагай абстрактные должности вместо конкретных людей.\n"
             "Если упоминаешь даты, не противоречь канонической временной линии сценария.\n"
             f"Пиши на языке: {language!r}.\n"
             "Ответ: JSON по схеме.\n"
@@ -131,6 +135,7 @@ class WorldGenerator:
             "tick": tick,
             "current_date": current_date,
             "tick_duration_days": tick_duration_days,
+            "allow_internal_spawns": bool(allow_internal_spawns),
             "events": compact,
         }
         user = json.dumps(payload, ensure_ascii=False)
@@ -173,12 +178,15 @@ class WorldGenerator:
                 spawn = _SpawnSuggestionModel.model_validate(item)
             except Exception:
                 continue
-            if not spawn.slug.strip() or not spawn.name.strip() or not spawn.persona_hint.strip():
+            display_name = normalize_agent_display_name(spawn.name, fallback=spawn.slug)
+            if not spawn.slug.strip() or not display_name or not spawn.persona_hint.strip():
+                continue
+            if spawn.internal and not allow_internal_spawns:
                 continue
             spawns.append(
                 SpawnSuggestion(
                     slug=spawn.slug.strip(),
-                    name=spawn.name.strip(),
+                    name=display_name,
                     internal=bool(spawn.internal),
                     persona_hint=spawn.persona_hint.strip(),
                     reason=spawn.reason.strip(),

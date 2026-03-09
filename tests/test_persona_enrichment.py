@@ -10,13 +10,18 @@ from magistry_lc.config import MemoryConfig, RuntimeConfig, ScenarioConfig
 from magistry_lc.engine import RunArtifacts, WorldEngine
 from magistry_lc.entities import EntityRegistry
 from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
-from magistry_lc.persona import PersonaArtifact
+from magistry_lc.persona import ExpertReflection, PersonaArtifact
 from magistry_lc.state import AgentState, WorkItem, WorldState
 from magistry_lc.tracing import TraceLog
 from magistry_lc.worldgen import WorldGenerator
 
 
-def _mk_cfg(*, enrich_personas: bool, persona_summary: str = "Краткая персона") -> ScenarioConfig:
+def _mk_cfg(
+    *,
+    enrich_personas: bool,
+    persona_summary: str = "Краткая персона",
+    persona_enrich_mode: str = "core",
+) -> ScenarioConfig:
     return ScenarioConfig.model_validate(
         {
             "version": 1,
@@ -25,7 +30,7 @@ def _mk_cfg(*, enrich_personas: bool, persona_summary: str = "Краткая п�
             "runtime": {
                 "max_actions_per_turn": 1,
                 "enrich_personas": enrich_personas,
-                "persona_enrich_mode": "core",
+                "persona_enrich_mode": persona_enrich_mode,
             },
             "agents": [
                 {
@@ -136,6 +141,44 @@ def test_render_memory_keeps_full_summary_and_adds_biography_excerpt(tmp_path: P
     assert summary[-20:] in mem_text
     assert "Биография (начало):" in mem_text
     assert "…" in mem_text
+
+
+def test_render_memory_surfaces_interview_and_reflection_sections(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(
+            summary="Краткая персона",
+            biography="Развёрнутая биография",
+            reflections=[ExpertReflection(expert="psychologist", summary="Стремится избегать открытого конфликта.")],
+        ),
+    )
+    agent.memory.add_doc(
+        tick=0,
+        kind="interview",
+        importance=7.0,
+        text="Q: Как вы ведёте себя под давлением?\nA: Сначала ищу тихий обходной путь.",
+        cfg=MemoryConfig(),
+    )
+    agent.memory.add_doc(
+        tick=0,
+        kind="reflection",
+        importance=8.0,
+        text="psychologist: При стрессе сохраняет внешнюю лояльность и действует непрямо.",
+        cfg=MemoryConfig(),
+    )
+    state = WorldState(tick=0, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    mem_text = asyncio.run(runner._render_memory(agent=agent, state=state, visible_events=[]))
+
+    assert "Фрагменты интервью:" in mem_text
+    assert "Экспертная рефлексия:" in mem_text
 
 
 def test_build_user_surfaces_recent_invalid_work_id(tmp_path: Path) -> None:
@@ -280,7 +323,7 @@ class _RuntimeSpawnProvider(MockLLMProvider):
                             {
                                 "type": "spawn_agent",
                                 "slug": "witness",
-                                "name": "Свидетель",
+                                "name": "Анна Свиридова",
                                 "internal": False,
                                 "persona_hint": "Внешний наблюдатель, который знает детали сделки.",
                                 "capabilities": ["message"],
@@ -311,7 +354,7 @@ class _DoubleRuntimeSpawnProvider(_RuntimeSpawnProvider):
                         {
                             "type": "spawn_agent",
                             "slug": "witness_a",
-                            "name": "Свидетель А",
+                            "name": "Анна Соколова",
                             "internal": False,
                             "persona_hint": "Первый свидетель.",
                             "capabilities": ["message"],
@@ -319,7 +362,7 @@ class _DoubleRuntimeSpawnProvider(_RuntimeSpawnProvider):
                         {
                             "type": "spawn_agent",
                             "slug": "witness_b",
-                            "name": "Свидетель Б",
+                            "name": "Борис Левин",
                             "internal": False,
                             "persona_hint": "Второй свидетель.",
                             "capabilities": ["message"],
@@ -356,7 +399,7 @@ class _WorldgenSpawnProvider(MockLLMProvider):
                     "spawns": [
                         {
                             "slug": "journalist",
-                            "name": "Журналист",
+                            "name": "Анна Кузнецова",
                             "internal": False,
                             "persona_hint": "Настырный корреспондент районной газеты.",
                             "reason": "Публикации в канале администрации вызвали интерес редакции.",
@@ -457,6 +500,67 @@ def test_engine_spawns_secondary_agents_before_first_tick(tmp_path: Path) -> Non
     assert secondary.persona.biography.strip()
     assert any(secondary.agent_id in doc.text for doc in state.agents["agent:head"].memory.docs)
     assert any("Связь:" in doc.text for doc in secondary.memory.docs)
+
+
+def test_engine_rejects_role_based_secondary_spawn(tmp_path: Path) -> None:
+    class _RoleAliasProvider(MockLLMProvider):
+        def generate_structured(self, system: str, user: str, schema: dict, temperature: float = 0.0):
+            if "Выдели до" in user and "agent:head" in user:
+                return StructuredLLMResponse(
+                    data={
+                        "links": [
+                            {
+                                "name": "начальник отдела закупок",
+                                "relation": "руководитель",
+                                "relevance": "Формально влияет на решения.",
+                                "persona_hint": "Руководитель подразделения.",
+                                "internal": True,
+                                "capabilities": ["message"],
+                            }
+                        ]
+                    },
+                    model="mock",
+                )
+            if "Выдели до" in user:
+                return StructuredLLMResponse(data={"links": []}, model="mock")
+            return super().generate_structured(system, user, schema, temperature)
+
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "secondary-role-reject",
+            "ticks": 1,
+            "runtime": {
+                "max_actions_per_turn": 1,
+                "spawn_secondary": True,
+                "max_secondary_per_agent": 1,
+                "max_agents": 4,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:head",
+                    "name": "Волков",
+                    "internal": True,
+                    "initial_title": "начальник отдела закупок",
+                    "persona": {
+                        "summary": "Руководитель закупок.",
+                        "biography": "Часто ссылается на начальника отдела закупок как на формальную роль.",
+                        "interview": [],
+                    },
+                    "capabilities": ["message"],
+                }
+            ],
+            "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=_RoleAliasProvider()).run())
+
+    assert [aid for aid in state.agents if aid.startswith("agent:sec_")] == []
 
 
 def test_engine_limits_secondary_agents_by_max_agents(tmp_path: Path) -> None:
@@ -852,6 +956,23 @@ def test_worldgen_spawn_registers_new_agent(tmp_path: Path) -> None:
 
     assert "agent:journalist" in state.agents
     assert provider.spawned_agent_acted is True
+
+
+def test_engine_full_persona_bootstraps_interview_and_reflection_memory(tmp_path: Path) -> None:
+    cfg = _mk_cfg(enrich_personas=True, persona_enrich_mode="full")
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider()).run())
+
+    persona = state.agents["agent:off_1"].persona
+    assert persona.biography.strip()
+    assert persona.interview
+    assert persona.reflections
+    assert any(doc.kind == "interview" for doc in state.agents["agent:off_1"].memory.docs)
+    assert any(doc.kind == "reflection" for doc in state.agents["agent:off_1"].memory.docs)
 
 
 def test_worldgen_accepts_legacy_list_response(tmp_path: Path) -> None:

@@ -71,6 +71,7 @@ class Vote:
     target_consented: bool | None = None
     status: str = "open"  # open|closed
     result: str | None = None  # passed|failed|canceled
+    result_reason: str = ""
 
 
 @dataclass(slots=True)
@@ -145,6 +146,7 @@ class WorldState:
                     "target_consented": v.target_consented,
                     "votes": dict(v.votes),
                     "result": v.result,
+                    "result_reason": v.result_reason,
                 }
             )
 

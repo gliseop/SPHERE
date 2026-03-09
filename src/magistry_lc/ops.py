@@ -21,6 +21,7 @@ from .ids import (
 )
 from .persona import PersonaArtifact
 from .state import AgentState, Vote, WorkItem, WorldState
+from .utils import normalize_agent_display_name
 
 
 class StateOp(Protocol):
@@ -83,9 +84,12 @@ class CreateAgentOp:
         ensure_kind(self.entity_id, EntityKind.AGENT)
         if state.registry.exists(self.entity_id) or self.entity_id in state.agents:
             raise ValueError(f"Agent already exists: {self.entity_id!r}")
+        display_name = normalize_agent_display_name(self.name, fallback=self.entity_id)
+        if not display_name:
+            raise ValueError("Agent name must be human-readable")
 
         meta = {
-            "name": self.name,
+            "name": display_name,
             "internal": bool(self.internal),
             "capabilities": list(self.capabilities),
         }
@@ -100,7 +104,7 @@ class CreateAgentOp:
         )
         state.agents[self.entity_id] = AgentState(
             agent_id=self.entity_id,
-            name=self.name,
+            name=display_name,
             internal=bool(self.internal),
             persona=PersonaArtifact(summary=(self.persona_hint or "").strip()),
             capabilities=list(self.capabilities),
@@ -272,7 +276,7 @@ class SubmitWorkProposalOp:
 class ModifyReputationOp:
     """Изменить репутацию внутреннего агента (репутация не уходит ниже 0)."""
 
-    actor_id: str
+    actor_id: str | None
     target_agent_id: str
     delta: float
     reason: str = ""
@@ -501,6 +505,7 @@ class CloseVoteOp:
 
     vote_id: str
     result: str
+    reason: str = ""
 
     def apply(self, state: WorldState) -> list[Event]:
         vote = state.votes.get(self.vote_id)
@@ -510,12 +515,13 @@ class CloseVoteOp:
             raise ValueError(f"Vote already closed: {self.vote_id!r}")
         vote.status = "closed"
         vote.result = self.result
+        vote.result_reason = self.reason
         return [
             Event(
                 tick=state.tick,
                 event_type="vote_closed",
                 actor_id=None,
-                payload={"vote_id": self.vote_id, "result": self.result},
+                payload={"vote_id": self.vote_id, "result": self.result, "reason": self.reason},
                 audience=[INTERNAL_AUDIENCE],
             )
         ]

@@ -8,7 +8,7 @@ MAGISTRY (Multi-Agent Governance and Institutional Simulation for Testing and Re
 
 Движок симуляции не привязан к конкретной предметной области — он оперирует универсальными абстракциями: действие, полномочие (`message`, `work`, `dao`, `audit`, `spawn`), сущность (агент, канал, организация, рабочий элемент). Конкретные сценарии — закупки, найм, согласование бюджета — задаются конфигурацией в YAML, а не кодом.
 
-Агенты формируют структурированные действия (отправка сообщений, рабочие заметки, предложения, голосования, `spawn_agent`), которые проходят через гибридный арбитр: проверка полномочий, антифантомная валидация через `EntityRegistry` и YAML-журнал мира. Отдельный `RuntimeAuditor` в governance-слое анализирует уже совершённые события, эмитит audit-сигналы и может запускать заморозку репутации. Перед первым тиком движок может обогащать персоны, извлекать вторичных агентов из социального графа и в ходе симуляции добавлять новых участников через `spawn_agent` или worldgen. Веб-интерфейс (FastAPI + React 19 + D3.js) обеспечивает визуализацию социального графа, ленту событий и управление симуляциями.
+Агенты формируют структурированные действия (отправка сообщений, рабочие заметки, предложения, голосования, `spawn_agent`), которые проходят через гибридный арбитр: проверка полномочий, антифантомная валидация через `EntityRegistry`, temporal-validation по канонической дате и YAML-журнал мира. Отдельный `RuntimeAuditor` в governance-слое анализирует уже совершённые события, эмитит audit-сигналы и может запускать заморозку и штрафы репутации. Перед первым тиком движок может обогащать персоны в режиме `full` (биография + интервью + expert reflection), извлекать вторичных агентов из социального графа и в ходе симуляции добавлять новых участников через `spawn_agent` или worldgen, но только с человеко-читаемыми именами и без role-alias дублей. Веб-интерфейс (FastAPI + React 19 + D3.js) обеспечивает визуализацию социального графа, ленту событий и управление симуляциями.
 
 ## Быстрый старт
 
@@ -34,8 +34,14 @@ cp .env.example .env
 # Минимальный сценарий
 magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
 
-# Богатый сценарий с enrichment/social graph/worldgen
+# Богатый demo-сценарий
 magistry-lc run --scenario scenarios/procurement_tender.yaml --out results/procurement_tender_run
+
+# Исследовательский core-governance run: без worldgen, без secondary-spawn
+magistry-lc run --scenario scenarios/procurement_tender_core_governance.yaml --out results/procurement_tender_core_run
+
+# Исследовательский full-ecology run: full-persona + secondary-spawn + worldgen
+magistry-lc run --scenario scenarios/procurement_tender_full_ecology.yaml --out results/procurement_tender_full_run
 
 # Генерация сценария из текстового описания (LLM)
 magistry-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" --out scenarios/composed.yaml
@@ -44,7 +50,7 @@ magistry-lc compose --description "Тендер на ремонт дорог, 4 
 magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
 ```
 
-При запуске `magistry-lc run` движок пишет `events.jsonl`, `trace.jsonl`, `truth.jsonl` и `evaluation.json` в директорию прогона.
+При запуске `magistry-lc run` движок пишет `events.jsonl`, `trace.jsonl`, `truth.jsonl`, `evaluation.json`, `fidelity.json` и `summary.json` в директорию прогона.
 
 ### Запуск веб-интерфейса
 

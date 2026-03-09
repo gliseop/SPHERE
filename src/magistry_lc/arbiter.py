@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import date, timedelta
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -53,13 +54,36 @@ from .ops import (
     StateOp,
 )
 from .state import WorldState
+from .utils import (
+    looks_like_machine_name,
+    looks_like_role_label,
+    normalize_agent_display_name,
+)
 
 
 _WORK_TOKEN_RE = re.compile(r"[^A-Za-zА-Яа-я0-9_]+")
+_ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+_DOTTED_DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
 
 
 def _work_tokens(text: str) -> set[str]:
     return {t for t in _WORK_TOKEN_RE.split((text or "").casefold()) if t}
+
+
+def _extract_dates(text: str) -> list[date]:
+    out: list[date] = []
+    for match in _ISO_DATE_RE.findall(text or ""):
+        try:
+            out.append(date.fromisoformat(match))
+        except ValueError:
+            continue
+    for match in _DOTTED_DATE_RE.findall(text or ""):
+        try:
+            day, month, year = match.split(".")
+            out.append(date(int(year), int(month), int(day)))
+        except ValueError:
+            continue
+    return out
 
 
 @dataclass(slots=True)
@@ -386,6 +410,36 @@ class Arbiter:
                 best_work_id = wid
         return best_work_id
 
+    def _validate_temporal_texts(self, *, current_tick: int, texts: list[str]) -> str | None:
+        simulated_date = self.runtime.simulated_date(current_tick)
+        if simulated_date is None:
+            return None
+
+        low = simulated_date - timedelta(days=int(self.runtime.temporal_past_slack_days))
+        high = simulated_date + timedelta(days=int(self.runtime.temporal_future_horizon_days))
+        for text in texts:
+            for value in _extract_dates(text):
+                if value < low:
+                    return f"temporal_date_before_current_tick:{value.isoformat()}"
+                if value > high:
+                    return f"temporal_date_out_of_range:{value.isoformat()}"
+        return None
+
+    def _validate_action_temporal_window(self, *, state: WorldState, action: Action) -> str | None:
+        dump = action.model_dump(mode="python")
+        texts = [str(value) for value in dump.values() if isinstance(value, str)]
+        return self._validate_temporal_texts(current_tick=state.tick, texts=texts)
+
+    @staticmethod
+    def _validate_spawn_display_name(name: str) -> str | None:
+        if not name:
+            return "spawn_requires_name"
+        if looks_like_machine_name(name):
+            return "spawn_name_not_human_readable"
+        if looks_like_role_label(name):
+            return "spawn_name_is_role_alias"
+        return None
+
     async def _arbitrate_one(
         self,
         *,
@@ -408,6 +462,10 @@ class Arbiter:
         # Structured actions: deterministic translation + anti-phantoms.
         if isinstance(action, NoopAction):
             return ActionResult(action_index, True, "noop", [])
+
+        temporal_error = self._validate_action_temporal_window(state=state, action=action)
+        if temporal_error:
+            return ActionResult(action_index, False, temporal_error, [])
 
         if isinstance(action, SendMessageAction):
             missing = _require("message")
@@ -547,14 +605,15 @@ class Arbiter:
                 return ActionResult(action_index, False, "spawn_limit_per_tick_exceeded", [])
             if len(state.agents) >= self.runtime.max_agents:
                 return ActionResult(action_index, False, "max_agents_reached", [])
-            slug = normalize_slug(action.slug, fallback=action.name or "spawned")
+            name = normalize_agent_display_name(action.name, fallback=action.slug)
+            name_error = self._validate_spawn_display_name(name)
+            if name_error:
+                return ActionResult(action_index, False, name_error, [])
+            slug = normalize_slug(action.slug, fallback=name or "spawned")
             entity_id = make_id(EntityKind.AGENT, slug)
             if state.registry.exists(entity_id) or entity_id in state.agents:
                 return ActionResult(action_index, False, f"agent_id_conflict:{entity_id}", [])
-            name = (action.name or "").strip()
             persona_hint = (action.persona_hint or "").strip()
-            if not name:
-                return ActionResult(action_index, False, "spawn_requires_name", [])
             if not persona_hint:
                 return ActionResult(action_index, False, "spawn_requires_persona_hint", [])
             capabilities = self._sanitize_spawn_capabilities(
@@ -584,13 +643,15 @@ class Arbiter:
                 return ActionResult(action_index, False, missing, [])
             target_error = self._validate_open_vote_target(
                 state=state,
+                actor_id=agent_id,
                 target_agent_id=action.target_agent_id,
             )
             if target_error:
                 return ActionResult(action_index, False, target_error, [])
 
             vote_id = self.id_alloc.next_id(EntityKind.VOTE, tick=state.tick)
-            voters = self.dao.eligible_voters(state)
+            excluded = {action.target_agent_id} if not self.governance.allow_target_self_vote else set()
+            voters = self.dao.eligible_voters(state, exclude_agent_ids=excluded)
             closes_tick = state.tick + self.governance.vote_duration_ticks
             return ActionResult(
                 action_index,
@@ -617,6 +678,8 @@ class Arbiter:
             if action.vote_id not in state.votes:
                 return ActionResult(action_index, False, f"unknown vote_id: {action.vote_id}", [])
             vote = state.votes[action.vote_id]
+            if not self.governance.allow_target_self_vote and vote.target_agent_id == agent_id:
+                return ActionResult(action_index, False, "target_self_vote_disabled", [])
             if agent_id not in vote.voters:
                 return ActionResult(action_index, False, f"agent_is_not_eligible_voter:{agent_id}", [])
             return ActionResult(
@@ -792,14 +855,21 @@ class Arbiter:
                 return f"unknown_participant_agent_id:{participant_id}"
         return None
 
-    @staticmethod
-    def _validate_open_vote_target(*, state: WorldState, target_agent_id: str) -> str | None:
+    def _validate_open_vote_target(
+        self,
+        *,
+        state: WorldState,
+        actor_id: str,
+        target_agent_id: str,
+    ) -> str | None:
         """Проверить цель голосования за смену должности."""
         target = state.agents.get(target_agent_id)
         if target is None:
             return f"unknown target_agent_id: {target_agent_id}"
         if not target.internal:
             return "cannot nominate external agent"
+        if actor_id == target_agent_id and not self.governance.allow_self_nomination:
+            return "self_nomination_disabled"
         if not target.wants_promotion:
             return "target_declines_promotion"
         for vote in state.votes.values():
@@ -816,6 +886,12 @@ class Arbiter:
             to_id = str(args.get("to_id") or "")
             if not to_id or not state.registry.exists(to_id):
                 raise ValueError("unknown to_id")
+            temporal_error = self._validate_temporal_texts(
+                current_tick=state.tick,
+                texts=[str(args.get("text") or "")],
+            )
+            if temporal_error:
+                raise ValueError(temporal_error)
             target_error = self._validate_message_target(
                 to_id=to_id,
                 private=bool(args.get("private", True)),
@@ -834,6 +910,12 @@ class Arbiter:
         if op_type == "create_work_item":
             wid = self.id_alloc.next_id(EntityKind.WORK_ITEM, tick=state.tick)
             participants = [str(x) for x in (args.get("participants") or [])]
+            temporal_error = self._validate_temporal_texts(
+                current_tick=state.tick,
+                texts=[str(args.get("title") or ""), str(args.get("description") or "")],
+            )
+            if temporal_error:
+                raise ValueError(temporal_error)
             participants_error = self._validate_work_participants(
                 state=state,
                 participants=participants,
@@ -862,12 +944,24 @@ class Arbiter:
             work_id = str(args.get("work_id") or "")
             if work_id not in state.work_items:
                 raise ValueError("unknown work_id")
+            temporal_error = self._validate_temporal_texts(
+                current_tick=state.tick,
+                texts=[str(args.get("text") or "")],
+            )
+            if temporal_error:
+                raise ValueError(temporal_error)
             return [AddWorkNoteOp(actor_id=agent_id, work_id=work_id, text=str(args.get("text") or ""))]
 
         if op_type == "submit_work_proposal":
             work_id = str(args.get("work_id") or "")
             if work_id not in state.work_items:
                 raise ValueError("unknown work_id")
+            temporal_error = self._validate_temporal_texts(
+                current_tick=state.tick,
+                texts=[str(args.get("text") or "")],
+            )
+            if temporal_error:
+                raise ValueError(temporal_error)
             return [SubmitWorkProposalOp(actor_id=agent_id, work_id=work_id, text=str(args.get("text") or ""))]
 
         if op_type == "create_entity":
@@ -891,12 +985,20 @@ class Arbiter:
             target_agent_id = str(args.get("target_agent_id") or "")
             target_error = self._validate_open_vote_target(
                 state=state,
+                actor_id=agent_id,
                 target_agent_id=target_agent_id,
             )
             if target_error:
                 raise ValueError(target_error)
             vote_id = self.id_alloc.next_id(EntityKind.VOTE, tick=state.tick)
-            voters = self.dao.eligible_voters(state)
+            temporal_error = self._validate_temporal_texts(
+                current_tick=state.tick,
+                texts=[str(args.get("new_title") or ""), str(args.get("reason") or "")],
+            )
+            if temporal_error:
+                raise ValueError(temporal_error)
+            excluded = {target_agent_id} if not self.governance.allow_target_self_vote else set()
+            voters = self.dao.eligible_voters(state, exclude_agent_ids=excluded)
             closes_tick = state.tick + self.governance.vote_duration_ticks
             return [
                 OpenVoteOp(
@@ -916,6 +1018,8 @@ class Arbiter:
             if vote_id not in state.votes:
                 raise ValueError("unknown vote_id")
             vote = state.votes[vote_id]
+            if not self.governance.allow_target_self_vote and vote.target_agent_id == agent_id:
+                raise ValueError("target_self_vote_disabled")
             if agent_id not in vote.voters:
                 raise ValueError(f"agent_is_not_eligible_voter:{agent_id}")
             return [CastVoteOp(actor_id=agent_id, vote_id=vote_id, choice=str(args.get("choice") or "abstain"))]

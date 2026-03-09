@@ -43,6 +43,7 @@ MAGISTRY/
 │   ├── oracle.py               # ViolationOracle (чанкинг по events.jsonl)
 │   ├── truth.py                # TruthDetector + TruthLog (deterministic truth-layer sidecar)
 │   ├── evaluation.py           # Post-hoc evaluation against truth.jsonl
+│   ├── fidelity.py             # Post-hoc fidelity metrics + summary separation
 │   ├── events.py               # EventLog (JSONL) — "истина" мира
 │   ├── tracing.py              # TraceLog (JSONL) — prompts/responses отдельно
 │   ├── llm/                    # LLM-провайдеры и утилиты (пакет)
@@ -152,6 +153,8 @@ cd web && bash start.sh                   # сервер + фронтенд
 
 3. **Формат.** При обновлении документа — читать существующий стиль целевого файла и следовать ему. Не вводить новые форматы и условные обозначения без необходимости. Планы пишем в docs/plans.
 
+4. **Язык и терминология.** Основной язык коммуникации, планов, отчётов и технической документации — русский. Английские слова, термины, аббревиатуры и узкие технические выражения использовать только при необходимости. Если английский термин всё же используется, сразу давать краткое пояснение на русском в скобках.
+
 ### Таблица обновлений
 
 | Что изменилось | Какой документ обновить | Приоритет |
@@ -177,7 +180,7 @@ cd web && bash start.sh                   # сервер + фронтенд
 | Добавить сценарий | `scenarios/` (YAML), `config.py` |
 | Изменить арбитра | `arbiter.py`, `journal.py`, `ops.py` |
 | Изменить runtime-аудит | `auditor.py`, `engine.py`, `ops.py`, `config.py` |
-| Изменить truth/evaluation | `truth.py`, `evaluation.py`, `engine.py`, `docs/data_formats.md` |
+| Изменить truth/evaluation/fidelity | `truth.py`, `evaluation.py`, `fidelity.py`, `engine.py`, `docs/data_formats.md` |
 | Изменить агентский цикл | `agent.py`, `memory.py`, `actions.py` |
 | Изменить социальный граф / динамический спавн | `persona.py`, `engine.py`, `actions.py`, `ops.py`, `worldgen.py` |
 | Добавить LLM-провайдера | `llm/providers.py`, `llm/__init__.py` |
@@ -193,8 +196,10 @@ cd web && bash start.sh                   # сервер + фронтенд
 - **Зависимость от OpenAI-совместимого API**: для запуска симуляции требуется `OPENAI_API_KEY` (или совместимый эндпоинт, например OpenRouter). Тесты используют `MockLLMProvider` и не требуют ключа.
 - **Эмбеддинги**: поддерживаются mock-режим и реальные провайдеры через OpenAI-совместимый API. Тесты используют `MockEmbeddingProvider`.
 - **Динамический спавн**: вторичные и runtime-спавненные агенты получают только безопасный capability-набор (`message`/`work`), без `audit` и без права порождать следующих агентов.
+- **Имена новых агентов**: secondary-spawn, runtime-spawn и worldgen-spawn принимают только человеко-читаемые имена; role-alias и machine-like display-name отклоняются или маппятся на уже существующего актора.
 - **Runtime-аудитор v1**: `RuntimeAuditor` реализован как отдельный rules-first модуль, а не как обычный `AgentRunner`; он пишет audit-сигналы и может замораживать репутацию, но не заменяет post-hoc `ViolationOracle`.
-- **Truth/evaluation sidecars**: каждый прогон теперь может писать `truth.jsonl` (deterministic truth-layer) и `evaluation.json` (precision/recall runtime-аудита против truth), отдельно от `events.jsonl` и `trace.jsonl`.
+- **Truth/evaluation/fidelity sidecars**: каждый прогон теперь может писать `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина) и `summary.json` (разделённая сводка), отдельно от `events.jsonl` и `trace.jsonl`.
+- **DAO по умолчанию**: self-nomination и self-vote цели отключены; нормальный путь для кандидата — `respond_nomination`, а `vote_closed` пишет детерминированную причину результата.
 - **Веб-интерфейс**: ряд эндпоинтов, зависевших от удалённого `magistry_sim`, возвращают HTTP 501 (заглушки).
 - **Legacy launcher в backend**: `web/backend/runner.py` функции `launch_simulation*` отключены и явно бросают `RuntimeError`, пока веб-запуск не мигрирован на `magistry_lc`.
 - **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.

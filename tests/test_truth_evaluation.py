@@ -164,6 +164,8 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
 
     assert artifacts.truth_path is not None and artifacts.truth_path.exists()
     assert artifacts.evaluation_path is not None and artifacts.evaluation_path.exists()
+    assert artifacts.fidelity_path is not None and artifacts.fidelity_path.exists()
+    assert artifacts.summary_path is not None and artifacts.summary_path.exists()
 
     truth_records = [
         json.loads(line)
@@ -171,7 +173,12 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
         if line.strip()
     ]
     evaluation = json.loads(artifacts.evaluation_path.read_text(encoding="utf-8"))
+    fidelity = json.loads(artifacts.fidelity_path.read_text(encoding="utf-8"))
+    combined = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
 
     assert truth_records
     assert evaluation["truth_total"] >= 1
     assert evaluation["runtime_flagged_total"] >= 1
+    assert "temporal_violations_total" in fidelity
+    assert combined["governance"]["truth_total"] >= 1
+    assert "fidelity" in combined

@@ -98,6 +98,14 @@ class InterviewQA(BaseModel):
     answer: str
 
 
+class ExpertReflection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expert: str
+    summary: str
+    evidence_indices: list[int] = Field(default_factory=list)
+
+
 class PersonaArtifact(BaseModel):
     """Полный артефакт персоны."""
 
@@ -107,6 +115,7 @@ class PersonaArtifact(BaseModel):
     summary: str = ""
     biography: str = ""
     interview: list[InterviewQA] = Field(default_factory=list)
+    reflections: list[ExpertReflection] = Field(default_factory=list)
 
     @field_validator("summary", "biography")
     @classmethod
@@ -122,6 +131,16 @@ class PersonaArtifact(BaseModel):
                 continue
             lines.append(f"Q: {q}\nA: {a}")
         return "\n\n".join(lines).strip()
+
+    def reflections_as_text(self) -> str:
+        lines = []
+        for item in self.reflections:
+            expert = (item.expert or "").strip()
+            summary = (item.summary or "").strip()
+            if not expert or not summary:
+                continue
+            lines.append(f"{expert}: {summary}")
+        return "\n".join(lines).strip()
 
 
 @dataclass(slots=True)
@@ -254,6 +273,21 @@ def _persona_schema() -> dict[str, Any]:
                     "required": ["question", "answer"],
                 },
             },
+            "reflections": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "expert": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "evidence_indices": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["expert", "summary"],
+                },
+            },
         },
         "required": ["summary", "biography", "interview"],
     }
@@ -268,6 +302,31 @@ def _persona_core_schema() -> dict[str, Any]:
             "biography": {"type": "string"},
         },
         "required": ["summary", "biography"],
+    }
+
+
+def _reflection_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "reflections": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "expert": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "evidence_indices": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["expert", "summary"],
+                },
+            }
+        },
+        "required": ["reflections"],
     }
 
 
@@ -353,6 +412,7 @@ class SocialGraphExtractor:
         system = (
             "Ты — модуль извлечения социального графа для симуляции организационных процессов.\n"
             "Выдели только людей, которые реально важны для сюжета и решений агента.\n"
+            "Не возвращай абстрактные должности и ролевые ярлыки вместо конкретных людей.\n"
             "Не придумывай новых организаций, должностей или ID. Возвращай строго JSON по схеме.\n"
             f"Пиши на языке: {language!r}.\n"
         )
@@ -363,7 +423,8 @@ class SocialGraphExtractor:
             f"Биография:\n{biography or '(пусто)'}\n\n"
             f"Интервью (фрагмент):\n{interview_excerpt or '(пусто)'}\n\n"
             f"Выдели до {max_links} людей. Для каждого укажи имя, связь, почему важен, краткий persona_hint, "
-            "является ли он внутренним участником процесса, и рекомендуемые capabilities."
+            "является ли он внутренним участником процесса, и рекомендуемые capabilities. "
+            "Если в тексте есть только должность без имени, такого кандидата не возвращай."
         )
         resp = await self.llm.generate_structured(
             role="social_graph",
@@ -570,6 +631,86 @@ class PersonaGenerator:
 
         return out
 
+    async def _generate_reflections(
+        self,
+        *,
+        agent_id: str,
+        language: str,
+        summary: str,
+        biography_excerpt: str,
+        interview: list[InterviewQA],
+    ) -> list[ExpertReflection]:
+        interview_excerpt = "\n\n".join(
+            f"{idx + 1}. Q: {qa.question}\nA: {qa.answer}"
+            for idx, qa in enumerate(interview[:8])
+            if (qa.question or "").strip() and (qa.answer or "").strip()
+        )
+        system = (
+            "Ты — модуль экспертной рефлексии персоны для симуляции организационных процессов.\n"
+            "Сформируй 2-4 краткие экспертные интерпретации устойчивой стратегии персонажа.\n"
+            f"Пиши на языке: {language!r}.\n"
+            "Ответ: строго JSON по схеме.\n"
+        )
+        user = (
+            f"Persona summary:\n{summary}\n\n"
+            f"Biography excerpt:\n{biography_excerpt}\n\n"
+            f"Interview fragments:\n{interview_excerpt or '(пусто)'}\n\n"
+            "Обязательно верни минимум две рефлексии: psychologist и economist. "
+            "Можно добавить governance.\n"
+        )
+        try:
+            resp = await self.llm.generate_structured(
+                role="persona_reflection",
+                name=agent_id,
+                tick=0,
+                system=system,
+                user=user,
+                schema=_reflection_schema(),
+                temperature=self.temperature,
+            )
+            raw = resp.data.get("reflections") if isinstance(resp.data, dict) else None
+            if isinstance(raw, list):
+                out: list[ExpertReflection] = []
+                for item in raw:
+                    if not isinstance(item, dict):
+                        continue
+                    expert = str(item.get("expert") or "").strip()
+                    summary_text = str(item.get("summary") or "").strip()
+                    if not expert or not summary_text:
+                        continue
+                    indices = [
+                        int(idx)
+                        for idx in list(item.get("evidence_indices") or [])
+                        if isinstance(idx, int) and idx >= 0
+                    ]
+                    out.append(
+                        ExpertReflection(
+                            expert=expert,
+                            summary=summary_text,
+                            evidence_indices=indices,
+                        )
+                    )
+                if len(out) >= 2:
+                    return out[:4]
+        except Exception:
+            pass
+
+        fallback_excerpt = (summary or biography_excerpt or "").strip()
+        if not fallback_excerpt:
+            return []
+        return [
+            ExpertReflection(
+                expert="psychologist",
+                summary=f"Стабильный поведенческий якорь: {fallback_excerpt[:220].strip()}",
+                evidence_indices=[0],
+            ),
+            ExpertReflection(
+                expert="economist",
+                summary=f"Практический расчёт и стимулы: {fallback_excerpt[:220].strip()}",
+                evidence_indices=[0],
+            ),
+        ]
+
     async def generate(
         self,
         *,
@@ -638,6 +779,7 @@ class PersonaGenerator:
             biography = (persona_hint or summary).strip()
 
         answers: list[str] = []
+        reflections: list[ExpertReflection] = []
         if artifact and len(artifact.interview) >= len(INTERVIEW_QUESTIONS_V2):
             answers = [
                 (qa.answer or "").strip()
@@ -645,6 +787,11 @@ class PersonaGenerator:
             ]
             if any(not a for a in answers):
                 answers = []
+            reflections = [
+                item
+                for item in list(artifact.reflections or [])
+                if (item.expert or "").strip() and (item.summary or "").strip()
+            ]
 
         if not answers:
             excerpt = biography[:1600].strip()
@@ -663,4 +810,18 @@ class PersonaGenerator:
                 continue
             interview.append(InterviewQA(question=q, answer=a))
 
-        return PersonaArtifact(summary=summary, biography=biography, interview=interview)
+        if len(reflections) < 2:
+            reflections = await self._generate_reflections(
+                agent_id=agent_id,
+                language=language,
+                summary=summary,
+                biography_excerpt=biography[:1600].strip(),
+                interview=interview,
+            )
+
+        return PersonaArtifact(
+            summary=summary,
+            biography=biography,
+            interview=interview,
+            reflections=reflections,
+        )

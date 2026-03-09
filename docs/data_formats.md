@@ -24,6 +24,8 @@ runtime:
   language: "ru"
   start_date: "2026-01-01"
   tick_duration_days: 1
+  temporal_past_slack_days: 1
+  temporal_future_horizon_days: 120
   max_actions_per_turn: 2
   tick_events_history: 200
   enable_worldgen: false
@@ -33,6 +35,7 @@ runtime:
   max_secondary_per_agent: 2
   max_agents: 15
   allow_runtime_spawn: false
+  worldgen_allow_internal_spawns: false
 
 governance:
   position_policy: "dao"
@@ -40,6 +43,8 @@ governance:
   pass_threshold: 0.5
   vote_duration_ticks: 2
   require_consent: true
+  allow_self_nomination: false
+  allow_target_self_vote: false
   audit:
     enabled: true
     actor_id: "agent:auditor"
@@ -99,12 +104,15 @@ world:
 |---|---|---|
 | `start_date` | `YYYY-MM-DD \| null` | Каноническая дата тика `0`; если не задана, агент и worldgen видят только номер тика |
 | `tick_duration_days` | `int` | Сколько календарных дней проходит за один тик симуляции |
+| `temporal_past_slack_days` | `int` | Сколько дней назад арбитр ещё допускает абсолютную дату в действии |
+| `temporal_future_horizon_days` | `int` | Максимальный горизонт будущих абсолютных дат в структурированных действиях |
 | `enrich_personas` | `bool` | Runtime-обогащение summary → biography/interview перед первым тиком |
-| `persona_enrich_mode` | `full`/`core` | `full` = summary+biography+interview, `core` = summary+biography |
+| `persona_enrich_mode` | `full`/`core` | `full` = summary+biography+interview+expert reflection, `core` = summary+biography |
 | `spawn_secondary` | `bool` | Извлекать вторичных агентов из социального графа биографий до первого тика |
 | `max_secondary_per_agent` | `int` | Лимит социальных связей, извлекаемых из одной персоны |
 | `max_agents` | `int` | Общий потолок на количество агентов в мире |
 | `allow_runtime_spawn` | `bool` | Разрешить `spawn_agent` и worldgen-spawn в ходе симуляции |
+| `worldgen_allow_internal_spawns` | `bool` | Разрешить worldgen порождать внутренних акторов; по умолчанию выключено |
 
 ### Типизированные ID
 
@@ -131,6 +139,16 @@ world:
 Вторичные и runtime-спавненные агенты проходят фильтрацию capability-набора: движок оставляет только безопасный поднабор `message`/`work`, чтобы новые агенты не получали `audit` или право порождать следующих агентов.
 
 Важно: capability `audit` и `RuntimeAuditor` — не одно и то же. В версии v1 runtime-аудит реализован отдельным rules-first модулем `auditor.py`, который может использовать `actor_id` аудитора из конфигурации, но не сводится к обычному `AgentRunner`.
+
+Для `spawn_agent`, secondary-spawn и worldgen-spawn действует дополнительное правило: новый агент должен иметь человеко-читаемое имя, а не `agent:*`, slug или абстрактную должность. Role-alias ссылки либо переиспользуют уже существующего актора, либо отклоняются.
+
+### Ключевые поля `governance`
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `require_consent` | `bool` | Требовать явное согласие цели номинации через `respond_nomination` |
+| `allow_self_nomination` | `bool` | Разрешить self-nomination; для исследовательского режима обычно `false` |
+| `allow_target_self_vote` | `bool` | Разрешить цели голосования голосовать за себя; для коллегиального режима обычно `false` |
 
 ### Ключевые поля `governance.audit`
 
@@ -163,6 +181,13 @@ persona:
   interview:
     - question: "Как вы принимаете решения?"
       answer: "Стараюсь взвесить..."
+  reflections:
+    - expert: "psychologist"
+      summary: "Избегает прямого конфликта и предпочитает обходные траектории."
+      evidence_indices: [0, 4]
+    - expert: "economist"
+      summary: "Сильно реагирует на карьерные стимулы и управляемый риск."
+      evidence_indices: [2, 8]
 ```
 
 ### Кэш runtime-обогащения персон (`personas.json`)
@@ -184,7 +209,8 @@ persona:
     "agent:off_1": {
       "summary": "…",
       "biography": "…",
-      "interview": []
+      "interview": [],
+      "reflections": []
     }
   }
 }
@@ -359,6 +385,33 @@ JSON-файлы с результатами нарративных интерв�
   "by_violation_type": {
     "self_reputation_award": {"truth": 1, "signals": 1, "tp": 1, "fp": 0, "fn": 0}
   }
+}
+```
+
+### Fidelity sidecar (`fidelity.json`)
+
+Отдельная сводка по правдоподобию и структурной дисциплине мира:
+
+```json
+{
+  "temporal_violations_total": 0,
+  "identity_machine_name_total": 0,
+  "identity_role_alias_total": 0,
+  "phantom_rejection_total": 3,
+  "bureaucratic_loop_total": 5,
+  "world_event_total": 12,
+  "reputation_event_total": 7
+}
+```
+
+### Сводный отчёт (`summary.json`)
+
+`summary.json` не смешивает governance-оценку и fidelity-оценку, а хранит два независимых блока:
+
+```json
+{
+  "governance": { "truth_total": 3, "true_positive": 2 },
+  "fidelity": { "temporal_violations_total": 0, "bureaucratic_loop_total": 5 }
 }
 ```
 

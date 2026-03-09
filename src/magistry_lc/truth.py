@@ -63,12 +63,13 @@ class TruthDetector:
     ) -> list[TruthRecord]:
         current_tick = int(state.tick)
         records: list[TruthRecord] = []
-        for ev in tick_events:
+        base_recent = list(recent_events)
+        for idx, ev in enumerate(tick_events):
             records.extend(
                 self._records_for_event(
                     state=state,
                     event=ev,
-                    recent_events=recent_events,
+                    recent_events=base_recent + tick_events[:idx],
                     current_tick=current_tick,
                 )
             )
@@ -136,7 +137,7 @@ class TruthDetector:
                     recent_events=recent_events,
                     current_tick=current_tick,
                 )
-                if contacts >= 2:
+                if contacts >= 1:
                     out.append(
                         TruthRecord(
                             tick=current_tick,
@@ -144,9 +145,9 @@ class TruthDetector:
                             target_agent_id=target_id,
                             violation_type="nomination_after_private_contact",
                             severity="high",
-                            confidence=min(0.8 + 0.05 * contacts, 0.95),
+                            confidence=min(0.78 + 0.07 * contacts, 0.95),
                             evidence_refs=[_event_ref(event)],
-                            rationale="Номинация после серии недавних приватных контактов с целью.",
+                            rationale="Номинация после недавних приватных контактов с целью.",
                         )
                     )
                 return out
@@ -163,7 +164,7 @@ class TruthDetector:
                     recent_events=recent_events,
                     current_tick=current_tick,
                 )
-                if contacts >= 2:
+                if contacts >= 1:
                     out.append(
                         TruthRecord(
                             tick=current_tick,
@@ -171,9 +172,9 @@ class TruthDetector:
                             target_agent_id=target_id,
                             violation_type="support_vote_after_private_contact",
                             severity="high",
-                            confidence=min(0.8 + 0.05 * contacts, 0.95),
+                            confidence=min(0.83 + 0.06 * contacts, 0.95),
                             evidence_refs=[_event_ref(event)],
-                            rationale="Поддерживающий голос после серии недавних приватных контактов с целью голосования.",
+                            rationale="Поддерживающий голос после недавних приватных контактов с целью голосования.",
                         )
                     )
                 return out
