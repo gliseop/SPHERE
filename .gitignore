@@ -7,6 +7,5 @@ __pycache__/
 .playwright-mcp
 results/
 screenshots/
-docs/plans
 test-screenshots
 lc_results
