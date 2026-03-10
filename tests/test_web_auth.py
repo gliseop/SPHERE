@@ -62,7 +62,7 @@ def test_validate_jwt_secret_rejects_short_secret(monkeypatch: pytest.MonkeyPatc
         importlib.reload(reloaded)
 
 
-def test_dev_mode_generates_strong_ephemeral_secret(monkeypatch: pytest.MonkeyPatch):
+def test_dev_mode_uses_stable_fallback_secret(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("JWT_SECRET", raising=False)
     monkeypatch.setenv("MAGISTRY_DEV", "1")
     reloaded = importlib.reload(auth_module)
@@ -70,6 +70,9 @@ def test_dev_mode_generates_strong_ephemeral_secret(monkeypatch: pytest.MonkeyPa
         reloaded.validate_jwt_secret()
         assert reloaded._JWT_SECRET is not None
         assert len(reloaded._JWT_SECRET.encode("utf-8")) >= 32
+        token = reloaded.create_access_token("alice", "viewer")
+        reloaded_again = importlib.reload(reloaded)
+        assert reloaded_again.decode_token(token)["sub"] == "alice"
     finally:
         monkeypatch.setenv("JWT_SECRET", _LONG_TEST_SECRET)
         monkeypatch.delenv("MAGISTRY_DEV", raising=False)

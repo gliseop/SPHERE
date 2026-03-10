@@ -163,21 +163,89 @@ class TestStopExternalRun:
         assert runner.stop_simulation("ghost") is None
 
 
-class TestLaunchSimulationDisabled:
-    """Тесты для отключённых legacy-launch функций."""
+class _FakePopen:
+    def __init__(self, cmd, cwd=None, env=None, stdout=None, stderr=None, text=None):
+        self.cmd = cmd
+        self.cwd = cwd
+        self.env = env
+        self.stdout = stdout
+        self.stderr = stderr
+        self.text = text
+        self.pid = 4321
+        self._returncode = None
 
-    def test_launch_simulation_from_config_disabled(self):
-        """launch_simulation_from_config возвращает явную ошибку миграции."""
-        with pytest.raises(RuntimeError, match="legacy launcher magistry_sim удалён"):
-            runner.launch_simulation_from_config(
+    def poll(self):
+        return self._returncode
+
+    def wait(self, timeout=None):
+        return 0
+
+    def terminate(self):
+        self._returncode = 0
+
+    def kill(self):
+        self._returncode = -9
+
+
+class TestLaunchSimulation:
+    """Тесты для запуска MAGISTRY-LC через subprocess."""
+
+    def test_launch_simulation_from_config_writes_input_and_registers_process(self, results_dir: Path):
+        """launch_simulation_from_config создаёт input-config и регистрирует процесс."""
+        with patch("web.backend.runner.subprocess.Popen", side_effect=_FakePopen):
+            result = runner.launch_simulation_from_config(
                 scenario_config={"id": "S1", "agents": []},
                 governance="G1",
+                seed=7,
+                rounds=5,
             )
 
-    def test_launch_simulation_disabled(self):
-        """launch_simulation возвращает явную ошибку миграции."""
-        with pytest.raises(RuntimeError, match="legacy launcher magistry_sim удалён"):
-            runner.launch_simulation(
-                scenario="S1",
+        run_name = result["run_name"]
+        assert result["pid"] == 4321
+        run_dir = results_dir / run_name
+        assert run_dir.exists()
+        assert (run_dir / "_input_scenario.json").exists()
+        assert run_name in runner._active
+        proc = runner._active[run_name]
+        assert proc.cmd[:3] == [runner.sys.executable, "-m", "magistry_lc.cli"]
+
+    def test_launch_simulation_uses_template_loader(self, results_dir: Path):
+        """launch_simulation загружает template-конфиг и делегирует в config-launcher."""
+        cfg = {
+            "title": "S1 template",
+            "ticks": 4,
+            "seed": 42,
+            "agents": [],
+            "world": {},
+            "llm": {},
+            "memory": {},
+            "runtime": {},
+            "governance": {},
+        }
+
+        with patch("web.backend.runner.subprocess.Popen", side_effect=_FakePopen):
+            with patch(
+                "web.backend.routes.scenarios.load_template_config_for_web",
+                return_value=type("Cfg", (), {"model_dump": lambda self, mode="json": cfg})(),
+            ):
+                result = runner.launch_simulation(
+                    scenario="S1",
+                    governance="G1",
+                    seed=11,
+                    rounds=6,
+                )
+
+        assert result["pid"] == 4321
+        assert result["run_name"].startswith("S1_G1_seed11")
+
+    def test_launch_simulation_respects_limit(self, results_dir: Path, monkeypatch: pytest.MonkeyPatch):
+        """При превышении лимита concurrent-runs выбрасывается TooManyRunsError."""
+        monkeypatch.setattr(runner, "_MAX_RUNNING", 1)
+        busy = _FakePopen([])
+        runner._active["busy"] = busy  # type: ignore[assignment]
+
+        with pytest.raises(runner.TooManyRunsError):
+            runner.launch_simulation_from_config(
+                scenario_config={"id": "S1", "agents": []},
                 governance="G1",
             )

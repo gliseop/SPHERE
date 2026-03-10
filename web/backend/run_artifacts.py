@@ -13,7 +13,7 @@ RunFormat = Literal["legacy", "directory"]
 
 _LEGACY_EVENTS_SUFFIX = "_events.jsonl"
 _RUN_META_RE = re.compile(
-    r"^(?P<scenario>S\d+)_(?P<governance>G\d+)"
+    r"^(?P<scenario>.+?)_(?P<governance>G\d+)"
     r"(?:_seed(?P<seed>\d+))?"
     r"(?:_(?P<variant>[A-Za-z0-9_\-]+))?$"
 )

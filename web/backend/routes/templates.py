@@ -14,6 +14,7 @@ from web.backend.constants import (
 )
 from web.backend.database import User
 from web.backend.settings import GOVERNANCE_MODES_DIR
+from .scenarios import _LEGACY_TEMPLATE_FILE_MAP, load_template_config_for_web
 
 router = APIRouter(tags=["templates"])
 
@@ -22,12 +23,22 @@ router = APIRouter(tags=["templates"])
 async def list_template_scenarios(_user: User = Depends(require_viewer)) -> list[dict]:
     """Вернуть список встроенных шаблонов сценариев (S*).
 
-    Встроенные сценарии были частью magistry_sim и более не доступны.
+    Шаблоны собираются из поддерживаемых seed-сценариев репозитория.
     """
-    raise HTTPException(
-        status_code=501,
-        detail="Встроенные шаблоны сценариев недоступны: движок magistry_sim удалён.",
-    )
+    result: list[dict] = []
+    for scenario_id in sorted(_LEGACY_TEMPLATE_FILE_MAP):
+        try:
+            cfg = load_template_config_for_web(scenario_id)
+        except HTTPException:
+            continue
+        result.append(
+            {
+                "id": scenario_id,
+                "title": cfg.title or scenario_id,
+                "description": cfg.description or "",
+            }
+        )
+    return result
 
 
 @router.get("/api/templates/scenarios/{scenario_id}")
@@ -38,12 +49,10 @@ async def get_template_scenario(
 ) -> dict:
     """Вернуть полный конфиг встроенного сценария.
 
-    Встроенные сценарии были частью magistry_sim и более не доступны.
+    Возвращает валидный ``ScenarioConfig`` для запуска/редактирования в web UI.
     """
-    raise HTTPException(
-        status_code=501,
-        detail="Встроенные шаблоны сценариев недоступны: движок magistry_sim удалён.",
-    )
+    cfg = load_template_config_for_web(scenario_id, governance=governance)
+    return cfg.model_dump(mode="json")
 
 
 @router.get("/api/templates/governance")

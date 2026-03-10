@@ -1,6 +1,7 @@
 """Интеграционные тесты авторизации эндпоинтов."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -295,6 +296,42 @@ def test_export_run_reads_directory_sidecars(tmp_path: Path):
     assert payload["summary"] == {"score": 1}
 
 
+def test_get_run_scenario_normalizes_lc_config_for_frontend(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+    (run_dir / "scenario.json").write_text(
+        (
+            '{'
+            '"version":1,'
+            '"title":"LC Scenario",'
+            '"description":"demo",'
+            '"ticks":4,'
+            '"seed":11,'
+            '"agents":[{"agent_id":"agent:off_1","name":"Off 1","internal":true,"persona":{},"capabilities":["message","work","dao"],"initial_title":"специалист"}],'
+            '"world":{"channels":[{"channel_id":"chan:public","title":"Public"}],"orgs":[],"work_items":[]}'
+            '}'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/scenario",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["name"] == "LC Scenario"
+    assert payload["rounds"] == 4
+    assert payload["governance"] == "G0"
+    assert payload["agents"][0]["id"] == "off_1"
+    assert payload["agents"][0]["role"] == "official"
+
+
 def test_get_interview_rejects_backslash_path_traversal():
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         r = client.get(
@@ -434,6 +471,128 @@ def test_launch_run_viewer_gets_403():
             headers={"Authorization": f"Bearer {viewer_token()}"},
         )
     assert r.status_code == 403
+
+
+def test_template_scenarios_available_from_seed_files(tmp_path: Path):
+    (tmp_path / "seed_s0_g0.json").write_text(
+        json.dumps(
+            {
+                "name": "Чистая сделка",
+                "scenario": "S0",
+                "governance": "G0",
+                "rounds": 5,
+                "seed": 1,
+                "agents": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "seed_s1_g1.json").write_text(
+        json.dumps(
+            {
+                "name": "Прямой сговор",
+                "scenario": "S1",
+                "governance": "G1",
+                "rounds": 6,
+                "seed": 2,
+                "agents": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            r = client.get(
+                "/api/templates/scenarios",
+                headers={"Authorization": f"Bearer {viewer_token()}"},
+            )
+
+    assert r.status_code == 200
+    payload = {item["id"]: item for item in r.json()}
+    assert payload["S0"]["title"] == "Чистая сделка"
+    assert payload["S1"]["title"] == "Прямой сговор"
+
+
+def test_template_scenario_returns_normalized_config(tmp_path: Path):
+    (tmp_path / "seed_s1_g1.json").write_text(
+        json.dumps(
+            {
+                "name": "Прямой сговор",
+                "description": "demo",
+                "scenario": "S1",
+                "governance": "G1",
+                "rounds": 6,
+                "seed": 2,
+                "agents": [{"id": "off_1", "name": "Off 1", "role": "official", "initial_reputation": 5}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            r = client.get(
+                "/api/templates/scenarios/S1?governance=G2",
+                headers={"Authorization": f"Bearer {viewer_token()}"},
+            )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["title"] == "Прямой сговор"
+    assert payload["ticks"] == 6
+    assert payload["governance"]["audit"]["enabled"] is True
+    assert payload["governance"]["audit"]["reputation_freeze_enabled"] is True
+
+
+def test_launch_run_admin_starts_template_process():
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch(
+            "web.backend.runner.launch_simulation",
+            return_value={"run_name": "S1_G1_seed42_web", "pid": 1234},
+        ):
+            r = client.post(
+                "/api/runs/launch",
+                json={"scenario": "S1", "governance": "G1", "seed": 42, "rounds": 8},
+                headers={"Authorization": f"Bearer {admin_token()}"},
+            )
+
+    assert r.status_code == 202
+    assert r.json()["run_name"] == "S1_G1_seed42_web"
+
+
+def test_run_scenario_admin_launches_saved_yaml(tmp_path: Path):
+    (tmp_path / "custom_lc.yaml").write_text(
+        (
+            "version: 1\n"
+            "title: YAML scenario\n"
+            "ticks: 5\n"
+            "agents:\n"
+            "  - agent_id: agent:off_1\n"
+            "    name: Off 1\n"
+            "    internal: true\n"
+            "world: {}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                with patch(
+                    "web.backend.runner.launch_simulation_from_config",
+                    return_value={"run_name": "custom_lc_G0_seed42_web", "pid": 555},
+                ):
+                    r = client.post(
+                        "/api/scenarios/custom_lc/run",
+                        headers={"Authorization": f"Bearer {admin_token()}"},
+                    )
+
+    assert r.status_code == 202
+    assert r.json()["run_name"] == "custom_lc_G0_seed42_web"
 
 
 def test_delete_directory_run(tmp_path: Path):

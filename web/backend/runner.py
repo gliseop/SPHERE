@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -143,9 +144,84 @@ def launch_simulation_from_config(
         parallel_window: Окно батчирования (симулированные секунды).
             None = определить из env.
     """
-    raise RuntimeError(
-        "Запуск через web/backend/runner отключён: legacy launcher magistry_sim удалён."
+    with _active_lock:
+        running_now = sum(1 for proc in _active.values() if proc.poll() is None)
+        if running_now >= _MAX_RUNNING:
+            raise TooManyRunsError(
+                f"Слишком много одновременных прогонов: {running_now} >= {_MAX_RUNNING}"
+            )
+
+    config = dict(scenario_config or {})
+    config["seed"] = int(seed)
+    if rounds is not None:
+        config["ticks"] = int(rounds)
+
+    base_name = _make_run_name(
+        scenario=str(config.get("scenario_id") or config.get("id") or config.get("title") or "scenario"),
+        governance=governance,
+        seed=seed,
+        variant=variant or runner_type,
     )
+    run_name = _allocate_run_name(base_name)
+    out_dir = _RESULTS_DIR / run_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    scenario_path = out_dir / "_input_scenario.json"
+    scenario_path.write_text(
+        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
+    stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
+    stdout_handle = stdout_path.open("a", encoding="utf-8")
+    stderr_handle = stderr_path.open("a", encoding="utf-8")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "magistry_lc.cli",
+        "run",
+        "--scenario",
+        str(scenario_path),
+        "--out",
+        str(out_dir),
+    ]
+
+    env = os.environ.copy()
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    if parallel_agents is True:
+        env["MAGISTRY_PARALLEL_AGENTS"] = "1"
+    elif parallel_agents is False:
+        env["MAGISTRY_PARALLEL_AGENTS"] = "0"
+    if parallel_workers is not None:
+        env["MAGISTRY_PARALLEL_WORKERS"] = str(int(parallel_workers))
+    if parallel_window is not None:
+        env["MAGISTRY_PARALLEL_WINDOW"] = str(float(parallel_window))
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(_PROJECT_ROOT),
+            env=env,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            text=True,
+        )
+    except Exception:
+        stdout_handle.close()
+        stderr_handle.close()
+        raise
+
+    threading.Thread(
+        target=_close_logs_when_done,
+        args=(proc, stdout_handle, stderr_handle),
+        daemon=True,
+    ).start()
+
+    with _active_lock:
+        _active[run_name] = proc
+    return {"run_name": run_name, "pid": proc.pid}
 
 
 def launch_simulation(
@@ -173,9 +249,83 @@ def launch_simulation(
     Raises:
         RuntimeError: Если прогон с таким именем уже запущен.
     """
-    raise RuntimeError(
-        "Запуск через web/backend/runner отключён: legacy launcher magistry_sim удалён."
+    from web.backend.routes.scenarios import load_template_config_for_web
+
+    cfg = load_template_config_for_web(scenario, governance=governance)
+    payload = cfg.model_dump(mode="json")
+    payload["scenario_id"] = scenario
+    return launch_simulation_from_config(
+        scenario_config=payload,
+        governance=governance,
+        seed=seed,
+        runner_type=runner_type,
+        rounds=rounds,
+        variant=runner_type,
+        personalities_dir=personalities_dir,
+        interviews_dir=interviews_dir,
     )
+
+
+def _make_run_name(
+    *,
+    scenario: str,
+    governance: str,
+    seed: int,
+    variant: str | None,
+) -> str:
+    scenario_slug = _safe_run_part(str(scenario or "scenario"))
+    governance_slug = _safe_run_part(str(governance or "G0"))
+    parts = [scenario_slug, governance_slug, f"seed{int(seed)}"]
+    if variant:
+        parts.append(_safe_run_part(variant))
+    return "_".join(part for part in parts if part)
+
+
+def _safe_run_part(value: str) -> str:
+    slug = "".join(
+        ch if ch.isascii() and (ch.isalnum() or ch in {"_", "-"}) else "_"
+        for ch in value.strip()
+    )
+    slug = slug.strip("_")
+    return slug[:64] or "run"
+
+
+def _allocate_run_name(base_name: str) -> str:
+    candidate = base_name
+    suffix = 2
+    while _run_name_taken(candidate):
+        candidate = f"{base_name}_{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _run_name_taken(run_name: str) -> bool:
+    if (_RESULTS_DIR / run_name).exists():
+        return True
+    if (_RESULTS_DIR / f"{run_name}_events.jsonl").exists():
+        return True
+    with _active_lock:
+        return run_name in _active and _active[run_name].poll() is None
+
+
+def _close_logs_when_done(
+    proc: subprocess.Popen,
+    stdout_handle,
+    stderr_handle,
+) -> None:
+    try:
+        proc.wait()
+    except Exception:
+        return
+    finally:
+        try:
+            stdout_handle.close()
+        except Exception:
+            pass
+        try:
+            stderr_handle.close()
+        except Exception:
+            pass
 
 
 def _discover_external_runs() -> list[dict]:

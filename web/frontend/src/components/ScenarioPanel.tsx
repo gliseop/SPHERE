@@ -11,8 +11,13 @@ interface AgentEntry {
 
 interface ScenarioData {
   id?: string
+  name?: string
+  title?: string
+  description?: string
   narrative_context?: string
+  scenario?: string
   scenario_template?: string
+  governance?: string
   governance_mode?: string
   rounds?: number
   seed?: number | null
@@ -113,11 +118,16 @@ export function ScenarioPanel({ runName }: Props) {
 
   if (!data) return null
 
-  const title = data.narrative_context
-    ? data.narrative_context.split('\n')[0].slice(0, 120)
-    : data.id || runName
+  const title = data.name
+    || data.title
+    || (data.narrative_context ? data.narrative_context.split('\n')[0].slice(0, 120) : '')
+    || data.id
+    || runName
 
   const agents = Array.isArray(data.agents) ? data.agents : []
+  const description = data.description || data.narrative_context || ''
+  const scenarioBadge = data.scenario || data.scenario_template
+  const governanceBadge = data.governance || data.governance_mode
 
   return (
     <div className="activity-feed">
@@ -133,11 +143,11 @@ export function ScenarioPanel({ runName }: Props) {
 
         {/* Шаблон и режим */}
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-          {data.scenario_template && (
-            <span className="badge small">{data.scenario_template}</span>
+          {scenarioBadge && (
+            <span className="badge small">{scenarioBadge}</span>
           )}
-          {data.governance_mode && (
-            <span className="badge small">{data.governance_mode}</span>
+          {governanceBadge && (
+            <span className="badge small">{governanceBadge}</span>
           )}
           {typeof data.rounds === 'number' && (
             <span className="badge small">Раундов: {data.rounds}</span>
@@ -148,6 +158,17 @@ export function ScenarioPanel({ runName }: Props) {
         </div>
 
         <div className="hud-divider" />
+
+        {description && (
+          <div style={{ marginTop: '0.5rem' }}>
+            <div className="text-muted" style={{ fontSize: '0.6rem', marginBottom: '0.25rem' }}>
+              Описание
+            </div>
+            <div style={{ fontSize: '0.7rem', lineHeight: 1.5, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+              {description}
+            </div>
+          </div>
+        )}
 
         {/* Агенты */}
         {agents.length > 0 && (
@@ -189,7 +210,7 @@ export function ScenarioPanel({ runName }: Props) {
         )}
 
         {/* Нарративный контекст */}
-        {data.narrative_context && (
+        {data.narrative_context && data.narrative_context !== description && (
           <div style={{ marginTop: '0.5rem' }}>
             <div className="hud-divider" />
             <div className="text-muted" style={{ fontSize: '0.6rem', marginBottom: '0.25rem', marginTop: '0.5rem' }}>

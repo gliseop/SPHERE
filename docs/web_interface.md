@@ -35,7 +35,7 @@ web/backend/
 - **admin** — полный доступ: запуск симуляций, управление сценариями, удаление прогонов
 - **viewer** — только чтение: просмотр прогонов, событий, графов
 
-Токен выдаётся через OAuth2 password flow (`POST /api/auth/login`). Время жизни настраивается через `JWT_EXPIRE_HOURS` (по умолчанию 24 часа, при невалидном значении используется fallback). Секрет задаётся через `JWT_SECRET` и должен быть не короче 32 байт; в режиме разработки (`MAGISTRY_DEV=1`) при отсутствии явного секрета backend генерирует одноразовый секрет на текущий процесс.
+Токен выдаётся через OAuth2 password flow (`POST /api/auth/login`). Время жизни настраивается через `JWT_EXPIRE_HOURS` (по умолчанию 24 часа, при невалидном значении используется fallback). Секрет задаётся через `JWT_SECRET` и должен быть не короче 32 байт; в режиме разработки (`MAGISTRY_DEV=1`) при отсутствии явного секрета backend использует стабильный dev-secret, чтобы токены не отваливались при reload и multi-worker запуске.
 
 ### REST API
 
@@ -64,10 +64,12 @@ web/backend/
 
 | Метод | Путь | Описание |
 |---|---|---|
-| POST | `/api/scenarios/{scenario_id}/run` | Заглушка (HTTP 501, legacy launcher удалён) |
-| POST | `/api/runs/launch` | Заглушка (HTTP 501, legacy launcher удалён) |
+| POST | `/api/scenarios/{scenario_id}/run` | Запустить сохранённый сценарий |
+| POST | `/api/runs/launch` | Запустить шаблонный сценарий |
 | GET | `/api/runs/active` | Список активных симуляций (`external`, `stop_supported`) |
 | POST | `/api/runs/{run_name}/stop` | Остановить симуляцию |
+
+Web launcher запускает `magistry_lc` как отдельный subprocess и пишет артефакты в `results/{run_name}/`. Для сохранённых legacy-сценариев (`name/scenario/governance/agents` без полного `ScenarioConfig`) backend перед запуском выполняет best-effort конвертацию в валидный `ScenarioConfig`.
 
 #### Сценарии
 
@@ -79,7 +81,7 @@ web/backend/
 | PUT | `/api/scenarios/{id}` | Обновить сценарий |
 | DELETE | `/api/scenarios/{id}` | Удалить сценарий |
 
-Маршруты сценариев читают файлы `*.json`, `*.yaml` и `*.yml`. Если файл содержит полноценный `ScenarioConfig`, backend возвращает web-совместимую карточку сценария и кладёт исходный конфиг в поле `sim_config`, чтобы фронтенд мог редактировать его без потери данных.
+Маршруты сценариев читают файлы `*.json`, `*.yaml` и `*.yml`. Если файл содержит полноценный `ScenarioConfig`, backend возвращает web-совместимую карточку сценария и кладёт исходный конфиг в поле `sim_config`, чтобы фронтенд мог редактировать его без потери данных. Если файл ещё хранится в legacy web-формате, backend оставляет карточку совместимой с UI, а при запуске/подстановке шаблона конвертирует её в `ScenarioConfig`.
 
 #### Типы агентов
 
@@ -124,10 +126,12 @@ web/backend/
 | Метод | Путь | Описание |
 |---|---|---|
 | GET | `/api/templates/scenarios` | Встроенные шаблоны сценариев |
-| GET | `/api/templates/scenarios/{id}` | Конкретный шаблон |
+| GET | `/api/templates/scenarios/{id}` | Конкретный шаблон как `ScenarioConfig` |
 | GET | `/api/templates/governance` | Шаблоны режимов управления |
 | GET | `/api/artifacts/{doc_id}` | Артефакты (сгенерированные документы) |
 | GET | `/api/debug/llm-log` | Журнал LLM-вызовов |
+
+Шаблоны сценариев собираются из поддерживаемых `seed_s*_g*.json` сценариев репозитория. Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G0..G3` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора.
 
 ### WebSocket-протокол
 

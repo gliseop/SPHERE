@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User
 from web.backend.graph_state import GraphStateBuilder, normalize_event_compat
+from web.backend.routes.scenarios import _scenario_config_to_payload, load_scenario_config_for_web
 from web.backend.run_artifacts import (
     list_run_artifacts,
     parse_run_name,
@@ -328,7 +329,8 @@ async def get_run_scenario(name: str, _user: User = Depends(require_viewer)) -> 
             break
     if scenario_path is None:
         raise HTTPException(status_code=404, detail="Scenario config not found for this run")
-    return json.loads(scenario_path.read_text(encoding="utf-8"))
+    cfg = load_scenario_config_for_web(scenario_path, scenario_id=name)
+    return _scenario_config_to_payload(cfg, scenario_id=name)
 
 
 @router.get("/api/run/{name}/prompts")

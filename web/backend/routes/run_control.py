@@ -14,7 +14,8 @@ from web.backend.run_artifacts import (
     run_log_sidecar_candidates,
 )
 from web.backend.settings import RESULTS_DIR
-from web.backend.validators import validate_run_name
+from web.backend.validators import resolve_rounds, resolve_seed, validate_run_name, validate_scenario_id
+from .scenarios import _resolve_scenario_path, load_scenario_config_for_web
 
 router = APIRouter(tags=["run-control"])
 
@@ -23,24 +24,66 @@ router = APIRouter(tags=["run-control"])
 async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -> dict:
     """Запустить прогон по сценарию.
 
-    Зависит от magistry_sim (scenarios, persona_generator, config) и пока недоступен.
+    Для legacy web-представления сценарий при необходимости конвертируется
+    в ``ScenarioConfig`` перед запуском.
     """
-    raise HTTPException(
-        status_code=501,
-        detail="Запуск прогонов через magistry_sim недоступен: движок удалён.",
-    )
+    from web.backend.runner import TooManyRunsError, launch_simulation_from_config
+
+    validate_scenario_id(scenario_id)
+    path = _resolve_scenario_path(scenario_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+
+    cfg = load_scenario_config_for_web(path, scenario_id=scenario_id)
+    from .scenarios import _infer_governance_mode
+
+    governance = _infer_governance_mode(cfg)
+    try:
+        payload = cfg.model_dump(mode="json")
+        payload["scenario_id"] = scenario_id
+        return launch_simulation_from_config(
+            scenario_config=payload,
+            governance=governance,
+            seed=int(cfg.seed),
+            rounds=int(cfg.ticks),
+            runner_type="web",
+        )
+    except TooManyRunsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/api/runs/launch", status_code=202)
 async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
     """Запустить встроенный прогон (S0-S2).
 
-    Зависит от magistry_sim (scenarios, persona_generator, config) и пока недоступен.
+    Поддерживает шаблоны из ``/api/templates/scenarios`` с overrides по governance/seed/rounds.
     """
-    raise HTTPException(
-        status_code=501,
-        detail="Запуск прогонов через magistry_sim недоступен: движок удалён.",
-    )
+    from web.backend.runner import TooManyRunsError, launch_simulation
+
+    scenario = str(data.get("scenario") or "").strip()
+    if not scenario:
+        raise HTTPException(status_code=400, detail="Scenario is required")
+
+    governance = str(data.get("governance") or "G1").strip() or "G1"
+    seed = resolve_seed(data.get("seed"))
+    rounds = resolve_rounds(data.get("rounds"), default=25)
+
+    try:
+        return launch_simulation(
+            scenario=scenario,
+            governance=governance,
+            seed=seed,
+            runner_type="web",
+            rounds=rounds,
+        )
+    except TooManyRunsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/api/runs/active")

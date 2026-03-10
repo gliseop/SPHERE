@@ -15,13 +15,14 @@ from .database import User, get_user_by_username
 
 _oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 _MIN_JWT_SECRET_BYTES = 32
+_DEV_JWT_SECRET = "magistry-dev-secret-0123456789abcdef0123456789abcdef"
 
 _DEV_MODE = os.environ.get("MAGISTRY_DEV", "").strip() == "1"
 _JWT_SECRET_ENV = (os.environ.get("JWT_SECRET") or "").strip()
 if _JWT_SECRET_ENV:
     _JWT_SECRET: str | None = _JWT_SECRET_ENV
 elif _DEV_MODE:
-    _JWT_SECRET = secrets.token_hex(_MIN_JWT_SECRET_BYTES)
+    _JWT_SECRET = _DEV_JWT_SECRET
 else:
     _JWT_SECRET = None
 _JWT_ALGORITHM = "HS256"

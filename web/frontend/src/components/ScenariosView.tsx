@@ -13,6 +13,7 @@ interface Agent {
   name: string
   role: string
   initial_reputation: number
+  position?: string
   personality_archetype?: string | null
 }
 
@@ -237,20 +238,20 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
       .catch(() => setGovernanceModes([]))
   }, [])
 
-  async function handleSave() {
-    if (!editing) return
+  async function handleSave(): Promise<Scenario | null> {
+    if (!editing) return null
     let simConfig: Record<string, unknown> | undefined
     if (simConfigText.trim()) {
       try {
         const parsed = JSON.parse(simConfigText) as unknown
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
           setSimConfigError('Ожидается JSON-объект (ScenarioConfig)')
-          return
+          return null
         }
         simConfig = parsed as Record<string, unknown>
       } catch (e) {
         setSimConfigError(e instanceof Error ? e.message : 'Некорректный JSON')
-        return
+        return null
       }
     }
 
@@ -264,6 +265,11 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
       const res = editing.id
         ? await apiClient.put(`/api/scenarios/${editing.id}`, payload)
         : await apiClient.post('/api/scenarios', payload)
+      if (!res.ok) {
+        const message = await readApiErrorMessage(res)
+        window.alert(message || 'Не удалось сохранить сценарий')
+        return null
+      }
       const saved: Scenario = await res.json()
       setScenarios((prev) => {
         const list = Array.isArray(prev) ? prev : []
@@ -272,6 +278,10 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
           : [...list, saved]
       })
       setEditing(null)
+      return saved
+    } catch {
+      window.alert('Ошибка сети при сохранении сценария')
+      return null
     } finally {
       setSaving(false)
     }
@@ -470,7 +480,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                         window.alert('Шаблон вернул некорректные данные')
                         return
                       }
-                      cfg.max_rounds = editing.rounds
+                      cfg.ticks = editing.rounds
                       if (editing.seed !== null) cfg.seed = editing.seed
                       setSimConfigText(JSON.stringify(cfg, null, 2))
                       setSimConfigError(null)
@@ -500,6 +510,12 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
             <div className="text-muted" style={{ fontSize: '0.7rem', marginTop: '0.25rem' }}>
               Пусто = запуск по встроенным шаблонам S/G. Здесь можно увидеть и изменить «что зашито» (агенты, потребности, параметры).
             </div>
+            {simConfigText.trim() && (
+              <div className="text-muted" style={{ fontSize: '0.7rem', marginTop: '0.35rem' }}>
+                При заполненном JSON источником истины становится `ScenarioConfig`.
+                Поля формы синхронизируют основные метаданные, governance и состав агентов; точечные LC-настройки редактируются в JSON.
+              </div>
+            )}
             <textarea
               className="hud-input"
               rows={10}
@@ -787,20 +803,21 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
         </div>
 
         <div className="scenarios-editor-footer">
-          <button
-            className="btn-clipped primary"
-            onClick={handleSave}
-            disabled={saving || !editing.name}
-          >
-            {saving ? 'Сохранение...' : '✓ Сохранить'}
-          </button>
+            <button
+              className="btn-clipped primary"
+              onClick={() => { void handleSave() }}
+              disabled={saving || !editing.name}
+            >
+              {saving ? 'Сохранение...' : '✓ Сохранить'}
+            </button>
           {editing.id && user?.role === 'admin' && (
             <button
               className="btn-clipped success"
               onClick={async () => {
-                const snapshot: Scenario = { ...editing, runner: 'cognitive' }
-                await handleSave()
-                await handleRun(snapshot)
+                const saved = await handleSave()
+                if (saved) {
+                  await handleRun(saved)
+                }
               }}
               disabled={saving || !editing.name}
             >

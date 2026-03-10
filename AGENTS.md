@@ -200,8 +200,9 @@ cd web && bash start.sh                   # сервер + фронтенд
 - **Runtime-аудитор v1**: `RuntimeAuditor` реализован как отдельный rules-first модуль, а не как обычный `AgentRunner`; он пишет audit-сигналы и может замораживать репутацию, но не заменяет post-hoc `ViolationOracle`.
 - **Truth/evaluation/fidelity sidecars**: каждый прогон теперь может писать `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина) и `summary.json` (разделённая сводка), отдельно от `events.jsonl` и `trace.jsonl`.
 - **DAO по умолчанию**: self-nomination и self-vote цели отключены; нормальный путь для кандидата — `respond_nomination`, а `vote_closed` пишет детерминированную причину результата.
-- **Веб-интерфейс**: ряд эндпоинтов, зависевших от удалённого `magistry_sim`, возвращают HTTP 501 (заглушки).
-- **Legacy launcher в backend**: `web/backend/runner.py` функции `launch_simulation*` отключены и явно бросают `RuntimeError`, пока веб-запуск не мигрирован на `magistry_lc`.
+- **Веб-launcher на `magistry_lc`**: `POST /api/scenarios/{id}/run` и `POST /api/runs/launch` запускают `magistry_lc` как subprocess, пишут артефакты в `results/{run_name}/` и показываются в `/api/runs/active` как обычные API-запуски.
+- **Legacy web-сценарии**: сохранённые JSON-карточки старого формата (`name/scenario/governance/agents` без полного `ScenarioConfig`) по-прежнему читаются UI; перед запуском и подстановкой шаблона backend конвертирует их в валидный `ScenarioConfig`.
+- **Оставшиеся заглушки web API**: HTTP 501 пока сохраняется только для путей, ещё не мигрированных с `magistry_sim` (например, генерация интервью и secondary-agents через LLM).
 - **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.
 
 ## Техническое состояние кодовой базы
