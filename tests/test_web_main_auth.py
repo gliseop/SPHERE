@@ -100,6 +100,36 @@ def test_get_run_reads_directory_events(tmp_path: Path):
     assert isinstance(payload["events"], list) and len(payload["events"]) == 1
 
 
+def test_get_artifact_skips_invalid_jsonl_lines(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        (
+            '{"event_type":"noop","payload":{}}\n'
+            '{not-json}\n'
+            '{"event_type":"document_created","payload":{"doc_id":"doc_1","title":"Report","doc_type":"memo","case_id":"case_1","content":"ok"}}\n'
+        ),
+        encoding="utf-8",
+    )
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.routes.runs.ARTIFACTS_DIR", artifacts_dir):
+                with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                    r = client.get(
+                        "/api/artifacts/doc_1",
+                        headers={"Authorization": f"Bearer {viewer_token()}"},
+                    )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["doc_id"] == "doc_1"
+    assert payload["title"] == "Report"
+    assert payload["content"] == "ok"
+
+
 def test_list_scenarios_includes_yaml_scenario_config(tmp_path: Path):
     (tmp_path / "custom_lc.yaml").write_text(
         (

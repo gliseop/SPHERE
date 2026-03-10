@@ -228,7 +228,10 @@ async def get_artifact(doc_id: str, _user: User = Depends(require_viewer)) -> di
                     line = line.strip()
                     if not line:
                         continue
-                    event = json.loads(line)
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
                     if event.get("event_type") != "document_created":
                         continue
                     payload = event.get("payload", {})
@@ -240,7 +243,7 @@ async def get_artifact(doc_id: str, _user: User = Depends(require_viewer)) -> di
                             "case_id": payload.get("case_id", ""),
                             "content": payload.get("content", ""),
                         }
-        except (OSError, json.JSONDecodeError):
+        except OSError:
             continue
 
     raise HTTPException(status_code=404, detail="Artifact not found")
