@@ -20,6 +20,8 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[lc,dev]"
 ```
 
+Группа `dev` включает не только `pytest`, но и зависимости веб-слоя, необходимые для коллекции и запуска тестов (`fastapi`, `aiofiles`, `python-multipart`, `PyJWT`, `bcrypt`).
+
 ### Настройка
 
 ```bash

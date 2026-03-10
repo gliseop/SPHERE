@@ -134,3 +134,21 @@ def test_graph_state_unfreezes_target_agent_from_lc_event():
 
     nodes = {node["id"]: node for node in graph["nodes"]}
     assert nodes["agent:off_1"]["reputation_frozen"] is False
+
+
+def test_graph_state_marks_typed_governance_agent_without_reputation():
+    graph = build_graph_state(
+        [
+            {
+                "event_type": "entity_created",
+                "payload": {
+                    "entity_id": "agent:auditor",
+                    "kind": "agent",
+                    "meta": {"name": "Аудитор"},
+                },
+            }
+        ]
+    )
+
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    assert nodes["agent:auditor"]["has_reputation"] is False

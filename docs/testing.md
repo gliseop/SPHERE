@@ -68,7 +68,7 @@ pytest -x -q
 pip install -e ".[dev,lc]"
 ```
 
-Группа `dev` включает `pytest>=9.0`, `pytest-asyncio>=0.23` и `rank-bm25>=0.2.2`. Группа `lc` включает `langgraph`, `langchain-core` и `pyyaml`.
+Группа `dev` включает `pytest>=9.0`, `pytest-asyncio>=0.23`, `rank-bm25>=0.2.2` и зависимости веб-слоя, нужные для коллекции тестов (`fastapi`, `aiofiles`, `python-multipart`, `PyJWT`, `bcrypt`). Группа `lc` включает `langgraph`, `langchain-core` и `pyyaml`.
 
 ## Паттерны тестирования
 

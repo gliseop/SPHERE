@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as d3 from 'd3'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
-import { SUSPICIOUS_THRESHOLD } from '../constants'
+import { SUSPICIOUS_THRESHOLD, agentRoleColor } from '../constants'
 import { NodeTooltip } from './NodeTooltip'
 import { getString, getBool } from '../utils/payload'
 
@@ -29,16 +29,6 @@ interface D3Link extends d3.SimulationLinkDatum<D3Node> {
   target: string | D3Node
   strength: number
   isPrivate: boolean
-}
-
-function nodeColor(id: string): string {
-  if (id.startsWith('off_')) return '#ef4444'
-  if (id.startsWith('biz_')) return '#3b82f6'
-  if (id === 'auditor' || id.startsWith('aud_')) return '#f97316'
-  if (id.startsWith('juror_')) return '#a78bfa'
-  if (id.startsWith('fam_')) return '#f59e0b'
-  if (id.startsWith('soc_')) return '#10b981'
-  return '#6b7280'
 }
 
 function nodeRadius(reputation: number): number {
@@ -285,7 +275,7 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
       .append('circle')
       .attr('class', 'node')
       .attr('r', 0)
-      .attr('fill', (d) => nodeColor(d.id))
+      .attr('fill', (d) => agentRoleColor(d.id))
       .attr('stroke', 'none')
       .attr('stroke-width', 2.5)
       .style('cursor', 'pointer')
@@ -314,7 +304,7 @@ export function SimGraph({ nodes, edges, events, onNodeClick, selectedNode, name
 
     nodeGroup
       .selectAll<SVGCircleElement, D3Node>('circle.node')
-      .attr('fill', (d) => nodeColor(d.id))
+      .attr('fill', (d) => agentRoleColor(d.id))
       .attr('stroke', (d) => d.id === selectedRef.current ? '#f97316' : 'none')
       .transition().duration(200)
       .attr('r', (d) => nodeRadius(d.reputation))

@@ -123,7 +123,7 @@ pytest tests/test_magistry_lc_smoke.py    # конкретный модуль
 pytest -k "test_arbiter"                  # по паттерну
 
 # MAGISTRY-LC
-pip install -e ".[lc]"
+pip install -e ".[lc,dev]"
 magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
 magistry-lc compose --description "Короткое описание" --out scenarios/lc_composed.yaml
 magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json

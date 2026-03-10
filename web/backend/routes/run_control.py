@@ -103,6 +103,9 @@ async def delete_run(run_name: str, _user: User = Depends(require_admin)) -> Non
     legacy_candidates = [
         RESULTS_DIR / f"{run_name}_events.jsonl",
         RESULTS_DIR / f"{run_name}_trace.jsonl",
+        RESULTS_DIR / f"{run_name}_truth.jsonl",
+        RESULTS_DIR / f"{run_name}_evaluation.json",
+        RESULTS_DIR / f"{run_name}_fidelity.json",
         RESULTS_DIR / f"{run_name}_analysis.md",
         RESULTS_DIR / f"{run_name}_defects.md",
         RESULTS_DIR / f"{run_name}_detailed_observations.md",
@@ -121,6 +124,9 @@ async def delete_run(run_name: str, _user: User = Depends(require_admin)) -> Non
                 RESULTS_DIR / f"{run_name}_names.json",
                 RESULTS_DIR / f"{run_name}_summary.json",
                 RESULTS_DIR / f"{run_name}_scenario.json",
+                RESULTS_DIR / f"{run_name}_truth.jsonl",
+                RESULTS_DIR / f"{run_name}_evaluation.json",
+                RESULTS_DIR / f"{run_name}_fidelity.json",
                 RESULTS_DIR / f"{run_name}_stdout.log",
                 RESULTS_DIR / f"{run_name}_stderr.log",
             ]

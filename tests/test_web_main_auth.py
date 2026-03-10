@@ -262,3 +262,42 @@ def test_delete_directory_run(tmp_path: Path):
                     )
     assert r.status_code == 204
     assert not run_dir.exists()
+
+
+def test_delete_legacy_run_removes_posthoc_sidecars(tmp_path: Path):
+    run_name = "legacy_run"
+    (tmp_path / f"{run_name}_events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+    (tmp_path / f"{run_name}_summary.json").write_text('{"status":"done"}\n', encoding="utf-8")
+    (tmp_path / f"{run_name}_truth.jsonl").write_text('{"finding":"x"}\n', encoding="utf-8")
+    (tmp_path / f"{run_name}_evaluation.json").write_text('{"score":1}\n', encoding="utf-8")
+    (tmp_path / f"{run_name}_fidelity.json").write_text('{"score":1}\n', encoding="utf-8")
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.run_control.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                with patch("web.backend.runner._RESULTS_DIR", tmp_path):
+                    r = client.delete(
+                        f"/api/runs/{run_name}",
+                        headers={"Authorization": f"Bearer {admin_token()}"},
+                    )
+
+    assert r.status_code == 204
+    assert not (tmp_path / f"{run_name}_truth.jsonl").exists()
+    assert not (tmp_path / f"{run_name}_evaluation.json").exists()
+    assert not (tmp_path / f"{run_name}_fidelity.json").exists()
+
+
+def test_ws_playback_rejects_zero_speed(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.websocket.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                with client.websocket_connect(
+                    f"/ws/playback/lc_run?token={viewer_token()}&speed=0"
+                ) as websocket:
+                    payload = websocket.receive_json()
+
+    assert payload == {"type": "error", "message": "Invalid speed"}

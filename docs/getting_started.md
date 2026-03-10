@@ -28,7 +28,7 @@ pip install -e ".[lc,dev]"
 
 Группы зависимостей:
 - `lc` — движок MAGISTRY-LC: LangChain/LangGraph, PyYAML, OpenAI, Rich
-- `dev` — pytest, pytest-asyncio, rank-bm25 (для тестов и гибридного поиска)
+- `dev` — pytest, pytest-asyncio, rank-bm25 и веб-зависимости тестового контура (`fastapi`, `aiofiles`, `python-multipart`, `PyJWT`, `bcrypt`)
 
 ### Настройка переменных окружения
 

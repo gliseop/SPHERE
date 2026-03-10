@@ -1,5 +1,5 @@
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
-import { SUSPICIOUS_THRESHOLD } from '../constants'
+import { SUSPICIOUS_THRESHOLD, agentRoleBadgeClass, agentRoleLabel } from '../constants'
 import { getString, getBool } from '../utils/payload'
 
 interface Props {
@@ -7,20 +7,6 @@ interface Props {
   nodes: GraphNode[]
   edges: GraphEdge[]
   events: SimEvent[]
-}
-
-function roleLabel(id: string): string {
-  if (id.startsWith('off_')) return 'Чиновник'
-  if (id.startsWith('biz_')) return 'Подрядчик'
-  if (id.startsWith('aud_')) return 'Аудитор'
-  return 'Агент'
-}
-
-function roleBadgeClass(id: string): string {
-  if (id.startsWith('off_')) return 'badge danger'
-  if (id.startsWith('biz_')) return 'badge info'
-  if (id.startsWith('aud_')) return 'badge accent'
-  return 'badge'
 }
 
 export function AgentPanel({ nodeId, nodes, edges, events }: Props) {
@@ -60,7 +46,7 @@ export function AgentPanel({ nodeId, nodes, edges, events }: Props) {
           <span style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.05em' }}>
             {nodeId}
           </span>
-          <span className={roleBadgeClass(nodeId)}>{roleLabel(nodeId)}</span>
+          <span className={agentRoleBadgeClass(nodeId)}>{agentRoleLabel(nodeId)}</span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
           <div className="stat-card" style={{ padding: '0.4rem 0.5rem' }}>

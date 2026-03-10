@@ -1,5 +1,5 @@
 import type { GraphEdge, SimEvent } from '../types'
-import { SUSPICIOUS_THRESHOLD } from '../constants'
+import { SUSPICIOUS_THRESHOLD, agentRoleBadgeClass, agentRoleLabel } from '../constants'
 
 interface D3Node {
   id: string
@@ -20,26 +20,6 @@ interface Props {
   names: Record<string, string>
   x: number
   y: number
-}
-
-function roleLabel(id: string): string {
-  if (id.startsWith('off_')) return 'Чиновник'
-  if (id.startsWith('biz_')) return 'Подрядчик'
-  if (id === 'auditor' || id.startsWith('aud_')) return 'Аудитор'
-  if (id.startsWith('juror_')) return 'Присяжный'
-  if (id.startsWith('fam_')) return 'Семья'
-  if (id.startsWith('soc_')) return 'Общество'
-  return 'Агент'
-}
-
-function roleBadgeClass(id: string): string {
-  if (id.startsWith('off_')) return 'badge danger'
-  if (id.startsWith('biz_')) return 'badge info'
-  if (id === 'auditor' || id.startsWith('aud_')) return 'badge accent'
-  if (id.startsWith('juror_')) return 'badge violet'
-  if (id.startsWith('fam_')) return 'badge warning'
-  if (id.startsWith('soc_')) return 'badge success'
-  return 'badge'
 }
 
 function displayName(id: string, names: Record<string, string>): string {
@@ -80,7 +60,7 @@ export function NodeTooltip({ node, edges, events, names, x, y }: Props) {
         <span style={{ fontSize: '0.625rem', fontWeight: 700, letterSpacing: '0.05em' }}>
           {displayName(node.id, names)}
         </span>
-        <span className={roleBadgeClass(node.id)}>{roleLabel(node.id)}</span>
+        <span className={agentRoleBadgeClass(node.id)}>{agentRoleLabel(node.id)}</span>
       </div>
 
       <div className="hud-divider" />

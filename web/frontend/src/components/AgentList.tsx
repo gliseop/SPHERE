@@ -1,6 +1,11 @@
 import { useMemo, useState } from 'react'
 import type { GraphEdge, GraphNode, SimEvent } from '../types'
-import { SUSPICIOUS_THRESHOLD } from '../constants'
+import {
+  SUSPICIOUS_THRESHOLD,
+  agentRoleClass,
+  agentRoleLabel,
+  isGovernanceAgentId,
+} from '../constants'
 import { getNumber } from '../utils/payload'
 
 interface Props {
@@ -11,26 +16,6 @@ interface Props {
   names: Record<string, string>
   onSelect: (id: string) => void
   scenarioConfig?: Record<string, unknown> | null
-}
-
-function roleLabel(id: string): string {
-  if (id.startsWith('off_')) return 'Чиновник'
-  if (id.startsWith('biz_')) return 'Подрядчик'
-  if (id === 'auditor' || id.startsWith('aud_')) return 'Аудитор'
-  if (id.startsWith('juror_')) return 'Присяжный'
-  if (id.startsWith('fam_')) return 'Семья'
-  if (id.startsWith('soc_')) return 'Общество'
-  return 'Агент'
-}
-
-function roleClass(id: string): string {
-  if (id.startsWith('off_')) return 'danger'
-  if (id.startsWith('biz_')) return 'info'
-  if (id === 'auditor' || id.startsWith('aud_')) return 'accent'
-  if (id.startsWith('juror_')) return 'violet'
-  if (id.startsWith('fam_')) return 'warning'
-  if (id.startsWith('soc_')) return 'success'
-  return ''
 }
 
 function connectionCount(id: string, edges: GraphEdge[]): number {
@@ -45,10 +30,6 @@ function repTooltip(node: GraphNode): string {
     ? `\nСледующая: ${node.next_position_title} (≥ ${node.next_position_threshold})`
     : ''
   return `Репутация: ${node.reputation.toFixed(1)} (${frozen})${title}${next}`
-}
-
-function isGovernanceAgent(id: string): boolean {
-  return id === 'auditor' || id.startsWith('aud_') || id.startsWith('juror_')
 }
 
 interface AgentProfile {
@@ -208,7 +189,7 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect,
     return br - ar
   })
 
-  const selectedProfile = selectedNode && !isGovernanceAgent(selectedNode)
+  const selectedProfile = selectedNode && !isGovernanceAgentId(selectedNode)
     ? agentProfiles.get(selectedNode) ?? null
     : null
 
@@ -246,9 +227,9 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect,
               onClick={() => onSelect(node.id === selectedNode ? '' : node.id)}
             >
               <div className="agent-list-row">
-                <span className={`agent-dot ${roleClass(node.id)}`} />
+                <span className={`agent-dot ${agentRoleClass(node.id)}`} />
                 <span className="agent-list-name">{name}</span>
-                <span className={`badge ${roleClass(node.id)} small`}>{roleLabel(node.id)}</span>
+                <span className={`badge ${agentRoleClass(node.id)} small`}>{agentRoleLabel(node.id)}</span>
               </div>
               <div className="agent-list-row" style={{ gap: '0.5rem', marginTop: '3px' }}>
                 <div className="rep-bar" title={repTooltip(node)}>

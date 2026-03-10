@@ -46,7 +46,8 @@ def normalize_event_compat(event: dict[str, Any]) -> dict[str, Any]:
 
 def _is_governance_agent(agent_id: str) -> bool:
     """Return True for governance agents that should not display reputation."""
-    return agent_id in ("auditor",) or agent_id.startswith(("aud_", "juror_"))
+    normalized = agent_id.split(":", 1)[1] if agent_id.startswith("agent:") else agent_id
+    return normalized in ("auditor",) or normalized.startswith(("aud_", "juror_"))
 
 
 def build_graph_state(events: list[dict]) -> dict:

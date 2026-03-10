@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -265,6 +266,8 @@ async def _stream_events_from_file(
     Yields:
         Словари событий.
     """
+    if not math.isfinite(speed) or speed <= 0:
+        raise ValueError("speed must be a finite positive number")
     delay = max(0.05, 0.3 / speed)
     async with aiofiles.open(path, encoding="utf-8") as f:
         async for line in f:
@@ -297,6 +300,10 @@ async def ws_playback(
     await websocket.accept()
     if verify_ws_token(token) is None:
         await websocket.send_json({"type": "error", "message": "Unauthorized"})
+        await websocket.close(code=1008)
+        return
+    if not math.isfinite(speed) or speed <= 0:
+        await websocket.send_json({"type": "error", "message": "Invalid speed"})
         await websocket.close(code=1008)
         return
     try:
