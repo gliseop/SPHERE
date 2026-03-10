@@ -1227,7 +1227,7 @@ class WorldEngine:
                 internal=a.internal,
                 persona=a.persona,
                 capabilities=list(a.capabilities),
-                reputation=0.0,
+                reputation=float(a.initial_reputation),
                 title=a.initial_title,
                 wants_promotion=a.wants_promotion,
             )
@@ -1313,7 +1313,23 @@ class WorldEngine:
                 )
 
         order = list(agent_order) if agent_order else sorted(state.agents.keys())
-        pairs = await asyncio.gather(*[_one(aid) for aid in order])
+        if not self.cfg.runtime.parallel_agents or len(order) <= 1:
+            pairs = []
+            for aid in order:
+                pairs.append(await _one(aid))
+        else:
+            max_parallel = self.cfg.runtime.parallel_workers
+            if max_parallel is not None:
+                sem = asyncio.Semaphore(max_parallel)
+
+                async def _one_limited(aid: str) -> tuple[str, list[Action], Event | None]:
+                    async with sem:
+                        return await _one(aid)
+
+                tasks = [_one_limited(aid) for aid in order]
+            else:
+                tasks = [_one(aid) for aid in order]
+            pairs = await asyncio.gather(*tasks)
         gathered: dict[str, list[Action]] = {}
         errors: list[Event] = []
         for aid, acts, err in pairs:

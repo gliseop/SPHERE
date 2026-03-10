@@ -10,6 +10,7 @@ from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User
 from web.backend.settings import BUILTIN_GOVERNANCE_IDS, GOVERNANCE_MODES_DIR
 from web.backend.validators import next_g_number, validate_library_id
+from .scenarios import _extract_governance_config_payload
 
 router = APIRouter(tags=["governance"])
 _ALLOCATE_ID_ATTEMPTS = 256
@@ -71,6 +72,7 @@ async def create_governance_mode(data: dict, _user: User = Depends(require_admin
     for _ in range(_ALLOCATE_ID_ATTEMPTS):
         mode_id = next_g_number()
         payload = {**base_data, "id": mode_id, "custom": True}
+        _extract_governance_config_payload(payload, mode_id=mode_id)
         path = GOVERNANCE_MODES_DIR / f"{mode_id}.json"
         try:
             with path.open("x", encoding="utf-8") as handle:
@@ -104,9 +106,10 @@ async def update_governance_mode(
     path = GOVERNANCE_MODES_DIR / f"{mode_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Governance mode not found")
-    data["id"] = mode_id
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return data
+    payload = {**dict(data), "id": mode_id, "custom": True}
+    _extract_governance_config_payload(payload, mode_id=mode_id)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
 
 
 @router.delete("/api/governance-modes/{mode_id}", status_code=204)

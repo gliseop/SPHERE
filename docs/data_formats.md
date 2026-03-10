@@ -24,6 +24,9 @@ runtime:
   language: "ru"
   start_date: "2026-01-01"
   tick_duration_days: 1
+  parallel_agents: true
+  parallel_workers: 4
+  parallel_window_seconds: 300
   temporal_past_slack_days: 1
   temporal_future_horizon_days: 120
   max_actions_per_turn: 2
@@ -64,6 +67,7 @@ agents:
     internal: true
     persona: "Начальник отдела. Прагматик."
     capabilities: ["message", "work", "dao"]
+    initial_reputation: 4.5
     initial_title: "специалист"
     wants_promotion: true
 
@@ -99,12 +103,17 @@ world:
 | `agents` | Список агентов с ID, именем, персоной, полномочиями |
 | `world` | Каналы, организации, рабочие элементы |
 
+Поле `agents[].initial_reputation` задаёт стартовую репутацию внутреннего агента. Движок применяет её при инициализации `WorldState`, а первый `reputation_snapshot` в `events.jsonl` отражает именно это значение.
+
 ### Ключевые поля `runtime`
 
 | Поле | Тип | Назначение |
 |---|---|---|
 | `start_date` | `YYYY-MM-DD \| null` | Каноническая дата тика `0`; если не задана, агент и worldgen видят только номер тика |
 | `tick_duration_days` | `int` | Сколько календарных дней проходит за один тик симуляции |
+| `parallel_agents` | `bool` | Выполнять `propose_actions` параллельно в пределах тика; при `false` генерация решений идёт последовательно |
+| `parallel_workers` | `int \| null` | Опциональный лимит одновременных LLM-вызовов на этапе генерации действий |
+| `parallel_window_seconds` | `float \| null` | Совместимый параметр окна батчирования для web launcher; в текущем tick-engine один тик образует один batch |
 | `temporal_past_slack_days` | `int` | Сколько дней назад арбитр ещё допускает абсолютную дату в действии |
 | `temporal_future_horizon_days` | `int` | Максимальный горизонт будущих абсолютных дат в структурированных действиях |
 | `worldgen_every_ticks` | `int` | Положительный интервал запуска worldgen в тиках; `0` и отрицательные значения недопустимы |
@@ -361,8 +370,13 @@ JSON-файлы с результатами нарративных интерв�
   "version": 1,
   "title": "LC Minimal",
   "ticks": 3,
+  "runtime": {
+    "parallel_agents": true,
+    "parallel_workers": 4,
+    "parallel_window_seconds": 300.0
+  },
   "agents": [
-    {"agent_id": "agent:off_1", "name": "Козлов И.М.", "internal": true}
+    {"agent_id": "agent:off_1", "name": "Козлов И.М.", "internal": true, "initial_reputation": 4.5}
   ],
   "world": {"channels": [{"channel_id": "chan:public", "title": "Публичный канал"}]}
 }

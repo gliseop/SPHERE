@@ -18,6 +18,7 @@ class ScenarioAgentPayload(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     role: str = Field(min_length=1, max_length=256)
     initial_reputation: float = Field(ge=0.0, le=100.0)
+    capabilities: list[str] | None = Field(default=None, max_length=16)
 
 
 class ScenarioPayload(BaseModel):
@@ -32,6 +33,9 @@ class ScenarioPayload(BaseModel):
     rounds: int = Field(default=10, ge=1, le=MAX_ROUNDS)
     seed: int | None = Field(default=None, ge=0, le=MAX_SEED)
     runner: str | None = Field(default=None, max_length=64)
+    parallel_agents: bool | None = None
+    parallel_workers: int | None = Field(default=None, ge=1, le=128)
+    parallel_window: float | None = Field(default=None, ge=0.0, le=86_400.0)
     agents: list[ScenarioAgentPayload] = Field(default_factory=list, max_length=200)
     sim_config: dict[str, Any] | None = None
 

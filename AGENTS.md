@@ -201,7 +201,9 @@ cd web && bash start.sh                   # сервер + фронтенд
 - **Truth/evaluation/fidelity sidecars**: каждый прогон теперь может писать `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина) и `summary.json` (разделённая сводка), отдельно от `events.jsonl` и `trace.jsonl`.
 - **DAO по умолчанию**: self-nomination и self-vote цели отключены; нормальный путь для кандидата — `respond_nomination`, а `vote_closed` пишет детерминированную причину результата.
 - **Веб-launcher на `magistry_lc`**: `POST /api/scenarios/{id}/run` и `POST /api/runs/launch` запускают `magistry_lc` как subprocess, пишут артефакты в `results/{run_name}/` и показываются в `/api/runs/active` как обычные API-запуски.
+- **Built-in seed-сценарии**: `seed_s*_g*.json` используются только как backing-файлы для `/api/templates/scenarios/*`; backend не показывает их в CRUD-списке `/api/scenarios` и не позволяет менять/удалять через сценарные маршруты.
 - **Legacy web-сценарии**: сохранённые JSON-карточки старого формата (`name/scenario/governance/agents` без полного `ScenarioConfig`) по-прежнему читаются UI; перед запуском и подстановкой шаблона backend конвертирует их в валидный `ScenarioConfig`.
+- **Custom governance modes**: пользовательские `G*`-режимы должны содержать валидный `GovernanceConfig` (в поле `config` или в корне JSON); backend применяет их при подстановке шаблона и round-trip сценария, а не игнорирует как неизвестный `G4+`.
 - **Оставшиеся заглушки web API**: HTTP 501 пока сохраняется только для путей, ещё не мигрированных с `magistry_sim` (например, генерация интервью и secondary-agents через LLM).
 - **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.
 

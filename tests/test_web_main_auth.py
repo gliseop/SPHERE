@@ -142,6 +142,8 @@ def test_get_scenario_reads_yaml_scenario_config(tmp_path: Path):
             "  - agent_id: agent:off_1\n"
             "    name: Off 1\n"
             "    internal: true\n"
+            "    capabilities: [message, spawn]\n"
+            "    initial_reputation: 7.0\n"
             "world: {}\n"
         ),
         encoding="utf-8",
@@ -160,6 +162,8 @@ def test_get_scenario_reads_yaml_scenario_config(tmp_path: Path):
     assert payload["id"] == "custom_lc"
     assert payload["name"] == "YAML scenario"
     assert payload["sim_config"]["ticks"] == 5
+    assert payload["agents"][0]["capabilities"] == ["message", "spawn"]
+    assert payload["agents"][0]["initial_reputation"] == 7.0
 
 
 def test_update_yaml_scenario_preserves_extension_and_saves_sim_config(tmp_path: Path):
@@ -309,7 +313,7 @@ def test_get_run_scenario_normalizes_lc_config_for_frontend(tmp_path: Path):
             '"description":"demo",'
             '"ticks":4,'
             '"seed":11,'
-            '"agents":[{"agent_id":"agent:off_1","name":"Off 1","internal":true,"persona":{},"capabilities":["message","work","dao"],"initial_title":"специалист"}],'
+            '"agents":[{"agent_id":"agent:off_1","name":"Off 1","internal":true,"persona":{},"capabilities":["message","spawn"],"initial_reputation":7.0,"initial_title":"специалист"}],'
             '"world":{"channels":[{"channel_id":"chan:public","title":"Public"}],"orgs":[],"work_items":[]}'
             '}'
         ),
@@ -331,6 +335,8 @@ def test_get_run_scenario_normalizes_lc_config_for_frontend(tmp_path: Path):
     assert payload["governance"] == "G0"
     assert payload["agents"][0]["id"] == "off_1"
     assert payload["agents"][0]["role"] == "official"
+    assert payload["agents"][0]["capabilities"] == ["message", "spawn"]
+    assert payload["agents"][0]["initial_reputation"] == 7.0
 
 
 def test_get_interview_rejects_backslash_path_traversal():
@@ -537,6 +543,36 @@ def test_template_scenarios_available_from_seed_files(tmp_path: Path):
     assert payload["S1"]["title"] == "Прямой сговор"
 
 
+def test_saved_scenarios_list_excludes_builtin_seed_files(tmp_path: Path):
+    (tmp_path / "seed_s1_g1.json").write_text(
+        json.dumps({"name": "Builtin", "scenario": "S1", "governance": "G1", "rounds": 6, "agents": []}),
+        encoding="utf-8",
+    )
+    (tmp_path / "custom_lc.yaml").write_text(
+        (
+            "version: 1\n"
+            "title: Custom YAML\n"
+            "ticks: 2\n"
+            "agents: []\n"
+            "world: {}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                r = client.get(
+                    "/api/scenarios",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+
+    assert r.status_code == 200
+    payload = {item["id"] for item in r.json()}
+    assert "custom_lc" in payload
+    assert "seed_s1_g1" not in payload
+
+
 def test_template_scenario_returns_normalized_config(tmp_path: Path):
     (tmp_path / "seed_s1_g1.json").write_text(
         json.dumps(
@@ -569,6 +605,61 @@ def test_template_scenario_returns_normalized_config(tmp_path: Path):
     assert payload["governance"]["audit"]["reputation_freeze_enabled"] is True
 
 
+def test_template_scenario_applies_custom_governance_mode(tmp_path: Path):
+    (tmp_path / "seed_s1_g1.json").write_text(
+        json.dumps(
+            {
+                "name": "Прямой сговор",
+                "scenario": "S1",
+                "governance": "G1",
+                "rounds": 4,
+                "agents": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    governance_dir = tmp_path / "governance"
+    governance_dir.mkdir()
+    (governance_dir / "G4.json").write_text(
+        json.dumps(
+            {
+                "id": "G4",
+                "label": "G4 — Custom",
+                "description": "Custom governance mode",
+                "config": {
+                    "require_consent": False,
+                    "allow_self_nomination": True,
+                    "allow_target_self_vote": True,
+                    "audit": {
+                        "enabled": True,
+                        "mode": "rules",
+                        "reputation_freeze_enabled": True,
+                        "reputation_penalty_delta": -0.5,
+                    },
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.routes.scenarios.GOVERNANCE_MODES_DIR", governance_dir):
+                r = client.get(
+                    "/api/templates/scenarios/S1?governance=G4",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["governance"]["require_consent"] is False
+    assert payload["governance"]["allow_self_nomination"] is True
+    assert payload["governance"]["allow_target_self_vote"] is True
+    assert payload["governance"]["audit"]["reputation_penalty_delta"] == -0.5
+
+
 def test_launch_run_admin_starts_template_process():
     with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
         with patch(
@@ -583,6 +674,32 @@ def test_launch_run_admin_starts_template_process():
 
     assert r.status_code == 202
     assert r.json()["run_name"] == "S1_G1_seed42_web"
+
+
+def test_launch_run_admin_passes_parallel_settings():
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch(
+            "web.backend.runner.launch_simulation",
+            return_value={"run_name": "S1_G1_seed42_web", "pid": 1234},
+        ) as mocked:
+            r = client.post(
+                "/api/runs/launch",
+                json={
+                    "scenario": "S1",
+                    "governance": "G1",
+                    "seed": 42,
+                    "rounds": 8,
+                    "parallel_agents": True,
+                    "parallel_workers": 6,
+                    "parallel_window": 120.0,
+                },
+                headers={"Authorization": f"Bearer {admin_token()}"},
+            )
+
+    assert r.status_code == 202
+    assert mocked.call_args.kwargs["parallel_agents"] is True
+    assert mocked.call_args.kwargs["parallel_workers"] == 6
+    assert mocked.call_args.kwargs["parallel_window"] == 120.0
 
 
 def test_run_scenario_admin_launches_saved_yaml(tmp_path: Path):
@@ -614,6 +731,60 @@ def test_run_scenario_admin_launches_saved_yaml(tmp_path: Path):
 
     assert r.status_code == 202
     assert r.json()["run_name"] == "custom_lc_G0_seed42_web"
+
+
+def test_run_scenario_passes_parallel_settings_from_runtime_config(tmp_path: Path):
+    (tmp_path / "custom_lc.yaml").write_text(
+        (
+            "version: 1\n"
+            "title: YAML scenario\n"
+            "ticks: 5\n"
+            "runtime:\n"
+            "  parallel_agents: false\n"
+            "  parallel_workers: 3\n"
+            "  parallel_window_seconds: 90\n"
+            "agents:\n"
+            "  - agent_id: agent:off_1\n"
+            "    name: Off 1\n"
+            "    internal: true\n"
+            "world: {}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                with patch(
+                    "web.backend.runner.launch_simulation_from_config",
+                    return_value={"run_name": "custom_lc_G0_seed42_web", "pid": 555},
+                ) as mocked:
+                    r = client.post(
+                        "/api/scenarios/custom_lc/run",
+                        headers={"Authorization": f"Bearer {admin_token()}"},
+                    )
+
+    assert r.status_code == 202
+    assert mocked.call_args.kwargs["parallel_agents"] is False
+    assert mocked.call_args.kwargs["parallel_workers"] == 3
+    assert mocked.call_args.kwargs["parallel_window"] == 90.0
+
+
+def test_delete_builtin_template_scenario_is_forbidden(tmp_path: Path):
+    (tmp_path / "seed_s1_g1.json").write_text(
+        json.dumps({"name": "Builtin", "scenario": "S1", "governance": "G1", "rounds": 6, "agents": []}),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                r = client.delete(
+                    "/api/scenarios/seed_s1_g1",
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+
+    assert r.status_code == 403
 
 
 def test_delete_directory_run(tmp_path: Path):

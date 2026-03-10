@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from magistry_lc.config import AgentConfig, ChannelConfig, ScenarioConfig
+from magistry_lc.config import AgentConfig, ChannelConfig, GovernanceConfig, ScenarioConfig
 from magistry_lc.ids import EntityKind, make_id, normalize_slug
 from magistry_lc.persona import PersonaArtifact
 from magistry_lc.scenario import save_scenario
@@ -16,7 +16,12 @@ from magistry_lc.scenario import save_scenario
 from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User
 from web.backend.models import ScenarioPayload
-from web.backend.settings import PERSONALITIES_DIR, SCENARIOS_DIR
+from web.backend.settings import (
+    BUILTIN_GOVERNANCE_IDS,
+    GOVERNANCE_MODES_DIR,
+    PERSONALITIES_DIR,
+    SCENARIOS_DIR,
+)
 from web.backend.validators import S_NUM_RE, next_s_number, validate_scenario_id
 
 router = APIRouter(tags=["scenarios"])
@@ -30,6 +35,9 @@ _LEGACY_TEMPLATE_FILE_MAP = {
     "S1": "seed_s1_g1.json",
     "S2": "seed_s2_g2.json",
 }
+_BUILTIN_SCENARIO_FILES = frozenset(_LEGACY_TEMPLATE_FILE_MAP.values())
+_GOVERNANCE_METADATA_KEYS = frozenset({"id", "label", "description", "custom"})
+_UNSET = object()
 _KNOWN_ROLE_ALIASES = {
     "auditor",
     "audit",
@@ -111,6 +119,56 @@ def _role_defaults(role: str) -> tuple[bool, list[str], bool, str]:
     return True, ["message", "work"], True, (role or "специалист").strip() or "специалист"
 
 
+def _normalize_capabilities(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        value = item.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _load_governance_mode_record(mode_id: str) -> dict[str, Any] | None:
+    path = GOVERNANCE_MODES_DIR / f"{mode_id}.json"
+    raw = _read_mapping(path)
+    if raw is None:
+        return None
+    payload = dict(raw)
+    payload["id"] = str(payload.get("id") or mode_id).strip() or mode_id
+    return payload
+
+
+def _extract_governance_config_payload(raw: dict[str, Any], *, mode_id: str) -> GovernanceConfig:
+    candidate = raw.get("config")
+    if isinstance(candidate, dict):
+        config_data = candidate
+    else:
+        config_data = {
+            key: value
+            for key, value in raw.items()
+            if key not in _GOVERNANCE_METADATA_KEYS
+        }
+    if not config_data:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Governance mode {mode_id} has no config payload",
+        )
+    try:
+        return GovernanceConfig.model_validate(config_data)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid governance mode {mode_id}: {exc}",
+        ) from exc
+
+
 def _infer_ui_role(agent: AgentConfig) -> str:
     caps = set(agent.capabilities)
     if "audit" in caps:
@@ -130,11 +188,7 @@ def _ensure_default_public_channel(cfg: ScenarioConfig) -> None:
     cfg.world.channels.insert(0, ChannelConfig.model_validate(_DEFAULT_PUBLIC_CHANNEL))
 
 
-def _apply_governance_mode(cfg: ScenarioConfig, governance_mode: str | None) -> None:
-    normalized = (governance_mode or "").strip().upper()
-    if normalized not in {"G0", "G1", "G2", "G3"}:
-        return
-
+def _apply_builtin_governance_mode(cfg: ScenarioConfig, normalized: str) -> None:
     audit = cfg.governance.audit
     audit.mode = "rules"
     if normalized == "G0":
@@ -160,6 +214,20 @@ def _apply_governance_mode(cfg: ScenarioConfig, governance_mode: str | None) -> 
     cfg.governance.audit = audit
 
 
+def _apply_governance_mode(cfg: ScenarioConfig, governance_mode: str | None) -> None:
+    normalized = (governance_mode or "").strip().upper()
+    if not normalized:
+        return
+    if normalized in BUILTIN_GOVERNANCE_IDS:
+        _apply_builtin_governance_mode(cfg, normalized)
+        return
+
+    raw = _load_governance_mode_record(normalized)
+    if raw is None:
+        raise HTTPException(status_code=400, detail=f"Governance mode not found: {normalized}")
+    cfg.governance = _extract_governance_config_payload(raw, mode_id=normalized)
+
+
 def _build_agent_config(
     agent_data: dict[str, Any],
     *,
@@ -173,22 +241,37 @@ def _build_agent_config(
     position = str(agent_data.get("position") or "").strip()
     personality_id = str(agent_data.get("personality_archetype") or "").strip()
     role_is_known = normalized_role in _KNOWN_ROLE_ALIASES
+    raw_caps = agent_data.get("capabilities", _UNSET)
+    explicit_capabilities = (
+        _normalize_capabilities(raw_caps) if raw_caps is not _UNSET else None
+    )
+    raw_initial_reputation = agent_data.get("initial_reputation", _UNSET)
 
     inferred_internal, inferred_caps, inferred_wants, inferred_title = _role_defaults(role)
     if existing is not None:
         agent_id = existing.agent_id
         internal = inferred_internal if role_is_known else existing.internal
-        capabilities = inferred_caps if role_is_known else (list(existing.capabilities) or inferred_caps)
+        if explicit_capabilities is not None:
+            capabilities = explicit_capabilities
+        else:
+            capabilities = (
+                inferred_caps if role_is_known else (list(existing.capabilities) or inferred_caps)
+            )
         wants_promotion = inferred_wants if role_is_known else existing.wants_promotion
         initial_title = position or (inferred_title if role_is_known else existing.initial_title) or inferred_title
+        if raw_initial_reputation is _UNSET:
+            initial_reputation = float(existing.initial_reputation)
+        else:
+            initial_reputation = float(raw_initial_reputation)
         persona = existing.persona.model_copy(deep=True)
     else:
         slug = normalize_slug(raw_id or name, fallback=f"agent_{index}")
         agent_id = make_id(EntityKind.AGENT, slug)
         internal = inferred_internal
-        capabilities = inferred_caps
+        capabilities = explicit_capabilities if explicit_capabilities is not None else inferred_caps
         wants_promotion = inferred_wants
         initial_title = position or inferred_title
+        initial_reputation = 0.0 if raw_initial_reputation is _UNSET else float(raw_initial_reputation)
         persona = PersonaArtifact(summary=(position or role or name).strip())
 
     if personality_id:
@@ -207,6 +290,7 @@ def _build_agent_config(
             "internal": internal,
             "persona": persona.model_dump(mode="json"),
             "capabilities": capabilities,
+            "initial_reputation": initial_reputation,
             "initial_title": initial_title,
             "wants_promotion": wants_promotion,
         }
@@ -225,6 +309,16 @@ def _sync_config_from_payload(
     cfg.ticks = int(payload.rounds)
     if payload.seed is not None:
         cfg.seed = int(payload.seed)
+    if "parallel_agents" in payload.model_fields_set:
+        cfg.runtime.parallel_agents = bool(payload.parallel_agents)
+    if "parallel_workers" in payload.model_fields_set:
+        cfg.runtime.parallel_workers = (
+            int(payload.parallel_workers) if payload.parallel_workers is not None else None
+        )
+    if "parallel_window" in payload.model_fields_set:
+        cfg.runtime.parallel_window_seconds = (
+            float(payload.parallel_window) if payload.parallel_window is not None else None
+        )
 
     _apply_governance_mode(cfg, payload.governance)
 
@@ -234,7 +328,7 @@ def _sync_config_from_payload(
     }
     cfg.agents = [
         _build_agent_config(
-            agent_data=agent_data.model_dump(mode="json"),
+            agent_data=agent_data.model_dump(mode="json", exclude_none=True),
             index=index,
             existing=existing_by_ui_id.get(agent_data.id),
         )
@@ -340,10 +434,16 @@ def _resolve_scenario_path(scenario_id: str) -> Path | None:
     return max(existing, key=lambda path: path.stat().st_mtime)
 
 
+def _is_builtin_scenario_path(path: Path) -> bool:
+    return path.name in _BUILTIN_SCENARIO_FILES
+
+
 def _list_scenario_paths() -> list[Path]:
     chosen: dict[str, Path] = {}
     for suffix in _SCENARIO_SUFFIXES:
         for path in SCENARIOS_DIR.glob(f"*{suffix}"):
+            if _is_builtin_scenario_path(path):
+                continue
             current = chosen.get(path.stem)
             if current is None:
                 chosen[path.stem] = path
@@ -357,6 +457,21 @@ def _list_scenario_paths() -> list[Path]:
 
 
 def _infer_governance_mode(cfg: ScenarioConfig) -> str:
+    current = cfg.governance.model_dump(mode="json")
+    for path in sorted(GOVERNANCE_MODES_DIR.glob("G*.json")):
+        raw = _read_mapping(path)
+        if raw is None:
+            continue
+        mode_id = str(raw.get("id") or path.stem).strip().upper() or path.stem.upper()
+        if mode_id in BUILTIN_GOVERNANCE_IDS:
+            continue
+        try:
+            candidate = _extract_governance_config_payload(raw, mode_id=mode_id)
+        except HTTPException:
+            continue
+        if candidate.model_dump(mode="json") == current:
+            return mode_id
+
     audit = cfg.governance.audit
     if not audit.enabled:
         return "G0"
@@ -388,9 +503,10 @@ def _scenario_config_to_payload(cfg: ScenarioConfig, *, scenario_id: str) -> dic
                 "name": agent.name,
                 "role": _infer_ui_role(agent),
                 "position": agent.initial_title,
-                "initial_reputation": 0.0,
+                "initial_reputation": float(agent.initial_reputation),
                 "personality_archetype": agent.persona.persona_id,
                 "personality": personality,
+                "capabilities": list(agent.capabilities),
             }
         )
 
@@ -404,6 +520,9 @@ def _scenario_config_to_payload(cfg: ScenarioConfig, *, scenario_id: str) -> dic
         "rounds": int(cfg.ticks),
         "seed": int(cfg.seed),
         "runner": "cognitive",
+        "parallel_agents": bool(cfg.runtime.parallel_agents),
+        "parallel_workers": cfg.runtime.parallel_workers,
+        "parallel_window": cfg.runtime.parallel_window_seconds,
         "agents": agents,
         "sim_config": cfg.model_dump(mode="json"),
     }
@@ -536,6 +655,8 @@ async def update_scenario(
     path = _resolve_scenario_path(scenario_id)
     if path is None:
         raise HTTPException(status_code=404, detail="Scenario not found")
+    if _is_builtin_scenario_path(path):
+        raise HTTPException(status_code=403, detail="Cannot modify built-in template scenario")
     return _save_payload(path, payload, scenario_id=scenario_id)
 
 
@@ -551,4 +672,6 @@ async def delete_scenario(scenario_id: str, _user: User = Depends(require_admin)
     path = _resolve_scenario_path(scenario_id)
     if path is None:
         raise HTTPException(status_code=404, detail="Scenario not found")
+    if _is_builtin_scenario_path(path):
+        raise HTTPException(status_code=403, detail="Cannot delete built-in template scenario")
     path.unlink()

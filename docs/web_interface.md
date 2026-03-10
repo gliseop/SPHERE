@@ -65,11 +65,13 @@ web/backend/
 | Метод | Путь | Описание |
 |---|---|---|
 | POST | `/api/scenarios/{scenario_id}/run` | Запустить сохранённый сценарий |
-| POST | `/api/runs/launch` | Запустить шаблонный сценарий |
+| POST | `/api/runs/launch` | Запустить сценарий по `scenario id` с runtime-overrides |
 | GET | `/api/runs/active` | Список активных симуляций (`external`, `stop_supported`) |
 | POST | `/api/runs/{run_name}/stop` | Остановить симуляцию |
 
 Web launcher запускает `magistry_lc` как отдельный subprocess и пишет артефакты в `results/{run_name}/`. Для сохранённых legacy-сценариев (`name/scenario/governance/agents` без полного `ScenarioConfig`) backend перед запуском выполняет best-effort конвертацию в валидный `ScenarioConfig`.
+
+`POST /api/runs/launch` принимает также runtime-overrides `parallel_agents`, `parallel_workers` и `parallel_window`. Backend переносит их в `ScenarioConfig.runtime` конкретного запуска, поэтому они отражаются в `_input_scenario.json` и не теряются между UI и subprocess launcher'ом.
 
 #### Сценарии
 
@@ -82,6 +84,10 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 | DELETE | `/api/scenarios/{id}` | Удалить сценарий |
 
 Маршруты сценариев читают файлы `*.json`, `*.yaml` и `*.yml`. Если файл содержит полноценный `ScenarioConfig`, backend возвращает web-совместимую карточку сценария и кладёт исходный конфиг в поле `sim_config`, чтобы фронтенд мог редактировать его без потери данных. Если файл ещё хранится в legacy web-формате, backend оставляет карточку совместимой с UI, а при запуске/подстановке шаблона конвертирует её в `ScenarioConfig`.
+
+`/api/scenarios` теперь показывает только пользовательские сценарии. Встроенные seed-файлы (`seed_s*_g*.json`) считаются template-backend'ом для `/api/templates/scenarios/*`, не выдаются в CRUD-списке и не могут быть изменены или удалены через `/api/scenarios/{id}`.
+
+При round-trip между `ScenarioConfig` и web-карточкой backend сохраняет `agents[].capabilities`, `agents[].initial_reputation` и runtime-поля параллелизации, чтобы обычное редактирование сценария не стирало нестандартные capability-наборы и стартовые условия эксперимента.
 
 #### Типы агентов
 
@@ -113,6 +119,8 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 | PUT | `/api/governance-modes/{id}` | Обновить режим |
 | DELETE | `/api/governance-modes/{id}` | Удалить режим |
 
+Для пользовательских `G*` режимов backend требует валидный governance-config: либо в поле `config`, либо прямо в корне JSON без служебных полей (`id`, `label`, `description`, `custom`). Режим без такого конфига больше не создаётся, чтобы UI/API не выдавали фиктивный `G4+`, который runtime потом не сможет применить.
+
 #### AI-генерация
 
 | Метод | Путь | Описание |
@@ -131,7 +139,7 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 | GET | `/api/artifacts/{doc_id}` | Артефакты (сгенерированные документы) |
 | GET | `/api/debug/llm-log` | Журнал LLM-вызовов |
 
-Шаблоны сценариев собираются из поддерживаемых `seed_s*_g*.json` сценариев репозитория. Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G0..G3` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора.
+Шаблоны сценариев собираются из поддерживаемых `seed_s*_g*.json` сценариев репозитория. Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G*` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора. Для built-in режимов (`G0..G3`) backend применяет жёстко заданные пресеты; для пользовательских `G*` он загружает конфиг из `data/governance_modes/{id}.json`.
 
 ### WebSocket-протокол
 

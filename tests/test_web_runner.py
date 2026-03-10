@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -209,6 +210,30 @@ class TestLaunchSimulation:
         assert run_name in runner._active
         proc = runner._active[run_name]
         assert proc.cmd[:3] == [runner.sys.executable, "-m", "magistry_lc.cli"]
+
+    def test_launch_simulation_from_config_applies_parallel_runtime_overrides(self, results_dir: Path):
+        """Параллельные параметры попадают и в input-config, и в env subprocess."""
+        with patch("web.backend.runner.subprocess.Popen", side_effect=_FakePopen):
+            result = runner.launch_simulation_from_config(
+                scenario_config={"id": "S1", "agents": []},
+                governance="G1",
+                seed=7,
+                rounds=5,
+                parallel_agents=False,
+                parallel_workers=3,
+                parallel_window=90.0,
+            )
+
+        run_name = result["run_name"]
+        run_dir = results_dir / run_name
+        payload = json.loads((run_dir / "_input_scenario.json").read_text(encoding="utf-8"))
+        proc = runner._active[run_name]
+        assert payload["runtime"]["parallel_agents"] is False
+        assert payload["runtime"]["parallel_workers"] == 3
+        assert payload["runtime"]["parallel_window_seconds"] == 90.0
+        assert proc.env["MAGISTRY_PARALLEL_AGENTS"] == "0"
+        assert proc.env["MAGISTRY_PARALLEL_WORKERS"] == "3"
+        assert proc.env["MAGISTRY_PARALLEL_WINDOW"] == "90.0"
 
     def test_launch_simulation_uses_template_loader(self, results_dir: Path):
         """launch_simulation загружает template-конфиг и делегирует в config-launcher."""

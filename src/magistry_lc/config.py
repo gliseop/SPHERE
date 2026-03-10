@@ -164,6 +164,9 @@ class RuntimeConfig(BaseModel):
     max_agents: int = 15
     allow_runtime_spawn: bool = False
     worldgen_allow_internal_spawns: bool = False
+    parallel_agents: bool = True
+    parallel_workers: int | None = None
+    parallel_window_seconds: float | None = None
     temporal_past_slack_days: int = 1
     temporal_future_horizon_days: int = 120
 
@@ -203,6 +206,24 @@ class RuntimeConfig(BaseModel):
         if v <= 0:
             raise ValueError("max_agents must be > 0")
         return v
+
+    @field_validator("parallel_workers")
+    @classmethod
+    def _validate_parallel_workers(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        if v <= 0:
+            raise ValueError("parallel_workers must be > 0")
+        return v
+
+    @field_validator("parallel_window_seconds")
+    @classmethod
+    def _validate_parallel_window_seconds(cls, v: float | None) -> float | None:
+        if v is None:
+            return None
+        if v < 0.0:
+            raise ValueError("parallel_window_seconds must be >= 0")
+        return float(v)
 
     @field_validator("temporal_past_slack_days", "temporal_future_horizon_days")
     @classmethod
@@ -307,6 +328,7 @@ class AgentConfig(BaseModel):
     internal: bool = True
     persona: PersonaArtifact = Field(default_factory=PersonaArtifact)
     capabilities: list[str] = Field(default_factory=list)
+    initial_reputation: float = 0.0
     initial_title: str = "специалист"
     wants_promotion: bool = True
 
@@ -325,6 +347,13 @@ class AgentConfig(BaseModel):
     def _validate_agent_id(cls, v: str) -> str:
         ensure_kind(v, EntityKind.AGENT)
         return v
+
+    @field_validator("initial_reputation")
+    @classmethod
+    def _validate_initial_reputation(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("initial_reputation must be >= 0")
+        return float(v)
 
 
 class ChannelConfig(BaseModel):

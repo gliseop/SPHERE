@@ -13,6 +13,7 @@ interface Agent {
   name: string
   role: string
   initial_reputation: number
+  capabilities?: string[]
   position?: string
   personality_archetype?: string | null
 }
@@ -53,6 +54,28 @@ interface GovernanceModeItem {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function defaultCapabilitiesForRole(role: string): string[] | null {
+  const normalized = role.trim().toLowerCase()
+  if (!normalized) return null
+  if (['auditor', 'audit', 'aud', 'аудитор'].includes(normalized)) {
+    return ['audit', 'message', 'work', 'dao']
+  }
+  if (
+    ['business', 'contractor', 'vendor', 'external', 'biz', 'подрядчик', 'контрагент', 'внешний'].includes(normalized)
+  ) {
+    return ['message']
+  }
+  if (['juror', 'jury', 'jur', 'присяжный'].includes(normalized)) {
+    return ['dao']
+  }
+  if (
+    ['official', 'official_procurement', 'off', 'employee', 'staff', 'officials', 'чиновник', 'сотрудник'].includes(normalized)
+  ) {
+    return ['message', 'work', 'dao']
+  }
+  return null
 }
 
 async function readApiErrorMessage(res: Response): Promise<string> {
@@ -343,6 +366,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
         name: `Агент ${idx}`,
         role: defaultType.id,
         initial_reputation: 7.0,
+        capabilities: defaultCapabilitiesForRole(defaultType.id) ?? undefined,
       }],
     })
   }
@@ -359,6 +383,10 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
     if (field === 'role') {
       const prefix = _prefixForRole(String(value))
       agents[i].id = `${prefix}_${agents[i].name.toLowerCase().replace(/\s+/g, '_').slice(0, 12)}`
+      const capabilities = defaultCapabilitiesForRole(String(value))
+      if (capabilities) {
+        agents[i].capabilities = capabilities
+      }
     }
     setEditing({ ...editing, agents })
   }

@@ -56,6 +56,8 @@ flowchart TD
 
 Агент возвращает JSON-массив `Action[]` (до `max_actions_per_turn` действий за ход). Ответ парсится через Pydantic-модель с дискриминатором по полю `type`.
 
+Этап `propose_actions` может идти как последовательно, так и параллельно. Это задаётся через `runtime.parallel_agents`; при включённом режиме `runtime.parallel_workers` ограничивает число одновременных LLM-вызовов. Применение результатов к `WorldState` всё равно остаётся последовательным и детерминированным.
+
 Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью + expert reflection). Результат сохраняется в `{out_dir}/personas.json` и повторно используется при совпадении fingerprint входов (seed, язык, модель, режим, описание сценария и базовые данные агентов).
 
 Если `runtime.spawn_secondary=true`, после enrichment запускается `SocialGraphExtractor`: он извлекает из биографий и интервью значимых людей, создаёт вторичных агентов до первого тика, обогащает их персоны в том же режиме, что и основной сценарий (`core` или `full`), и связывает первичные/вторичные пары через память. Role-only ссылки и alias-дубли существующих должностей не материализуются в новых агентов.
@@ -157,6 +159,8 @@ Runtime-аудитор не подменяет собой `ViolationOracle` и �
 
 `CreateAgentOp` создаёт `AgentState` и `entity_created`, а полноценный `AgentRunner` и bootstrap памяти для нового агента регистрируются отдельным шагом после применения ops. Новый участник начинает ходить со следующего тика.
 
+Для базовых агентов, заданных прямо в `ScenarioConfig.agents`, движок берёт `initial_reputation` из конфига и отражает его в первом `reputation_snapshot`. Это делает стартовые условия наблюдаемыми и для UI, и для post-hoc анализа.
+
 `SetReputationFreezeOp` меняет состояние `AgentState.reputation_frozen` / `reputation_frozen_until_tick` и эмитит `reputation_frozen` или `reputation_unfrozen`. При активной заморозке positive reputation changes блокируются, а DAO не продвигает замороженного агента на новую должность.
 
 ## Память агента (AgentMemory)
@@ -251,12 +255,15 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 | `memory` | `MemoryConfig` | Буфер, индекс, веса, эмбеддинги |
 | `runtime` | `RuntimeConfig` | Язык, лимит действий, история тиков, LangGraph |
 | `governance` | `GovernanceConfig` | Политика должностей, голосование и настройки runtime-аудита |
-| `agents` | `AgentConfig[]` | Агенты: ID, имя, персона, полномочия, должность |
+| `agents` | `AgentConfig[]` | Агенты: ID, имя, персона, полномочия, стартовая репутация, должность |
 | `world` | `WorldConfig` | Каналы, организации, рабочие элементы |
 
 Ключевые поля `runtime`:
 - `start_date`: каноническая календарная дата тика `0`.
 - `tick_duration_days`: сколько календарных дней проходит за один тик.
+- `parallel_agents`: выполнять этап генерации решений параллельно или последовательно.
+- `parallel_workers`: ограничение на количество одновременных LLM-вызовов при параллельной генерации.
+- `parallel_window_seconds`: совместимый launcher-параметр окна батчирования; в текущем tick-engine весь тик обрабатывается одним batch.
 - `temporal_past_slack_days`: допустимый лаг для абсолютных дат в структурированных действиях.
 - `temporal_future_horizon_days`: допустимый горизонт будущих дат в структурированных действиях.
 - `enrich_personas`: включить обогащение персон перед первым тиком.
@@ -267,6 +274,8 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 - `allow_runtime_spawn`: разрешить `spawn_agent` и worldgen-spawn в ходе симуляции.
 - `worldgen_every_ticks`: положительный интервал запуска worldgen; должен быть `> 0`.
 - `worldgen_allow_internal_spawns`: разрешить worldgen создавать внутренних акторов.
+
+`AgentConfig` помимо `agent_id`, `name`, `persona` и `capabilities` теперь хранит `initial_reputation`, чтобы стартовая репутация была частью канонического сценария, а не только web-карточки.
 
 Ключевые поля `governance.audit`:
 - `enabled`: включить runtime-аудитор.

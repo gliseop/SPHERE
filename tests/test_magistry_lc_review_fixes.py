@@ -27,7 +27,7 @@ from magistry_lc.dao import DaoEngine
 from magistry_lc.cli import _cmd_run
 from magistry_lc.engine import RunArtifacts, WorldEngine
 from magistry_lc.entities import EntityRecord, EntityRegistry
-from magistry_lc.events import Event
+from magistry_lc.events import Event, EventLog
 from magistry_lc.id_alloc import IdAllocator
 from magistry_lc.ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from magistry_lc.journal import WorldJournal
@@ -551,6 +551,41 @@ def test_create_agent_op_emits_initial_reputation_snapshot() -> None:
     assert events[1].payload["score"] == 0.0
     assert events[1].payload["internal"] is True
     assert events[1].payload["title"] == "специалист"
+
+
+def test_engine_init_uses_agent_initial_reputation(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "title": "init-reputation",
+            "ticks": 1,
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "capabilities": ["message"],
+                    "initial_reputation": 7.0,
+                }
+            ],
+            "world": {},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider())
+
+    state = engine._init_state(event_log=EventLog(artifacts.events_path))
+
+    assert state.agents["agent:off_1"].reputation == 7.0
+    snapshots = [
+        event
+        for event in EventLog(artifacts.events_path).iter_events()
+        if event.event_type == "reputation_snapshot"
+    ]
+    assert snapshots[0].payload["score"] == 7.0
 
 
 def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) -> None:

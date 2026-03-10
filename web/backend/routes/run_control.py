@@ -47,6 +47,9 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
             seed=int(cfg.seed),
             rounds=int(cfg.ticks),
             runner_type="web",
+            parallel_agents=cfg.runtime.parallel_agents,
+            parallel_workers=cfg.runtime.parallel_workers,
+            parallel_window=cfg.runtime.parallel_window_seconds,
         )
     except TooManyRunsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -70,6 +73,29 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
     governance = str(data.get("governance") or "G1").strip() or "G1"
     seed = resolve_seed(data.get("seed"))
     rounds = resolve_rounds(data.get("rounds"), default=25)
+    parallel_agents = data.get("parallel_agents")
+    if parallel_agents is not None and not isinstance(parallel_agents, bool):
+        raise HTTPException(status_code=400, detail="Invalid parallel_agents")
+    parallel_workers_raw = data.get("parallel_workers")
+    if parallel_workers_raw is None:
+        parallel_workers = None
+    else:
+        try:
+            parallel_workers = int(parallel_workers_raw)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid parallel_workers") from exc
+        if parallel_workers <= 0:
+            raise HTTPException(status_code=400, detail="Invalid parallel_workers")
+    parallel_window_raw = data.get("parallel_window")
+    if parallel_window_raw is None:
+        parallel_window = None
+    else:
+        try:
+            parallel_window = float(parallel_window_raw)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid parallel_window") from exc
+        if parallel_window < 0.0:
+            raise HTTPException(status_code=400, detail="Invalid parallel_window")
 
     try:
         return launch_simulation(
@@ -78,6 +104,9 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
             seed=seed,
             runner_type="web",
             rounds=rounds,
+            parallel_agents=parallel_agents,
+            parallel_workers=parallel_workers,
+            parallel_window=parallel_window,
         )
     except TooManyRunsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

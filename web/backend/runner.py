@@ -122,6 +122,46 @@ def _write_names_json_from_config(
         _logger.exception("Failed to write names JSON for run %s", run_name)
 
 
+def _apply_parallel_runtime_overrides(
+    scenario_config: dict,
+    *,
+    parallel_agents: bool | None,
+    parallel_workers: int | None,
+    parallel_window: float | None,
+) -> tuple[bool | None, int | None, float | None]:
+    runtime = scenario_config.get("runtime")
+    if not isinstance(runtime, dict):
+        runtime = {}
+        scenario_config["runtime"] = runtime
+
+    if parallel_agents is not None:
+        runtime["parallel_agents"] = bool(parallel_agents)
+    if parallel_workers is not None:
+        runtime["parallel_workers"] = int(parallel_workers)
+    if parallel_window is not None:
+        runtime["parallel_window_seconds"] = float(parallel_window)
+
+    resolved_parallel_agents = runtime.get("parallel_agents")
+    if not isinstance(resolved_parallel_agents, bool):
+        resolved_parallel_agents = None
+
+    resolved_parallel_workers = runtime.get("parallel_workers")
+    if not isinstance(resolved_parallel_workers, int) or resolved_parallel_workers <= 0:
+        resolved_parallel_workers = None
+
+    resolved_parallel_window = runtime.get("parallel_window_seconds")
+    if isinstance(resolved_parallel_window, int):
+        resolved_parallel_window = float(resolved_parallel_window)
+    if not isinstance(resolved_parallel_window, float) or resolved_parallel_window < 0.0:
+        resolved_parallel_window = None
+
+    return (
+        resolved_parallel_agents,
+        resolved_parallel_workers,
+        resolved_parallel_window,
+    )
+
+
 def launch_simulation_from_config(
     scenario_config: dict,
     governance: str,
@@ -149,6 +189,14 @@ def launch_simulation_from_config(
     config["seed"] = int(seed)
     if rounds is not None:
         config["ticks"] = int(rounds)
+    resolved_parallel_agents, resolved_parallel_workers, resolved_parallel_window = (
+        _apply_parallel_runtime_overrides(
+            config,
+            parallel_agents=parallel_agents,
+            parallel_workers=parallel_workers,
+            parallel_window=parallel_window,
+        )
+    )
 
     base_name = _make_run_name(
         scenario=str(config.get("scenario_id") or config.get("id") or config.get("title") or "scenario"),
@@ -185,14 +233,14 @@ def launch_simulation_from_config(
 
         env = os.environ.copy()
         env.setdefault("PYTHONUNBUFFERED", "1")
-        if parallel_agents is True:
+        if resolved_parallel_agents is True:
             env["MAGISTRY_PARALLEL_AGENTS"] = "1"
-        elif parallel_agents is False:
+        elif resolved_parallel_agents is False:
             env["MAGISTRY_PARALLEL_AGENTS"] = "0"
-        if parallel_workers is not None:
-            env["MAGISTRY_PARALLEL_WORKERS"] = str(int(parallel_workers))
-        if parallel_window is not None:
-            env["MAGISTRY_PARALLEL_WINDOW"] = str(float(parallel_window))
+        if resolved_parallel_workers is not None:
+            env["MAGISTRY_PARALLEL_WORKERS"] = str(int(resolved_parallel_workers))
+        if resolved_parallel_window is not None:
+            env["MAGISTRY_PARALLEL_WINDOW"] = str(float(resolved_parallel_window))
 
         proc = subprocess.Popen(
             cmd,
@@ -231,6 +279,9 @@ def launch_simulation(
     *,
     personalities_dir: Path | None = None,
     interviews_dir: Path | None = None,
+    parallel_agents: bool | None = None,
+    parallel_workers: int | None = None,
+    parallel_window: float | None = None,
 ) -> dict:
     """Запустить симуляцию как subprocess.
 
@@ -261,6 +312,9 @@ def launch_simulation(
         variant=runner_type,
         personalities_dir=personalities_dir,
         interviews_dir=interviews_dir,
+        parallel_agents=parallel_agents,
+        parallel_workers=parallel_workers,
+        parallel_window=parallel_window,
     )
 
 
