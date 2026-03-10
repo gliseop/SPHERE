@@ -65,6 +65,7 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
     scenario = str(data.get("scenario") or "").strip()
     if not scenario:
         raise HTTPException(status_code=400, detail="Scenario is required")
+    validate_scenario_id(scenario)
 
     governance = str(data.get("governance") or "G1").strip() or "G1"
     seed = resolve_seed(data.get("seed"))

@@ -983,6 +983,11 @@ class WorldEngine:
 
         current_count = len(state.agents)
         existing_ids = set(state.registry.list_ids()) | set(state.agents.keys())
+        reserved_name_keys = {
+            social_link_name_key(agent.name)
+            for agent in state.agents.values()
+            if social_link_name_key(agent.name)
+        }
         ops: list[StateOp] = []
         for spawn in spawns:
             if current_count + len(ops) >= self.cfg.runtime.max_agents:
@@ -994,11 +999,23 @@ class WorldEngine:
                 continue
             if looks_like_role_label(display_name):
                 continue
+            if self._match_existing_agent_for_social_link(state=state, link_name=display_name) is not None:
+                continue
+            display_name_key = social_link_name_key(display_name)
+            matched_reserved_key = (
+                social_link_match_key(display_name_key, list(reserved_name_keys))
+                if display_name_key
+                else ""
+            )
+            if matched_reserved_key and matched_reserved_key in reserved_name_keys:
+                continue
             slug = normalize_slug(spawn.slug, fallback=display_name or "spawned")
             entity_id = make_id(EntityKind.AGENT, slug)
             if entity_id in existing_ids:
                 continue
             existing_ids.add(entity_id)
+            if display_name_key:
+                reserved_name_keys.add(display_name_key)
             ops.append(
                 CreateAgentOp(
                     entity_id=entity_id,

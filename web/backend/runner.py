@@ -20,6 +20,7 @@ _RESULTS_DIR = _PROJECT_ROOT / "results"
 
 # Хранилище активных процессов: run_name -> subprocess.Popen
 _active: dict[str, subprocess.Popen] = {}
+_reserved_run_names: set[str] = set()
 _active_lock = threading.Lock()
 
 _logger = logging.getLogger(__name__)
@@ -144,13 +145,6 @@ def launch_simulation_from_config(
         parallel_window: Окно батчирования (симулированные секунды).
             None = определить из env.
     """
-    with _active_lock:
-        running_now = sum(1 for proc in _active.values() if proc.poll() is None)
-        if running_now >= _MAX_RUNNING:
-            raise TooManyRunsError(
-                f"Слишком много одновременных прогонов: {running_now} >= {_MAX_RUNNING}"
-            )
-
     config = dict(scenario_config or {})
     config["seed"] = int(seed)
     if rounds is not None:
@@ -162,44 +156,44 @@ def launch_simulation_from_config(
         seed=seed,
         variant=variant or runner_type,
     )
-    run_name = _allocate_run_name(base_name)
-    out_dir = _RESULTS_DIR / run_name
-    out_dir.mkdir(parents=True, exist_ok=True)
+    run_name, out_dir = _reserve_run_dir(base_name)
 
     scenario_path = out_dir / "_input_scenario.json"
-    scenario_path.write_text(
-        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-    stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
-    stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
-    stdout_handle = stdout_path.open("a", encoding="utf-8")
-    stderr_handle = stderr_path.open("a", encoding="utf-8")
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "magistry_lc.cli",
-        "run",
-        "--scenario",
-        str(scenario_path),
-        "--out",
-        str(out_dir),
-    ]
-
-    env = os.environ.copy()
-    env.setdefault("PYTHONUNBUFFERED", "1")
-    if parallel_agents is True:
-        env["MAGISTRY_PARALLEL_AGENTS"] = "1"
-    elif parallel_agents is False:
-        env["MAGISTRY_PARALLEL_AGENTS"] = "0"
-    if parallel_workers is not None:
-        env["MAGISTRY_PARALLEL_WORKERS"] = str(int(parallel_workers))
-    if parallel_window is not None:
-        env["MAGISTRY_PARALLEL_WINDOW"] = str(float(parallel_window))
-
+    stdout_handle = None
+    stderr_handle = None
     try:
+        scenario_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
+        stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
+        stdout_handle = stdout_path.open("a", encoding="utf-8")
+        stderr_handle = stderr_path.open("a", encoding="utf-8")
+
+        cmd = [
+            sys.executable,
+            "-m",
+            "magistry_lc.cli",
+            "run",
+            "--scenario",
+            str(scenario_path),
+            "--out",
+            str(out_dir),
+        ]
+
+        env = os.environ.copy()
+        env.setdefault("PYTHONUNBUFFERED", "1")
+        if parallel_agents is True:
+            env["MAGISTRY_PARALLEL_AGENTS"] = "1"
+        elif parallel_agents is False:
+            env["MAGISTRY_PARALLEL_AGENTS"] = "0"
+        if parallel_workers is not None:
+            env["MAGISTRY_PARALLEL_WORKERS"] = str(int(parallel_workers))
+        if parallel_window is not None:
+            env["MAGISTRY_PARALLEL_WINDOW"] = str(float(parallel_window))
+
         proc = subprocess.Popen(
             cmd,
             cwd=str(_PROJECT_ROOT),
@@ -209,8 +203,11 @@ def launch_simulation_from_config(
             text=True,
         )
     except Exception:
-        stdout_handle.close()
-        stderr_handle.close()
+        if stdout_handle is not None:
+            stdout_handle.close()
+        if stderr_handle is not None:
+            stderr_handle.close()
+        _release_reserved_run_name(run_name)
         raise
 
     threading.Thread(
@@ -220,6 +217,7 @@ def launch_simulation_from_config(
     ).start()
 
     with _active_lock:
+        _reserved_run_names.discard(run_name)
         _active[run_name] = proc
     return {"run_name": run_name, "pid": proc.pid}
 
@@ -305,7 +303,49 @@ def _run_name_taken(run_name: str) -> bool:
     if (_RESULTS_DIR / f"{run_name}_events.jsonl").exists():
         return True
     with _active_lock:
+        if run_name in _reserved_run_names:
+            return True
         return run_name in _active and _active[run_name].poll() is None
+
+
+def _reserve_run_dir(base_name: str) -> tuple[str, Path]:
+    with _active_lock:
+        running_now = sum(1 for proc in _active.values() if proc.poll() is None)
+        if running_now >= _MAX_RUNNING:
+            raise TooManyRunsError(
+                f"Слишком много одновременных прогонов: {running_now} >= {_MAX_RUNNING}"
+            )
+
+        candidate = base_name
+        suffix = 2
+        while True:
+            out_dir = _RESULTS_DIR / candidate
+            legacy_events = _RESULTS_DIR / f"{candidate}_events.jsonl"
+            if legacy_events.exists():
+                candidate = f"{base_name}_{suffix}"
+                suffix += 1
+                continue
+            if candidate in _reserved_run_names:
+                candidate = f"{base_name}_{suffix}"
+                suffix += 1
+                continue
+            if candidate in _active and _active[candidate].poll() is None:
+                candidate = f"{base_name}_{suffix}"
+                suffix += 1
+                continue
+            try:
+                out_dir.mkdir(parents=True, exist_ok=False)
+            except FileExistsError:
+                candidate = f"{base_name}_{suffix}"
+                suffix += 1
+                continue
+            _reserved_run_names.add(candidate)
+            return candidate, out_dir
+
+
+def _release_reserved_run_name(run_name: str) -> None:
+    with _active_lock:
+        _reserved_run_names.discard(run_name)
 
 
 def _close_logs_when_done(

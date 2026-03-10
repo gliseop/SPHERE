@@ -324,8 +324,15 @@ def _write_mapping(path: Path, data: dict[str, Any]) -> None:
 
 
 def _resolve_scenario_path(scenario_id: str) -> Path | None:
-    candidates = [SCENARIOS_DIR / f"{scenario_id}{suffix}" for suffix in _SCENARIO_SUFFIXES]
-    existing = [path for path in candidates if path.exists()]
+    base_dir = SCENARIOS_DIR.resolve()
+    existing: list[Path] = []
+    for suffix in _SCENARIO_SUFFIXES:
+        candidate = SCENARIOS_DIR / f"{scenario_id}{suffix}"
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(base_dir):
+            continue
+        if resolved.exists():
+            existing.append(resolved)
     if not existing:
         return None
     if len(existing) == 1:
