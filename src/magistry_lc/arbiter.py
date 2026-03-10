@@ -690,9 +690,6 @@ class Arbiter:
             )
 
         if isinstance(action, RespondNominationAction):
-            missing = _require("dao")
-            if missing:
-                return ActionResult(action_index, False, missing, [])
             if action.vote_id not in state.votes:
                 return ActionResult(action_index, False, f"unknown vote_id: {action.vote_id}", [])
             vote = state.votes[action.vote_id]
@@ -776,10 +773,17 @@ class Arbiter:
         if not decision.approved:
             return ActionResult(action_index, False, decision.reason or "rejected", [])
 
+        scratch_alloc = IdAllocator(counters=dict(self.id_alloc.counters or {}))
         ops: list[StateOp] = []
         for item in decision.ops:
             try:
-                parsed_ops = self._op_from_llm(agent_id=agent_id, state=state, op_type=item.op_type, args=item.args)
+                parsed_ops = self._op_from_llm(
+                    agent_id=agent_id,
+                    state=state,
+                    op_type=item.op_type,
+                    args=item.args,
+                    id_alloc=scratch_alloc,
+                )
             except Exception as exc:
                 return ActionResult(
                     action_index,
@@ -793,6 +797,7 @@ class Arbiter:
                     return ActionResult(action_index, False, f"missing_capability:{missing}", [])
                 ops.append(op)
 
+        self.id_alloc.counters = dict(scratch_alloc.counters or {})
         return ActionResult(action_index, True, decision.reason or "approved", ops)
 
     async def _arbitrate_perform(
@@ -827,7 +832,7 @@ class Arbiter:
             return "message"
         if isinstance(op, (CreateWorkItemOp, AddWorkNoteOp, SubmitWorkProposalOp)) and "work" not in caps:
             return "work"
-        if isinstance(op, (OpenVoteOp, CastVoteOp, SetVoteConsentOp)) and "dao" not in caps:
+        if isinstance(op, (OpenVoteOp, CastVoteOp)) and "dao" not in caps:
             return "dao"
         if isinstance(op, ModifyReputationOp) and "audit" not in caps:
             return "audit"
@@ -877,8 +882,17 @@ class Arbiter:
                 return f"open_vote_already_exists_for_target:{target_agent_id}"
         return None
 
-    def _op_from_llm(self, *, agent_id: str, state: WorldState, op_type: str, args: dict[str, Any]) -> list[StateOp]:
+    def _op_from_llm(
+        self,
+        *,
+        agent_id: str,
+        state: WorldState,
+        op_type: str,
+        args: dict[str, Any],
+        id_alloc: IdAllocator | None = None,
+    ) -> list[StateOp]:
         """Сконвертировать LLM-op в реальные ops."""
+        allocator = id_alloc or self.id_alloc
         if op_type == "noop":
             return []
 
@@ -908,7 +922,7 @@ class Arbiter:
             ]
 
         if op_type == "create_work_item":
-            wid = self.id_alloc.next_id(EntityKind.WORK_ITEM, tick=state.tick)
+            wid = allocator.next_id(EntityKind.WORK_ITEM, tick=state.tick)
             participants = [str(x) for x in (args.get("participants") or [])]
             temporal_error = self._validate_temporal_texts(
                 current_tick=state.tick,
@@ -990,7 +1004,7 @@ class Arbiter:
             )
             if target_error:
                 raise ValueError(target_error)
-            vote_id = self.id_alloc.next_id(EntityKind.VOTE, tick=state.tick)
+            vote_id = allocator.next_id(EntityKind.VOTE, tick=state.tick)
             temporal_error = self._validate_temporal_texts(
                 current_tick=state.tick,
                 texts=[str(args.get("new_title") or ""), str(args.get("reason") or "")],

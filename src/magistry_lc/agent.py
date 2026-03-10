@@ -146,7 +146,7 @@ class AgentRunner:
 
         # Инструкция по действиям.
         max_actions = self.runtime.max_actions_per_turn
-        votes_line = f"- Open votes: {vote_ids}\n" if "dao" in agent.capabilities else ""
+        votes_line = f"- Open votes: {vote_ids}\n"
 
         # Строим список доступных типов действий на основе capabilities.
         action_types: list[str] = []
@@ -160,7 +160,7 @@ class AgentRunner:
         if "dao" in agent.capabilities:
             action_types.append("nominate_position_change (target_agent_id, new_title, reason) — номинировать на должность")
             action_types.append("cast_vote (vote_id, choice: yes/no/abstain) — проголосовать")
-            action_types.append("respond_nomination (vote_id, accept: true/false) — принять/отклонить номинацию")
+        action_types.append("respond_nomination (vote_id, accept: true/false) — принять/отклонить номинацию")
         if "audit" in agent.capabilities:
             action_types.append("add_work_note (work_id, text) — добавить аудиторскую заметку")
         if "spawn" in agent.capabilities:

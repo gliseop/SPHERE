@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from magistry_lc.agent import AgentRunner
 from magistry_lc.llm import MockLLMProvider
 
 from magistry_lc.actions import (
@@ -22,7 +23,7 @@ from magistry_lc.actions import (
     SpawnAgentAction,
 )
 from magistry_lc.arbiter import Arbiter
-from magistry_lc.config import GovernanceConfig, LLMConfig, MemoryConfig, ScenarioConfig
+from magistry_lc.config import GovernanceConfig, LLMConfig, MemoryConfig, RuntimeConfig, ScenarioConfig
 from magistry_lc.dao import DaoEngine
 from magistry_lc.cli import _cmd_run
 from magistry_lc.engine import RunArtifacts, WorldEngine
@@ -312,6 +313,45 @@ def test_arbiter_rejects_nomination_response_from_non_target(tmp_path: Path) -> 
     assert "only_target_can_respond" in res[0].reason
 
 
+def test_arbiter_allows_nomination_response_without_dao_capability(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["message", "work"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    open_vote = NominatePositionChangeAction(
+        type=ActionType.NOMINATE_POSITION_CHANGE,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        reason="test",
+        justification="",
+    )
+    opened = asyncio.run(
+        arbiter.arbitrate_actions(
+            state=state,
+            agent_id="agent:off_1",
+            actions=[open_vote],
+        )
+    )
+    assert opened[0].approved is True
+    for op in opened[0].ops:
+        op.apply(state)
+
+    respond = RespondNominationAction(
+        type=ActionType.RESPOND_NOMINATION,
+        vote_id="vote:0_1",
+        accept=True,
+        justification="",
+    )
+    accepted = asyncio.run(
+        arbiter.arbitrate_actions(
+            state=state,
+            agent_id="agent:off_2",
+            actions=[respond],
+        )
+    )
+    assert accepted[0].approved is True
+    assert accepted[0].reason == "respond_nomination"
+
+
 def test_arbiter_rejects_second_open_vote_for_same_target_in_tick(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
     arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
@@ -384,6 +424,46 @@ def test_perform_invalid_op_is_rejected_not_silently_skipped(tmp_path: Path) -> 
     res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
     assert res[0].approved is False
     assert "perform_op_invalid" in res[0].reason
+
+
+def test_perform_rejection_does_not_consume_id_allocator(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=[], off_2_caps=["work"])
+    mock = MockLLMProvider(
+        structured_responses={
+            "blocked-task": {
+                "approved": True,
+                "reason": "ok",
+                "ops": [
+                    {
+                        "op_type": "create_work_item",
+                        "args": {"work_type": "task", "title": "A"},
+                    }
+                ],
+            },
+            "valid-task": {
+                "approved": True,
+                "reason": "ok",
+                "ops": [
+                    {
+                        "op_type": "create_work_item",
+                        "args": {"work_type": "task", "title": "B"},
+                    }
+                ],
+            },
+        }
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=mock)
+
+    blocked = PerformAction(type=ActionType.PERFORM, description="blocked-task", target_id="", justification="")
+    rejected = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[blocked]))
+    assert rejected[0].approved is False
+    assert rejected[0].reason == "missing_capability:work"
+
+    valid = PerformAction(type=ActionType.PERFORM, description="valid-task", target_id="", justification="")
+    approved = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_2", actions=[valid]))
+    assert approved[0].approved is True
+    assert approved[0].ops
+    assert approved[0].ops[0].work_id == "work:0_1"
 
 
 def test_arbiter_rejects_temporally_backdated_message(tmp_path: Path) -> None:
@@ -663,6 +743,35 @@ def test_memory_summarizes_working_buffer(tmp_path: Path) -> None:
 
     assert mem.summary == "- one - two"
     assert len(mem.working) == 2
+
+
+def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["message", "work"])
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_1",
+        created_tick=0,
+        closes_tick=2,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1"],
+    )
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    prompt = runner._build_user(
+        agent=state.agents["agent:off_2"],
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    assert "Open votes: vote:1" in prompt
+    assert "respond_nomination (vote_id, accept: true/false)" in prompt
 
 
 def test_langgraph_world_graph_supports_checkpoint_path(tmp_path: Path) -> None:

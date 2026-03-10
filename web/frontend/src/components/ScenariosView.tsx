@@ -312,8 +312,17 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
 
   async function handleDelete(id: string) {
     if (!window.confirm('Удалить сценарий? Это действие необратимо.')) return
-    await apiClient.delete(`/api/scenarios/${id}`)
-    setScenarios((prev) => (Array.isArray(prev) ? prev.filter((s) => s.id !== id) : []))
+    try {
+      const res = await apiClient.delete(`/api/scenarios/${id}`)
+      if (!res.ok) {
+        const message = await readApiErrorMessage(res)
+        window.alert(message || 'Не удалось удалить сценарий')
+        return
+      }
+      setScenarios((prev) => (Array.isArray(prev) ? prev.filter((s) => s.id !== id) : []))
+    } catch {
+      window.alert('Ошибка сети при удалении сценария')
+    }
   }
 
   async function handleRun(s: Scenario) {

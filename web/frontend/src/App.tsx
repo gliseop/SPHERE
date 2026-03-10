@@ -91,6 +91,15 @@ export default function App() {
   }, [auth.isAuthenticated, view, mode])
 
   useEffect(() => {
+    if (auth.isAuthenticated) return
+    disconnect()
+    setActiveRuns([])
+    setScenarioConfig(null)
+    setCurrentRunName(null)
+    setSelectedNode(null)
+  }, [auth.isAuthenticated, disconnect])
+
+  useEffect(() => {
     const runName = state.meta?.run_name ?? null
     setCurrentRunName(runName)
     if (!runName) {
