@@ -17,6 +17,7 @@ def results_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(runner, "_RESULTS_DIR", tmp_path)
     # Очистить глобальное состояние между тестами
     runner._active.clear()
+    runner._reserved_run_names.clear()
     return tmp_path
 
 
@@ -249,3 +250,29 @@ class TestLaunchSimulation:
                 scenario_config={"id": "S1", "agents": []},
                 governance="G1",
             )
+
+    def test_launch_simulation_skips_reserved_run_name(self, results_dir: Path):
+        """Зарезервированное имя не должно переиспользоваться вторым запуском."""
+        runner._reserved_run_names.add("S1_G1_seed7_cognitive")
+
+        with patch("web.backend.runner.subprocess.Popen", side_effect=_FakePopen):
+            result = runner.launch_simulation_from_config(
+                scenario_config={"id": "S1", "agents": []},
+                governance="G1",
+                seed=7,
+                rounds=5,
+            )
+
+        assert result["run_name"] == "S1_G1_seed7_cognitive_2"
+
+    def test_launch_simulation_releases_reservation_on_popen_failure(self, results_dir: Path):
+        """При ошибке старта резервирование имени снимается."""
+        with patch("web.backend.runner.subprocess.Popen", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError, match="boom"):
+                runner.launch_simulation_from_config(
+                    scenario_config={"id": "S1", "agents": []},
+                    governance="G1",
+                    seed=7,
+                )
+
+        assert runner._reserved_run_names == set()

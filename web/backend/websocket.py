@@ -255,6 +255,47 @@ async def _bootstrap_graph_from_file(
     return file_pos, bytes(buf), (list(keep_tail) if keep_tail is not None else [])
 
 
+async def _consume_live_file_delta(
+    file_handle,
+    *,
+    file_pos: int,
+    buf: bytearray,
+    builder: GraphStateBuilder,
+    pending: list[dict[str, Any]],
+    names: dict[str, str],
+) -> tuple[int, bool]:
+    """Дочитать весь доступный прирост events-файла."""
+    graph_dirty = False
+
+    while True:
+        await file_handle.seek(file_pos)
+        chunk = await file_handle.read(64 * 1024)
+        if not chunk:
+            break
+        file_pos += len(chunk)
+        buf.extend(chunk)
+
+        while True:
+            nl = buf.find(b"\n")
+            if nl < 0:
+                break
+            line_bytes = bytes(buf[:nl])
+            del buf[: nl + 1]
+            line = line_bytes.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            builder.ingest(event)
+            if _ws_should_send_event(event):
+                pending.append(_event_for_ws(event, names))
+            graph_dirty = True
+
+    return file_pos, graph_dirty
+
+
 async def _stream_events_from_file(
     path: Path, speed: float = 1.0
 ) -> AsyncIterator[dict]:
@@ -415,6 +456,7 @@ async def ws_live(
     builder = GraphStateBuilder()
     watched_run: str | None = None
     watched_path: Path | None = None
+    names: dict[str, str] = {}
     file_pos = 0
     buf = bytearray()
     bootstrapped = False
@@ -425,6 +467,45 @@ async def ws_live(
     pending_since = time.monotonic()
 
     try:
+        async def _drain_current_stream(*, file_handle=None) -> None:
+            nonlocal file_pos, graph_dirty, last_send, last_graph_send, pending_since
+            if watched_path is None or not watched_path.exists():
+                return
+            try:
+                if file_handle is None:
+                    async with aiofiles.open(watched_path, "rb") as handle:
+                        file_pos, drained_dirty = await _consume_live_file_delta(
+                            handle,
+                            file_pos=file_pos,
+                            buf=buf,
+                            builder=builder,
+                            pending=pending,
+                            names=names,
+                        )
+                else:
+                    file_pos, drained_dirty = await _consume_live_file_delta(
+                        file_handle,
+                        file_pos=file_pos,
+                        buf=buf,
+                        builder=builder,
+                        pending=pending,
+                        names=names,
+                    )
+            except OSError:
+                return
+
+            graph_dirty = graph_dirty or drained_dirty
+            if pending:
+                await _ws_flush_events(websocket, pending)
+                last_send = time.monotonic()
+                pending_since = last_send
+            if graph_dirty:
+                now = time.monotonic()
+                await websocket.send_json({"type": "graph_state", **builder.state()})
+                last_graph_send = now
+                last_send = now
+                graph_dirty = False
+
         if run_name:
             try:
                 validate_run_name(run_name)
@@ -536,33 +617,19 @@ async def ws_live(
                 assert watched_path is not None
                 async with aiofiles.open(watched_path, "rb") as f:
                     while True:
-                        await f.seek(file_pos)
-                        chunk = await f.read(64 * 1024)
-                        if chunk:
-                            file_pos += len(chunk)
-                            buf.extend(chunk)
-
-                            while True:
-                                nl = buf.find(b"\n")
-                                if nl < 0:
-                                    break
-                                line_bytes = bytes(buf[:nl])
-                                del buf[: nl + 1]
-                                line = line_bytes.decode("utf-8", errors="replace").strip()
-                                if not line:
-                                    continue
-                                try:
-                                    event = json.loads(line)
-                                except json.JSONDecodeError:
-                                    continue
-                                builder.ingest(event)
-                                if _ws_should_send_event(event):
-                                    pending.append(_event_for_ws(event, names))
-                                    if len(pending) >= WS_EVENT_BATCH_SIZE:
-                                        await _ws_flush_events(websocket, pending)
-                                        last_send = time.monotonic()
-                                        pending_since = last_send
-                                graph_dirty = True
+                        file_pos, drained_dirty = await _consume_live_file_delta(
+                            f,
+                            file_pos=file_pos,
+                            buf=buf,
+                            builder=builder,
+                            pending=pending,
+                            names=names,
+                        )
+                        graph_dirty = graph_dirty or drained_dirty
+                        if len(pending) >= WS_EVENT_BATCH_SIZE:
+                            await _ws_flush_events(websocket, pending)
+                            last_send = time.monotonic()
+                            pending_since = last_send
 
                         now = time.monotonic()
                         if pending and (now - pending_since) >= WS_EVENT_BATCH_INTERVAL_S:
@@ -591,11 +658,13 @@ async def ws_live(
                         if run_name:
                             next_run = run_name
                             if not any(r.get("run_name") == run_name for r in running):
+                                await _drain_current_stream(file_handle=f)
                                 await websocket.send_json({"type": "done"})
                                 await websocket.close(code=1000)
                                 return
                         else:
                             if not running:
+                                await _drain_current_stream(file_handle=f)
                                 await websocket.send_json({"type": "done"})
                                 await websocket.close(code=1000)
                                 return
@@ -610,11 +679,13 @@ async def ws_live(
                                 next_run = candidate
                                 break
                             if not next_run:
+                                await _drain_current_stream(file_handle=f)
                                 await websocket.send_json({"type": "done"})
                                 await websocket.close(code=1000)
                                 return
 
                         if next_run != watched_run:
+                            await _drain_current_stream(file_handle=f)
                             break
                         if watched_path and not watched_path.exists():
                             bootstrapped = False

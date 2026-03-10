@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from web.backend.main import app
 from web.backend.database import User
 from web.backend import auth as auth_module
+from web.backend.routes import scenarios as scenarios_module
 
 client = TestClient(app, raise_server_exceptions=False)
 
@@ -342,6 +343,15 @@ def test_get_interview_rejects_backslash_path_traversal():
     assert r.status_code == 400
 
 
+def test_resolve_scenario_path_rejects_escaped_path(tmp_path: Path):
+    scenarios_dir = tmp_path / "scenarios"
+    scenarios_dir.mkdir()
+    (tmp_path / "outside.json").write_text("{}", encoding="utf-8")
+
+    with patch.object(scenarios_module, "SCENARIOS_DIR", scenarios_dir):
+        assert scenarios_module._resolve_scenario_path("..\\outside") is None
+
+
 def test_prompts_endpoint_requires_admin(tmp_path: Path):
     run_dir = tmp_path / "lc_run"
     run_dir.mkdir()
@@ -471,6 +481,17 @@ def test_launch_run_viewer_gets_403():
             headers={"Authorization": f"Bearer {viewer_token()}"},
         )
     assert r.status_code == 403
+
+
+def test_launch_run_admin_rejects_invalid_scenario_id():
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        r = client.post(
+            "/api/runs/launch",
+            json={"scenario": "..\\data\\empirical_benchmarks"},
+            headers={"Authorization": f"Bearer {admin_token()}"},
+        )
+
+    assert r.status_code == 400
 
 
 def test_template_scenarios_available_from_seed_files(tmp_path: Path):
@@ -680,3 +701,54 @@ def test_ws_playback_skips_invalid_json_lines(tmp_path: Path):
     assert not any(message.get("type") == "error" for message in messages)
     event_messages = [message for message in messages if message.get("type") in {"event", "events"}]
     assert event_messages
+
+
+def test_ws_live_drains_final_event_tail_before_done(tmp_path: Path):
+    run_dir = tmp_path / "live_run"
+    run_dir.mkdir()
+    events_path = run_dir / "events.jsonl"
+    events_path.write_text(
+        '{"tick":1,"event_type":"world_event","payload":{"description":"initial"}}\n',
+        encoding="utf-8",
+    )
+
+    calls = {"count": 0}
+
+    def _fake_list_active():
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return [{"run_name": "live_run", "status": "running", "pid": 1234}]
+        if calls["count"] == 2:
+            with events_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    '{"tick":2,"event_type":"world_event","payload":{"description":"tail"}}\n'
+                )
+            return []
+        return []
+
+    async def _fast_sleep(_delay: float) -> None:
+        return None
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.websocket.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                with patch("web.backend.runner.list_active", side_effect=_fake_list_active):
+                    with patch("web.backend.websocket.asyncio.sleep", new=_fast_sleep):
+                        with client.websocket_connect("/ws/live?run_name=live_run") as websocket:
+                            websocket.send_json({"type": "auth", "token": viewer_token()})
+                            messages = []
+                            for _ in range(12):
+                                message = websocket.receive_json()
+                                messages.append(message)
+                                if message.get("type") == "done":
+                                    break
+
+    events: list[dict] = []
+    for message in messages:
+        if message.get("type") == "event":
+            events.append(message["data"])
+        elif message.get("type") == "events":
+            events.extend(message["data"])
+
+    assert any(event.get("payload", {}).get("description") == "tail" for event in events)
+    assert messages[-1]["type"] == "done"

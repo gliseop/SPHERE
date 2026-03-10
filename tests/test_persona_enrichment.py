@@ -411,6 +411,35 @@ class _WorldgenSpawnProvider(MockLLMProvider):
         return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
 
 
+class _DuplicateNameWorldgenProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сгенерируй действия на этот тик." in user:
+            return StructuredLLMResponse(data={"actions": []}, model="mock")
+        if "\"tick\": 0" in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [],
+                    "spawns": [
+                        {
+                            "slug": "john_2",
+                            "name": "John Smith",
+                            "internal": False,
+                            "persona_hint": "Duplicate witness name from worldgen.",
+                            "reason": "Should be deduplicated by human-readable name.",
+                        }
+                    ],
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
 class _LegacyWorldgenProvider(MockLLMProvider):
     def generate_structured(
         self,
@@ -956,6 +985,48 @@ def test_worldgen_spawn_registers_new_agent(tmp_path: Path) -> None:
 
     assert "agent:journalist" in state.agents
     assert provider.spawned_agent_acted is True
+
+
+def test_worldgen_spawn_skips_duplicate_human_name(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "worldgen-name-dedup",
+            "ticks": 1,
+            "runtime": {
+                "max_actions_per_turn": 1,
+                "allow_runtime_spawn": True,
+                "max_agents": 3,
+                "enable_worldgen": True,
+                "worldgen_every_ticks": 1,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:john_1",
+                    "name": "John Smith",
+                    "internal": True,
+                    "persona": "Базовый агент.",
+                    "capabilities": ["message"],
+                }
+            ],
+            "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    state = asyncio.run(
+        WorldEngine(
+            cfg=cfg,
+            artifacts=artifacts,
+            provider_override=_DuplicateNameWorldgenProvider(),
+        ).run()
+    )
+
+    assert "agent:john_2" not in state.agents
+    assert sorted(state.agents.keys()) == ["agent:john_1"]
 
 
 def test_engine_full_persona_bootstraps_interview_and_reflection_memory(tmp_path: Path) -> None:
