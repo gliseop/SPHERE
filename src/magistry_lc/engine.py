@@ -193,23 +193,28 @@ class WorldEngine:
 
                 async def _gather_node(gs: dict) -> dict:
                     agent_order = self._agent_order(state=gs["world"], tick=gs["world"].tick)
-                    proposed = await self._gather_actions(
+                    proposed, gather_errors = await self._gather_actions(
                         state=gs["world"],
                         runners=runners,
                         events_history=gs["events_history"],
                         agent_order=agent_order,
                     )
-                    return {"proposed": proposed}
+                    return {"proposed": proposed, "gather_errors": gather_errors}
 
                 async def _apply_node(gs: dict) -> dict:
                     agent_order = self._agent_order(state=gs["world"], tick=gs["world"].tick)
-                    tick_events = await self._apply_actions(
-                        state=gs["world"],
-                        arbiter=arbiter,
-                        proposed=gs["proposed"],
-                        event_log=event_log,
-                        agent_order=agent_order,
-                        journal_yaml=journal.to_yaml(),
+                    tick_events = list(gs.get("gather_errors") or [])
+                    if tick_events:
+                        event_log.extend(tick_events)
+                    tick_events.extend(
+                        await self._apply_actions(
+                            state=gs["world"],
+                            arbiter=arbiter,
+                            proposed=gs["proposed"],
+                            event_log=event_log,
+                            agent_order=agent_order,
+                            journal_yaml=journal.to_yaml(),
+                        )
                     )
                     return {"tick_events": tick_events}
 

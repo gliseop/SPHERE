@@ -17,7 +17,7 @@ magistry-lc run --scenario <путь> [--out <директория>] [--ticks <�
 | Аргумент | Тип | По умолчанию | Описание |
 |---|---|---|---|
 | `--scenario` | путь | (обязательный) | Путь к сценарию (.yaml или .json) |
-| `--out` | путь | `lc_results/<timestamp>` | Выходная директория (events.jsonl, trace.jsonl) |
+| `--out` | путь | `results/<timestamp>` | Выходная директория (events.jsonl, trace.jsonl) |
 | `--ticks` | целое | из сценария | Переопределить число тиков |
 | `--enrich-personas` | флаг | `false` | Включить runtime-обогащение персон перед первым тиком |
 | `--persona-enrich-mode` | `full`/`core` | из сценария | Переопределить режим обогащения персон |
@@ -40,7 +40,7 @@ magistry-lc compose --description <текст> --out <путь> [опции]
 | `--base-url` | строка | — | Базовый URL API |
 | `--provider-order` | строка | — | Приоритет провайдеров через запятую (например, `Groq,OpenAI`) |
 | `--temperature` | дробное | из LLMConfig | Температура генерации |
-| `--trace` | путь | `lc_results/compose_trace.jsonl` | Путь к файлу трассировки |
+| `--trace` | путь | `results/compose_trace.jsonl` | Путь к файлу трассировки |
 
 ### oracle — анализ нарушений
 

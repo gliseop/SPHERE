@@ -92,10 +92,11 @@ def next_s_number() -> str:
         if m:
             max_num = max(max_num, int(m.group(1)))
 
-    for p in SCENARIOS_DIR.glob("S*.json"):
-        m = S_NUM_RE.match(p.stem)
-        if m:
-            max_num = max(max_num, int(m.group(1)))
+    for pattern in ("S*.json", "S*.yaml", "S*.yml"):
+        for p in SCENARIOS_DIR.glob(pattern):
+            m = S_NUM_RE.match(p.stem)
+            if m:
+                max_num = max(max_num, int(m.group(1)))
 
     return f"S{max_num + 1}"
 

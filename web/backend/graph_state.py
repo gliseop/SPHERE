@@ -50,6 +50,19 @@ def _is_governance_agent(agent_id: str) -> bool:
     return normalized in ("auditor",) or normalized.startswith(("aud_", "juror_"))
 
 
+def _is_agentish_id(entity_id: str) -> bool:
+    """Return True for agent identifiers understood by the current UI.
+
+    Typed MAGISTRY-LC ids keep only ``agent:*`` nodes in the social graph.
+    Untyped legacy ids are still treated as agents for backward compatibility.
+    """
+    if not entity_id:
+        return False
+    if ":" not in entity_id:
+        return True
+    return entity_id.startswith("agent:")
+
+
 def build_graph_state(events: list[dict]) -> dict:
     """Reconstruct {"nodes": [...], "edges": [...]} from an event stream."""
     builder = GraphStateBuilder()
@@ -69,7 +82,7 @@ class GraphStateBuilder:
     def ingest(self, e: dict[str, Any]) -> None:
         e = normalize_event_compat(e)
         aid = str(e.get("agent_id", e.get("actor_id", "")) or "")
-        if aid and aid != "system":
+        if aid and aid != "system" and _is_agentish_id(aid):
             self._ensure_agent(aid)
 
         event_type = str(e.get("event_type", "") or "")
@@ -133,7 +146,7 @@ class GraphStateBuilder:
             entity_id = str(payload.get("entity_id", "") or "")
             kind = str(payload.get("kind", "") or "")
             meta = payload.get("meta", {}) or {}
-            if kind == "agent" and entity_id:
+            if kind == "agent" and entity_id and _is_agentish_id(entity_id):
                 self._ensure_agent(entity_id)
                 if isinstance(meta, dict):
                     name = str(meta.get("name", "") or "")
@@ -141,10 +154,19 @@ class GraphStateBuilder:
                         self.agents[entity_id]["name"] = name
             return
 
+        if event_type == "position_changed":
+            target = str(payload.get("target_agent_id", "") or "")
+            new_title = payload.get("new_title")
+            if target and _is_agentish_id(target):
+                self._ensure_agent(target)
+                if isinstance(new_title, str) and new_title:
+                    self.agents[target]["position_title"] = new_title
+            return
+
         # Backward/legacy: edges strengthened implicitly by message traffic.
         if event_type == "message_sent":
             to_id = str(payload.get("to_id", "") or "")
-            if aid and to_id:
+            if aid and to_id and _is_agentish_id(aid) and _is_agentish_id(to_id):
                 self._add_edge(aid, to_id, MESSAGE_SENT_DELTA)
             return
 
@@ -153,7 +175,7 @@ class GraphStateBuilder:
             to_id = str(payload.get("to_id", "") or "")
             thread_id = payload.get("thread_id")
             thread_id = str(thread_id) if thread_id else ""
-            if not aid or not to_id:
+            if not aid or not to_id or not _is_agentish_id(aid) or not _is_agentish_id(to_id):
                 return
 
             # Match sim logic: total delta is 0.1 * msg_count, capped at 1.0 per thread.

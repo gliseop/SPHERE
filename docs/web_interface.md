@@ -56,7 +56,7 @@ web/backend/
 | GET | `/api/run/{name}/prompts` | Промпты и ответы LLM (только `admin`, limit ≤ 1000) |
 | DELETE | `/api/runs/{run_name}` | Удалить прогон |
 
-`/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`.
+`/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`. CLI `magistry-lc run` по умолчанию пишет прогоны именно в `results/<timestamp>`, поэтому такие запуски сразу видны web UI без дополнительного `--out`.
 Для MAGISTRY-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl` если они вынесены из `events.jsonl`.
 
 #### Живая симуляция
@@ -77,6 +77,8 @@ web/backend/
 | POST | `/api/scenarios` | Создать сценарий |
 | PUT | `/api/scenarios/{id}` | Обновить сценарий |
 | DELETE | `/api/scenarios/{id}` | Удалить сценарий |
+
+Маршруты сценариев читают файлы `*.json`, `*.yaml` и `*.yml`. Если файл содержит полноценный `ScenarioConfig`, backend возвращает web-совместимую карточку сценария и кладёт исходный конфиг в поле `sim_config`, чтобы фронтенд мог редактировать его без потери данных.
 
 #### Типы агентов
 

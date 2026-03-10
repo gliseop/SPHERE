@@ -98,6 +98,155 @@ def test_get_run_reads_directory_events(tmp_path: Path):
     assert isinstance(payload["events"], list) and len(payload["events"]) == 1
 
 
+def test_list_scenarios_includes_yaml_scenario_config(tmp_path: Path):
+    (tmp_path / "custom_lc.yaml").write_text(
+        (
+            "version: 1\n"
+            "title: YAML scenario\n"
+            "description: YAML description\n"
+            "ticks: 7\n"
+            "seed: 11\n"
+            "agents:\n"
+            "  - agent_id: agent:off_1\n"
+            "    name: Off 1\n"
+            "    internal: true\n"
+            "world: {}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                r = client.get(
+                    "/api/scenarios",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+
+    assert r.status_code == 200
+    payload = {item["id"]: item for item in r.json()}
+    assert payload["custom_lc"]["name"] == "YAML scenario"
+    assert payload["custom_lc"]["rounds"] == 7
+    assert payload["custom_lc"]["sim_config"]["title"] == "YAML scenario"
+
+
+def test_get_scenario_reads_yaml_scenario_config(tmp_path: Path):
+    (tmp_path / "custom_lc.yaml").write_text(
+        (
+            "version: 1\n"
+            "title: YAML scenario\n"
+            "ticks: 5\n"
+            "agents:\n"
+            "  - agent_id: agent:off_1\n"
+            "    name: Off 1\n"
+            "    internal: true\n"
+            "world: {}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                r = client.get(
+                    "/api/scenarios/custom_lc",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["id"] == "custom_lc"
+    assert payload["name"] == "YAML scenario"
+    assert payload["sim_config"]["ticks"] == 5
+
+
+def test_update_yaml_scenario_preserves_extension_and_saves_sim_config(tmp_path: Path):
+    scenario_path = tmp_path / "custom_lc.yaml"
+    scenario_path.write_text(
+        (
+            "version: 1\n"
+            "title: Before update\n"
+            "ticks: 3\n"
+            "agents:\n"
+            "  - agent_id: agent:off_1\n"
+            "    name: Off 1\n"
+            "    internal: true\n"
+            "world: {}\n"
+        ),
+        encoding="utf-8",
+    )
+    payload = {
+        "name": "After update",
+        "description": "Updated from web",
+        "scenario": "S1",
+        "governance": "G1",
+        "rounds": 9,
+        "seed": 99,
+        "agents": [{"id": "off_1", "name": "Off 1", "role": "official", "initial_reputation": 7.0}],
+        "sim_config": {
+            "version": 1,
+            "title": "Ignored title",
+            "ticks": 1,
+            "seed": 42,
+            "agents": [{"agent_id": "agent:off_1", "name": "Off 1", "internal": True}],
+            "world": {},
+        },
+    }
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                r = client.put(
+                    "/api/scenarios/custom_lc",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+
+    assert r.status_code == 200
+    assert scenario_path.exists()
+    saved = scenario_path.read_text(encoding="utf-8")
+    assert "After update" in saved
+    assert "ticks: 9" in saved
+    assert "seed: 99" in saved
+
+
+def test_create_yaml_scenario_uses_next_number_across_yaml_files(tmp_path: Path):
+    (tmp_path / "S7.yaml").write_text(
+        "version: 1\ntitle: Existing\nticks: 1\nagents: []\nworld: {}\n",
+        encoding="utf-8",
+    )
+    payload = {
+        "name": "Created from sim_config",
+        "description": "desc",
+        "scenario": "S1",
+        "governance": "G1",
+        "rounds": 4,
+        "seed": 13,
+        "agents": [],
+        "sim_config": {
+            "version": 1,
+            "title": "Created from sim_config",
+            "ticks": 4,
+            "seed": 13,
+            "agents": [],
+            "world": {},
+        },
+    }
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                r = client.post(
+                    "/api/scenarios",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+
+    assert r.status_code == 201
+    assert r.json()["id"] == "S8"
+    assert (tmp_path / "S8.yaml").exists()
+
+
 def test_get_run_normalizes_lc_events_for_frontend_compat(tmp_path: Path):
     run_dir = tmp_path / "lc_run"
     run_dir.mkdir()
@@ -219,11 +368,12 @@ def test_create_scenario_viewer_gets_403():
 def test_create_scenario_admin_gets_201(tmp_path: Path):
     with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
         with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
-            r = client.post(
-                "/api/scenarios",
-                json={"name": "test scenario"},
-                headers={"Authorization": f"Bearer {admin_token()}"},
-            )
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                r = client.post(
+                    "/api/scenarios",
+                    json={"name": "test scenario"},
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
     assert r.status_code == 201
 
 

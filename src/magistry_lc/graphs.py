@@ -26,6 +26,7 @@ class WorldGraphState(TypedDict, total=False):
     world: WorldState
     events_history: list[Event]
     proposed: dict[str, list[Action]]
+    gather_errors: list[Event]
     tick_events: list[Event]
 
 

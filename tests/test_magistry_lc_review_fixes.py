@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 from datetime import date
@@ -22,6 +23,7 @@ from magistry_lc.actions import (
 from magistry_lc.arbiter import Arbiter
 from magistry_lc.config import GovernanceConfig, LLMConfig, MemoryConfig, ScenarioConfig
 from magistry_lc.dao import DaoEngine
+from magistry_lc.cli import _cmd_run
 from magistry_lc.engine import RunArtifacts, WorldEngine
 from magistry_lc.entities import EntityRecord, EntityRegistry
 from magistry_lc.events import Event
@@ -634,6 +636,86 @@ def test_langgraph_world_graph_supports_checkpoint_path(tmp_path: Path) -> None:
     state = WorldState(tick=0, registry=EntityRegistry())
     out = asyncio.run(app.ainvoke({"world": state, "events_history": []}))
     assert isinstance(out, dict)
+
+
+def test_world_engine_runs_with_langgraph_enabled(tmp_path: Path) -> None:
+    pytest.importorskip("langgraph")
+
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "langgraph-run",
+            "ticks": 1,
+            "runtime": {"use_langgraph": True},
+            "agents": [
+                {"agent_id": "agent:off_1", "name": "Off 1", "internal": True, "persona": "test"},
+            ],
+            "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider())
+    state = asyncio.run(engine.run())
+
+    assert state.tick == 0
+    assert artifacts.events_path.exists()
+    assert "arbiter_llm_error" not in artifacts.events_path.read_text(encoding="utf-8")
+
+
+def test_cli_run_defaults_to_results_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    scenario_path = tmp_path / "scenario.yaml"
+    scenario_path.write_text(
+        (
+            "version: 1\n"
+            "title: cli-run\n"
+            "ticks: 1\n"
+            "agents:\n"
+            "  - agent_id: agent:off_1\n"
+            "    name: Off 1\n"
+            "    internal: true\n"
+            "world: {}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, Path] = {}
+
+    class _FakeEngine:
+        def __init__(self, *, cfg, artifacts, provider_override=None) -> None:
+            captured["out_dir"] = artifacts.out_dir
+
+        async def run(self) -> None:
+            return None
+
+    class _FakeDatetime:
+        @classmethod
+        def now(cls):  # noqa: D401
+            class _Now:
+                @staticmethod
+                def strftime(fmt: str) -> str:
+                    return "20260310_120000"
+
+            return _Now()
+
+    monkeypatch.setattr("magistry_lc.cli.WorldEngine", _FakeEngine)
+    monkeypatch.setattr("magistry_lc.cli.datetime", _FakeDatetime)
+
+    args = argparse.Namespace(
+        scenario=str(scenario_path),
+        out=None,
+        ticks=None,
+        enrich_personas=False,
+        persona_enrich_mode=None,
+    )
+
+    _cmd_run(args)
+
+    assert captured["out_dir"] == Path("results") / "20260310_120000"
 
 
 def test_world_journal_tracks_history_and_caps() -> None:

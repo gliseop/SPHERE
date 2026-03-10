@@ -30,7 +30,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
         cfg.runtime.enrich_personas = True
     if getattr(args, "persona_enrich_mode", None):
         cfg.runtime.persona_enrich_mode = str(args.persona_enrich_mode)
-    out_dir = Path(args.out) if args.out else Path("lc_results") / datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = Path(args.out) if args.out else Path("results") / datetime.now().strftime("%Y%m%d_%H%M%S")
     artifacts = default_artifacts(out_dir)
     engine = WorldEngine(cfg=cfg, artifacts=artifacts)
     console.print(f"[bold]MAGISTRY-LC run[/bold] scenario={args.scenario} ticks={cfg.ticks} out={out_dir}")
@@ -57,7 +57,7 @@ def _llm_config_from_args(args: argparse.Namespace) -> LLMConfig:
 def _cmd_compose(args: argparse.Namespace) -> None:
     llm_cfg = _llm_config_from_args(args)
     provider = create_llm_provider(llm_cfg)
-    trace_path = Path(args.trace) if args.trace else Path("lc_results") / "compose_trace.jsonl"
+    trace_path = Path(args.trace) if args.trace else Path("results") / "compose_trace.jsonl"
     llm = LLMCaller(provider=provider, trace=TraceLog(trace_path, max_chars=llm_cfg.trace_max_chars))
 
     description = args.description
@@ -99,7 +99,7 @@ def main() -> None:
 
     p_run = sub.add_parser("run", help="Запустить симуляцию по YAML/JSON сценарию")
     p_run.add_argument("--scenario", type=str, required=True, help="Путь к сценарию (.yaml/.json)")
-    p_run.add_argument("--out", type=str, default=None, help="Выходная директория (по умолчанию lc_results/<ts>)")
+    p_run.add_argument("--out", type=str, default=None, help="Выходная директория (по умолчанию results/<ts>)")
     p_run.add_argument("--ticks", type=int, default=None, help="Переопределить число тиков")
     p_run.add_argument(
         "--enrich-personas",

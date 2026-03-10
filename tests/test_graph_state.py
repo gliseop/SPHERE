@@ -152,3 +152,34 @@ def test_graph_state_marks_typed_governance_agent_without_reputation():
 
     nodes = {node["id"]: node for node in graph["nodes"]}
     assert nodes["agent:auditor"]["has_reputation"] is False
+
+
+def test_graph_state_ignores_channel_targets_in_agent_graph():
+    graph = build_graph_state(
+        [
+            {
+                "tick": 1,
+                "event_type": "message_sent",
+                "actor_id": "agent:off_1",
+                "payload": {"to_id": "chan:public", "private": False, "text": "notice"},
+            }
+        ]
+    )
+
+    assert {node["id"] for node in graph["nodes"]} == {"agent:off_1"}
+    assert graph["edges"] == []
+
+
+def test_graph_state_updates_position_title_from_position_changed():
+    graph = build_graph_state(
+        [
+            {
+                "tick": 2,
+                "event_type": "position_changed",
+                "payload": {"target_agent_id": "agent:off_1", "new_title": "руководитель отдела"},
+            }
+        ]
+    )
+
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    assert nodes["agent:off_1"]["position_title"] == "руководитель отдела"

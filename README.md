@@ -52,7 +52,7 @@ magistry-lc compose --description "Тендер на ремонт дорог, 4 
 magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
 ```
 
-При запуске `magistry-lc run` движок пишет `events.jsonl`, `trace.jsonl`, `truth.jsonl`, `evaluation.json`, `fidelity.json` и `summary.json` в директорию прогона.
+При запуске `magistry-lc run` движок пишет `events.jsonl`, `trace.jsonl`, `truth.jsonl`, `evaluation.json`, `fidelity.json` и `summary.json` в директорию прогона. Если `--out` не указан, используется `results/<timestamp>`, поэтому прогон сразу доступен web-интерфейсу.
 
 ### Запуск веб-интерфейса
 
