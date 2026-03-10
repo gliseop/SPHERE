@@ -57,7 +57,7 @@ test('header metrics only on monitor', async ({ page, request }) => {
 })
 
 test('delete run via UI (runner not selectable)', async ({ page, request }) => {
-  const token = await openAuthedApp(page, request)
+  await openAuthedApp(page, request)
 
   await page.getByRole('button', { name: /^Прогоны/ }).click()
 

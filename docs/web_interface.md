@@ -57,7 +57,8 @@ web/backend/
 | DELETE | `/api/runs/{run_name}` | Удалить прогон |
 
 `/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`. CLI `magistry-lc run` по умолчанию пишет прогоны именно в `results/<timestamp>`, поэтому такие запуски сразу видны web UI без дополнительного `--out`.
-Для MAGISTRY-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl` если они вынесены из `events.jsonl`.
+Для directory-based LC-run движок дополнительно пишет sidecar-файлы `scenario.json`, `names.json`, `trace.jsonl` и `summary.json`, чтобы web UI мог загрузить конфиг прогона, человеко-читаемые имена агентов и prompt-inspector без отдельной конвертации.
+Для MAGISTRY-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl`, если они вынесены из `events.jsonl`.
 
 #### Живая симуляция
 
@@ -135,10 +136,13 @@ web/backend/
 - `/ws/live` — мониторинг активного прогона (автовыбор или `run_name` в query).
 - `/ws/playback/{name}` — воспроизведение сохранённого прогона.
 
+После установления WebSocket-соединения клиент обязан первым сообщением отправить JSON вида `{"type":"auth","token":"<JWT>"}`. JWT больше не передаётся в query string, чтобы не утекать в URL-логи и историю браузера.
+
 Фактические типы сообщений:
 
 | Тип | Направление | Описание |
 |---|---|---|
+| `auth` | клиент → сервер | Первое сообщение после подключения: JWT-аутентификация |
 | `meta` | сервер → клиент | Метаданные прогона (`scenario`, `governance`, `seed`, `run_name`, `names`) |
 | `event` | сервер → клиент | Одно событие |
 | `events` | сервер → клиент | Пакет событий |

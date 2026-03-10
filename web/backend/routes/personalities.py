@@ -72,6 +72,7 @@ async def delete_personality(personality_id: str, _user: User = Depends(require_
 @router.get("/api/personalities/{personality_id}/interview")
 async def get_interview(personality_id: str, _user: User = Depends(require_viewer)) -> dict:
     """Получить интервью для личности (без embedding для экономии трафика)."""
+    validate_library_id(personality_id, PERSONALITIES_DIR, kind="personality")
     path = INTERVIEWS_DIR / f"{personality_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Interview not found")
@@ -93,6 +94,7 @@ async def generate_personality_interview(
 
     Зависит от magistry_sim (interviews, personality) и пока недоступен.
     """
+    validate_library_id(personality_id, PERSONALITIES_DIR, kind="personality")
     raise HTTPException(
         status_code=501,
         detail="Генерация интервью недоступна: движок magistry_sim удалён.",
@@ -102,6 +104,7 @@ async def generate_personality_interview(
 @router.delete("/api/personalities/{personality_id}/interview", status_code=204)
 async def delete_interview(personality_id: str, _user: User = Depends(require_admin)) -> None:
     """Удалить интервью для перегенерации."""
+    validate_library_id(personality_id, PERSONALITIES_DIR, kind="personality")
     path = INTERVIEWS_DIR / f"{personality_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Interview not found")

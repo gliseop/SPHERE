@@ -87,7 +87,9 @@ class RuntimeAuditor:
             payload = {
                 "finding_id": finding.finding_id,
                 "case_id": case_id,
+                "subject_agent_id": finding.subject_agent_id,
                 "target_agent_id": finding.subject_agent_id,
+                "related_target_agent_id": finding.target_agent_id,
                 "violation_type": finding.violation_type,
                 "severity": finding.severity,
                 "confidence": round(float(finding.confidence), 3),

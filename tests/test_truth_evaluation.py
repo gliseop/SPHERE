@@ -104,6 +104,100 @@ def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:
     assert summary.recall == 1.0
 
 
+def test_truth_dedupe_keeps_distinct_targets_same_tick() -> None:
+    records = TruthDetector._dedupe(
+        [
+            TruthRecord(
+                tick=3,
+                subject_agent_id="agent:off_1",
+                violation_type="nomination_after_private_contact",
+                target_agent_id="agent:off_2",
+                evidence_refs=[{"vote_id": "vote:1"}],
+            ),
+            TruthRecord(
+                tick=3,
+                subject_agent_id="agent:off_1",
+                violation_type="nomination_after_private_contact",
+                target_agent_id="agent:off_3",
+                evidence_refs=[{"vote_id": "vote:2"}],
+            ),
+        ]
+    )
+
+    assert len(records) == 2
+
+
+def test_evaluate_run_counts_multiple_same_type_violations_same_tick(tmp_path: Path) -> None:
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.extend(
+        [
+            TruthRecord(
+                tick=5,
+                subject_agent_id="agent:off_1",
+                violation_type="nomination_after_private_contact",
+                target_agent_id="agent:off_2",
+                evidence_refs=[{"vote_id": "vote:1", "target_agent_id": "agent:off_2"}],
+            ),
+            TruthRecord(
+                tick=5,
+                subject_agent_id="agent:off_1",
+                violation_type="nomination_after_private_contact",
+                target_agent_id="agent:off_3",
+                evidence_refs=[{"vote_id": "vote:2", "target_agent_id": "agent:off_3"}],
+            ),
+        ]
+    )
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "tick": 5,
+                        "event_type": "audit_flagged",
+                        "actor_id": "agent:auditor",
+                        "payload": {
+                            "subject_agent_id": "agent:off_1",
+                            "target_agent_id": "agent:off_1",
+                            "related_target_agent_id": "agent:off_2",
+                            "violation_type": "nomination_after_private_contact",
+                            "evidence_refs": [{"vote_id": "vote:1", "target_agent_id": "agent:off_2"}],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "tick": 5,
+                        "event_type": "audit_flagged",
+                        "actor_id": "agent:auditor",
+                        "payload": {
+                            "subject_agent_id": "agent:off_1",
+                            "target_agent_id": "agent:off_1",
+                            "related_target_agent_id": "agent:off_3",
+                            "violation_type": "nomination_after_private_contact",
+                            "evidence_refs": [{"vote_id": "vote:2", "target_agent_id": "agent:off_3"}],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(
+        events_path=tmp_path / "events.jsonl",
+        truth_path=tmp_path / "truth.jsonl",
+    )
+
+    assert summary.truth_total == 2
+    assert summary.runtime_flagged_total == 2
+    assert summary.true_positive == 2
+    assert summary.false_positive == 0
+    assert summary.false_negative == 0
+
+
 def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     cfg = ScenarioConfig.model_validate(
         {
@@ -166,6 +260,8 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert artifacts.evaluation_path is not None and artifacts.evaluation_path.exists()
     assert artifacts.fidelity_path is not None and artifacts.fidelity_path.exists()
     assert artifacts.summary_path is not None and artifacts.summary_path.exists()
+    assert artifacts.scenario_path is not None and artifacts.scenario_path.exists()
+    assert artifacts.names_path is not None and artifacts.names_path.exists()
 
     truth_records = [
         json.loads(line)
@@ -175,6 +271,8 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     evaluation = json.loads(artifacts.evaluation_path.read_text(encoding="utf-8"))
     fidelity = json.loads(artifacts.fidelity_path.read_text(encoding="utf-8"))
     combined = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+    scenario = json.loads(artifacts.scenario_path.read_text(encoding="utf-8"))
+    names = json.loads(artifacts.names_path.read_text(encoding="utf-8"))
 
     assert truth_records
     assert evaluation["truth_total"] >= 1
@@ -182,3 +280,5 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert "temporal_violations_total" in fidelity
     assert combined["governance"]["truth_total"] >= 1
     assert "fidelity" in combined
+    assert scenario["title"] == "lc-truth-evaluation"
+    assert names == {"agent:auditor": "Auditor"}

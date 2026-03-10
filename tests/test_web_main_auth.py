@@ -295,6 +295,16 @@ def test_export_run_reads_directory_sidecars(tmp_path: Path):
     assert payload["summary"] == {"score": 1}
 
 
+def test_get_interview_rejects_backslash_path_traversal():
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        r = client.get(
+            "/api/personalities/..%5Csecret/interview",
+            headers={"Authorization": f"Bearer {viewer_token()}"},
+        )
+
+    assert r.status_code == 400
+
+
 def test_prompts_endpoint_requires_admin(tmp_path: Path):
     run_dir = tmp_path / "lc_run"
     run_dir.mkdir()
@@ -446,8 +456,38 @@ def test_ws_playback_rejects_zero_speed(tmp_path: Path):
         with patch("web.backend.websocket.RESULTS_DIR", tmp_path):
             with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
                 with client.websocket_connect(
-                    f"/ws/playback/lc_run?token={viewer_token()}&speed=0"
+                    "/ws/playback/lc_run?speed=0"
                 ) as websocket:
+                    websocket.send_json({"type": "auth", "token": viewer_token()})
                     payload = websocket.receive_json()
 
     assert payload == {"type": "error", "message": "Invalid speed"}
+
+
+def test_ws_playback_skips_invalid_json_lines(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        (
+            '{"tick":1,"event_type":"noop","payload":{}}\n'
+            '{not-json}\n'
+            '{"tick":2,"event_type":"noop","payload":{}}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.websocket.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                with client.websocket_connect("/ws/playback/lc_run?speed=100") as websocket:
+                    websocket.send_json({"type": "auth", "token": viewer_token()})
+                    messages = []
+                    for _ in range(6):
+                        message = websocket.receive_json()
+                        messages.append(message)
+                        if message.get("type") == "done":
+                            break
+
+    assert not any(message.get("type") == "error" for message in messages)
+    event_messages = [message for message in messages if message.get("type") in {"event", "events"}]
+    assert event_messages

@@ -34,6 +34,7 @@ from .settings import (
 from .validators import validate_run_name
 
 router = APIRouter()
+_WS_AUTH_TIMEOUT_S = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -272,9 +273,49 @@ async def _stream_events_from_file(
     async with aiofiles.open(path, encoding="utf-8") as f:
         async for line in f:
             line = line.strip()
-            if line:
-                yield json.loads(line)
-                await asyncio.sleep(delay)
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            yield event
+            await asyncio.sleep(delay)
+
+
+async def _reject_websocket(websocket: WebSocket, message: str, *, code: int = 1008) -> None:
+    await websocket.send_json({"type": "error", "message": message})
+    await websocket.close(code=code)
+
+
+async def _authenticate_websocket(websocket: WebSocket) -> bool:
+    try:
+        raw_message = await asyncio.wait_for(websocket.receive_text(), timeout=_WS_AUTH_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        await _reject_websocket(websocket, "Unauthorized")
+        return False
+    except WebSocketDisconnect:
+        return False
+    except Exception:
+        await _reject_websocket(websocket, "Unauthorized")
+        return False
+
+    try:
+        message = json.loads(raw_message)
+    except json.JSONDecodeError:
+        await _reject_websocket(websocket, "Unauthorized")
+        return False
+
+    if not isinstance(message, dict) or str(message.get("type") or "") != "auth":
+        await _reject_websocket(websocket, "Unauthorized")
+        return False
+
+    token = message.get("token")
+    if not isinstance(token, str) or verify_ws_token(token) is None:
+        await _reject_websocket(websocket, "Unauthorized")
+        return False
+
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +327,6 @@ async def _stream_events_from_file(
 async def ws_playback(
     websocket: WebSocket,
     name: str,
-    token: str | None = None,
     speed: float = 1.0,
 ) -> None:
     """WebSocket для воспроизведения записанного прогона.
@@ -294,28 +334,22 @@ async def ws_playback(
     Args:
         websocket: WebSocket-соединение.
         name: Имя прогона.
-        token: JWT-токен из query-параметра.
         speed: Скорость воспроизведения.
     """
     await websocket.accept()
-    if verify_ws_token(token) is None:
-        await websocket.send_json({"type": "error", "message": "Unauthorized"})
-        await websocket.close(code=1008)
+    if not await _authenticate_websocket(websocket):
         return
     if not math.isfinite(speed) or speed <= 0:
-        await websocket.send_json({"type": "error", "message": "Invalid speed"})
-        await websocket.close(code=1008)
+        await _reject_websocket(websocket, "Invalid speed")
         return
     try:
         validate_run_name(name)
     except Exception:
-        await websocket.send_json({"type": "error", "message": "Invalid run name"})
-        await websocket.close()
+        await _reject_websocket(websocket, "Invalid run name", code=1000)
         return
     ref = resolve_run_artifact(name, results_dir=RESULTS_DIR)
     if ref is None:
-        await websocket.send_json({"type": "error", "message": "Run not found"})
-        await websocket.close()
+        await _reject_websocket(websocket, "Run not found", code=1000)
         return
 
     path = ref.events_path
@@ -362,7 +396,6 @@ async def ws_playback(
 @router.websocket("/ws/live")
 async def ws_live(
     websocket: WebSocket,
-    token: str | None = None,
     run_name: str | None = None,
 ) -> None:
     """WebSocket для мониторинга текущего прогона.
@@ -371,13 +404,10 @@ async def ws_live(
 
     Args:
         websocket: WebSocket-соединение.
-        token: JWT-токен из query-параметра.
         run_name: Имя конкретного прогона (опционально).
     """
     await websocket.accept()
-    if verify_ws_token(token) is None:
-        await websocket.send_json({"type": "error", "message": "Unauthorized"})
-        await websocket.close(code=1008)
+    if not await _authenticate_websocket(websocket):
         return
 
     from web.backend.runner import list_active
@@ -399,8 +429,7 @@ async def ws_live(
             try:
                 validate_run_name(run_name)
             except Exception:
-                await websocket.send_json({"type": "error", "message": "Invalid run name"})
-                await websocket.close()
+                await _reject_websocket(websocket, "Invalid run name", code=1000)
                 return
 
         while True:

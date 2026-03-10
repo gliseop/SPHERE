@@ -29,6 +29,37 @@ const INITIAL_STATE: SimState = {
 const MAX_EVENTS = 10_000
 const EVENT_FLUSH_INTERVAL_MS = 60
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function extractNamesFromEvent(event: SimEvent): Record<string, string> {
+  const out: Record<string, string> = {}
+  const rawEvent = event as SimEvent & { agent_name?: unknown }
+  if (typeof rawEvent.agent_id === 'string' && typeof rawEvent.agent_name === 'string' && rawEvent.agent_name) {
+    out[rawEvent.agent_id] = rawEvent.agent_name
+  }
+
+  const payload = isRecord(event.payload) ? event.payload : null
+  if (!payload) return out
+
+  const toId = typeof payload.to_id === 'string' ? payload.to_id : ''
+  const toName = typeof payload.to_name === 'string' ? payload.to_name : ''
+  if (toId && toName) {
+    out[toId] = toName
+  }
+
+  const entityId = typeof payload.entity_id === 'string' ? payload.entity_id : ''
+  const kind = typeof payload.kind === 'string' ? payload.kind : ''
+  const meta = isRecord(payload.meta) ? payload.meta : null
+  const createdName = meta && typeof meta.name === 'string' ? meta.name : ''
+  if (kind === 'agent' && entityId && createdName) {
+    out[entityId] = createdName
+  }
+
+  return out
+}
+
 export function useSimulation() {
   const [state, setState] = useState<SimState>(INITIAL_STATE)
   const [mode, setMode] = useState<SimMode>('idle')
@@ -49,7 +80,7 @@ export function useSimulation() {
     setMode('idle')
   }, [])
 
-  const connect = useCallback((url: string, newMode: SimMode) => {
+  const connect = useCallback((url: string, newMode: SimMode, token: string) => {
     disconnect()
     setState(INITIAL_STATE)
     setMode(newMode)
@@ -67,6 +98,10 @@ export function useSimulation() {
         const nextEvents = combined > MAX_EVENTS
           ? [...prev.events.slice(combined - MAX_EVENTS), ...normalizedChunk]
           : [...prev.events, ...normalizedChunk]
+        const nextNames = { ...prev.names }
+        for (const event of normalizedChunk) {
+          Object.assign(nextNames, extractNamesFromEvent(event))
+        }
         let nextRound = prev.currentRound
         for (let i = normalizedChunk.length - 1; i >= 0; i--) {
           const r = normalizedChunk[i]?.round
@@ -78,6 +113,8 @@ export function useSimulation() {
         return {
           ...prev,
           events: nextEvents,
+          names: nextNames,
+          meta: prev.meta ? { ...prev.meta, names: nextNames } : prev.meta,
           currentRound: nextRound,
         }
       })
@@ -89,6 +126,10 @@ export function useSimulation() {
         flushTimerRef.current = null
         flushBufferedEvents()
       }, EVENT_FLUSH_INTERVAL_MS)
+    }
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'auth', token }))
     }
 
     ws.onmessage = (evt) => {
@@ -147,9 +188,12 @@ export function useSimulation() {
     (run: RunInfo, speed: number = 2.0) => {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const token = getToken()
-      const tokenParam = token ? `&token=${encodeURIComponent(token)}` : ''
-      const url = `${proto}//${window.location.host}/ws/playback/${run.name}?speed=${speed}${tokenParam}`
-      connect(url, 'playback')
+      if (!token) {
+        setState((prev) => ({ ...prev, error: 'Не выполнен вход' }))
+        return
+      }
+      const url = `${proto}//${window.location.host}/ws/playback/${run.name}?speed=${speed}`
+      connect(url, 'playback', token)
     },
     [connect]
   )
@@ -157,12 +201,15 @@ export function useSimulation() {
   const startLive = useCallback((runName?: string) => {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const token = getToken()
+    if (!token) {
+      setState((prev) => ({ ...prev, error: 'Не выполнен вход' }))
+      return
+    }
     const qs = new URLSearchParams()
-    if (token) qs.set('token', token)
     if (runName) qs.set('run_name', runName)
     const suffix = qs.toString() ? `?${qs.toString()}` : ''
     const url = `${proto}//${window.location.host}/ws/live${suffix}`
-    connect(url, 'live')
+    connect(url, 'live', token)
   }, [connect])
 
   useEffect(() => () => disconnect(), [disconnect])

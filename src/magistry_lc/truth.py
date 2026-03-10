@@ -207,10 +207,10 @@ class TruthDetector:
 
     @staticmethod
     def _dedupe(records: list[TruthRecord]) -> list[TruthRecord]:
-        seen: set[tuple[int, str, str]] = set()
+        seen: set[tuple[int, str, str, str | None, str]] = set()
         out: list[TruthRecord] = []
         for record in records:
-            key = (int(record.tick), record.subject_agent_id, record.violation_type)
+            key = _record_key(record)
             if key in seen:
                 continue
             seen.add(key)
@@ -233,3 +233,20 @@ def _as_float(value: Any, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _record_key(record: TruthRecord) -> tuple[int, str, str, str | None, str]:
+    return (
+        int(record.tick),
+        record.subject_agent_id,
+        record.violation_type,
+        record.target_agent_id,
+        _evidence_signature(record.evidence_refs),
+    )
+
+
+def _evidence_signature(evidence_refs: list[dict[str, Any]]) -> str:
+    try:
+        return json.dumps(list(evidence_refs or []), ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return repr(list(evidence_refs or []))

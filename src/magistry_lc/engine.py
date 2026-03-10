@@ -70,6 +70,8 @@ class RunArtifacts:
     out_dir: Path
     events_path: Path
     trace_path: Path
+    scenario_path: Path | None = None
+    names_path: Path | None = None
     truth_path: Path | None = None
     evaluation_path: Path | None = None
     fidelity_path: Path | None = None
@@ -86,6 +88,10 @@ class WorldEngine:
 
     def __post_init__(self) -> None:
         self.artifacts.out_dir.mkdir(parents=True, exist_ok=True)
+        if self.artifacts.scenario_path is None:
+            self.artifacts.scenario_path = self.artifacts.out_dir / "scenario.json"
+        if self.artifacts.names_path is None:
+            self.artifacts.names_path = self.artifacts.out_dir / "names.json"
         if self.artifacts.truth_path is None:
             self.artifacts.truth_path = self.artifacts.out_dir / "truth.jsonl"
         if self.artifacts.evaluation_path is None:
@@ -123,6 +129,7 @@ class WorldEngine:
                     exc.__class__.__name__,
                     exc,
                 )
+        self._write_run_sidecars(state=state, include_scenario=True)
         journal = WorldJournal.from_state(state=state)
         truth_detector = TruthDetector(
             private_contact_window_ticks=self.cfg.governance.audit.private_contact_window_ticks
@@ -272,6 +279,7 @@ class WorldEngine:
                     embedder=embedder,
                     embed_cache=embed_cache,
                 )
+                self._write_names_sidecar(state=state)
 
             # DAO: закрытие голосований и применение position_change.
             dao_ops = dao.close_votes(state)
@@ -336,6 +344,7 @@ class WorldEngine:
                                 embedder=embedder,
                                 embed_cache=embed_cache,
                             )
+                            self._write_names_sidecar(state=state)
 
             truth_window = int(self.cfg.governance.audit.lookback_events)
             truth_recent = events_history[-truth_window:] if truth_window > 0 else list(events_history)
@@ -424,7 +433,29 @@ class WorldEngine:
                 json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
+        self._write_names_sidecar(state=state)
         return state
+
+    def _write_run_sidecars(self, *, state: WorldState, include_scenario: bool) -> None:
+        if include_scenario and self.artifacts.scenario_path is not None:
+            self.artifacts.scenario_path.write_text(
+                json.dumps(self.cfg.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        self._write_names_sidecar(state=state)
+
+    def _write_names_sidecar(self, *, state: WorldState) -> None:
+        if self.artifacts.names_path is None:
+            return
+        names = {
+            aid: agent.name
+            for aid, agent in sorted(state.agents.items())
+            if agent.name.strip()
+        }
+        self.artifacts.names_path.write_text(
+            json.dumps(names, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     def _agent_order(self, *, state: WorldState, tick: int) -> list[str]:
         """Детерминированный порядок агентов на тик (использует seed)."""
