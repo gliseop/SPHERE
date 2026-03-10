@@ -190,6 +190,8 @@ Agent prompt использует не один общий retrieval-блок, �
 - `events`: обычные `world_event`;
 - `spawns`: предложения создать новых событийных персонажей.
 
+`worldgen_every_ticks` должен быть строго положительным числом. Нулевое значение теперь считается невалидной конфигурацией и отклоняется на этапе загрузки `ScenarioConfig`, чтобы движок не падал на modulo при проверке расписания worldgen.
+
 Если задана каноническая временная ось (`runtime.start_date`, `runtime.tick_duration_days`), движок дополнительно передаёт worldgen текущую дату симуляции. Это уменьшает temporal drift в описаниях совещаний, дедлайнов и публикаций.
 
 Движок принимает `spawns` только если `runtime.allow_runtime_spawn=true`. Для совместимости worldgen по-прежнему понимает legacy-формат `list[world_event]` без блока `spawns`. Дополнительно движок требует человеко-читаемый display-name, отсекает role-only ярлыки и не принимает внутренних акторов от worldgen, если `runtime.worldgen_allow_internal_spawns=false`.
@@ -263,6 +265,7 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 - `max_secondary_per_agent`: лимит связей, извлекаемых из одной персоны.
 - `max_agents`: общий потолок числа агентов в мире.
 - `allow_runtime_spawn`: разрешить `spawn_agent` и worldgen-spawn в ходе симуляции.
+- `worldgen_every_ticks`: положительный интервал запуска worldgen; должен быть `> 0`.
 - `worldgen_allow_internal_spawns`: разрешить worldgen создавать внутренних акторов.
 
 Ключевые поля `governance.audit`:

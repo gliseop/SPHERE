@@ -7,6 +7,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from magistry_lc.llm import MockLLMProvider
 
@@ -587,6 +588,20 @@ def test_create_llm_provider_loads_dotenv_from_cwd(
 
     assert captured["api_key"] == "dotenv-test-key"
     assert captured["base_url"] == "https://dotenv.example/v1"
+
+
+def test_runtime_config_rejects_zero_worldgen_interval() -> None:
+    with pytest.raises(ValidationError):
+        ScenarioConfig.model_validate(
+            {
+                "version": 1,
+                "title": "bad-worldgen-interval",
+                "ticks": 1,
+                "runtime": {"enable_worldgen": True, "worldgen_every_ticks": 0},
+                "agents": [],
+                "world": {},
+            }
+        )
 
 
 def test_memory_summarizes_working_buffer(tmp_path: Path) -> None:

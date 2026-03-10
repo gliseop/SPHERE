@@ -183,6 +183,13 @@ class RuntimeConfig(BaseModel):
             raise ValueError("tick_duration_days must be > 0")
         return v
 
+    @field_validator("worldgen_every_ticks")
+    @classmethod
+    def _validate_worldgen_every_ticks(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("worldgen_every_ticks must be > 0")
+        return v
+
     @field_validator("max_secondary_per_agent")
     @classmethod
     def _validate_secondary_limit(cls, v: int) -> int:

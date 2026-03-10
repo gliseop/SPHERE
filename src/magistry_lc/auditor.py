@@ -252,7 +252,7 @@ class RuntimeAuditor:
                             confidence=confidence,
                             summary="Агент изменил репутацию после недавних приватных контактов с адресатом.",
                             recommended_action="freeze" if confidence >= self.cfg.min_confidence_to_freeze else "flag",
-                            target_agent_id=actor_id,
+                            target_agent_id=target_id,
                             related_agent_ids=[target_id],
                             evidence_refs=[_event_ref(event)],
                         )
@@ -293,7 +293,7 @@ class RuntimeAuditor:
                             confidence=confidence,
                             summary="Агент открыл голосование после недавних приватных контактов с целью номинации.",
                             recommended_action="flag",
-                            target_agent_id=actor_id,
+                            target_agent_id=target_id,
                             related_agent_ids=[target_id],
                             evidence_refs=[_event_ref(event)],
                         )
@@ -327,7 +327,7 @@ class RuntimeAuditor:
                                 if confidence >= self.cfg.min_confidence_to_freeze
                                 else "flag"
                             ),
-                            target_agent_id=actor_id,
+                            target_agent_id=target_id,
                             related_agent_ids=[target_id],
                             evidence_refs=[_event_ref(event)],
                         )
@@ -382,6 +382,7 @@ class RuntimeAuditor:
             "violation_type": violation_type,
             "target_agent_id": target_agent_id,
             "related_agent_ids": list(related_agent_ids or []),
+            "evidence_refs": list(evidence_refs or []),
         }
         digest = hashlib.sha1(json.dumps(key, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
         return AuditFinding(
@@ -400,10 +401,15 @@ class RuntimeAuditor:
 
     @staticmethod
     def _dedupe_findings(findings: list[AuditFinding]) -> list[AuditFinding]:
-        seen: set[tuple[str, str, str | None]] = set()
+        seen: set[tuple[str, str, str | None, str]] = set()
         out: list[AuditFinding] = []
         for finding in findings:
-            key = (finding.subject_agent_id, finding.violation_type, finding.target_agent_id)
+            key = (
+                finding.subject_agent_id,
+                finding.violation_type,
+                finding.target_agent_id,
+                _evidence_signature(finding.evidence_refs),
+            )
             if key in seen:
                 continue
             seen.add(key)
@@ -426,3 +432,10 @@ def _as_float(value: Any, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _evidence_signature(evidence_refs: list[dict[str, Any]]) -> str:
+    try:
+        return json.dumps(list(evidence_refs or []), ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return repr(list(evidence_refs or []))

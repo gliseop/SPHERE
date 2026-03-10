@@ -387,6 +387,36 @@ def test_create_scenario_admin_gets_201(tmp_path: Path):
     assert r.status_code == 201
 
 
+def test_create_scenario_invalid_sim_config_does_not_leave_empty_file(tmp_path: Path):
+    payload = {
+        "name": "broken scenario",
+        "scenario": "S1",
+        "governance": "G1",
+        "rounds": 2,
+        "agents": [],
+        "sim_config": {
+            "version": 1,
+            "title": "broken",
+            "ticks": 1,
+            "agents": [],
+            "world": {},
+            "unexpected": 1,
+        },
+    }
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                r = client.post(
+                    "/api/scenarios",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+
+    assert r.status_code == 400
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_delete_scenario_viewer_gets_403():
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         r = client.delete(

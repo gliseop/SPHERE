@@ -212,7 +212,16 @@ async def create_scenario(payload: ScenarioPayload, _user: User = Depends(requir
         try:
             with path.open("x", encoding="utf-8") as handle:
                 handle.write("")
-            return _save_payload(path, payload, scenario_id=scenario_id)
+            try:
+                return _save_payload(path, payload, scenario_id=scenario_id)
+            except Exception:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+                raise
         except FileExistsError:
             continue
         except OSError as exc:

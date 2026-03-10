@@ -29,6 +29,7 @@ runtime:
   max_actions_per_turn: 2
   tick_events_history: 200
   enable_worldgen: false
+  worldgen_every_ticks: 1
   enrich_personas: false
   persona_enrich_mode: "full"  # full | core
   spawn_secondary: false
@@ -106,6 +107,7 @@ world:
 | `tick_duration_days` | `int` | Сколько календарных дней проходит за один тик симуляции |
 | `temporal_past_slack_days` | `int` | Сколько дней назад арбитр ещё допускает абсолютную дату в действии |
 | `temporal_future_horizon_days` | `int` | Максимальный горизонт будущих абсолютных дат в структурированных действиях |
+| `worldgen_every_ticks` | `int` | Положительный интервал запуска worldgen в тиках; `0` и отрицательные значения недопустимы |
 | `enrich_personas` | `bool` | Runtime-обогащение summary → biography/interview перед первым тиком |
 | `persona_enrich_mode` | `full`/`core` | `full` = summary+biography+interview+expert reflection, `core` = summary+biography |
 | `spawn_secondary` | `bool` | Извлекать вторичных агентов из социального графа биографий до первого тика |

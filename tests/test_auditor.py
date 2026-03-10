@@ -153,6 +153,92 @@ def test_runtime_auditor_flags_support_vote_after_private_contact() -> None:
     assert any(op.__class__.__name__ == "SetReputationFreezeOp" for op in outcome.ops)
 
 
+def test_runtime_auditor_keeps_distinct_targets_for_same_violation_type() -> None:
+    state = _mk_state()
+    state.agents["agent:off_3"] = AgentState(
+        agent_id="agent:off_3",
+        name="agent:off_3",
+        internal=True,
+        capabilities=["dao", "message"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:off_3",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "agent:off_3"},
+        )
+    )
+    state.tick = 2
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_2",
+        created_tick=1,
+        closes_tick=3,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1"],
+    )
+    state.votes["vote:2"] = Vote(
+        vote_id="vote:2",
+        vote_type="position_change",
+        created_by="agent:off_3",
+        created_tick=1,
+        closes_tick=3,
+        target_agent_id="agent:off_3",
+        new_title="lead",
+        voters=["agent:off_1"],
+    )
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True))
+
+    recent_events = [
+        Event(
+            tick=1,
+            event_type="message_sent",
+            actor_id="agent:off_1",
+            payload={"to_id": "agent:off_2", "private": True, "text": "secret"},
+            audience=["agent:off_1", "agent:off_2"],
+        ),
+        Event(
+            tick=1,
+            event_type="message_sent",
+            actor_id="agent:off_1",
+            payload={"to_id": "agent:off_3", "private": True, "text": "secret"},
+            audience=["agent:off_1", "agent:off_3"],
+        ),
+    ]
+    tick_events = [
+        Event(
+            tick=2,
+            event_type="vote_cast",
+            actor_id="agent:off_1",
+            payload={"vote_id": "vote:1", "choice": "yes"},
+        ),
+        Event(
+            tick=2,
+            event_type="vote_cast",
+            actor_id="agent:off_1",
+            payload={"vote_id": "vote:2", "choice": "yes"},
+        ),
+    ]
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=tick_events,
+            recent_events=recent_events,
+        )
+    )
+
+    assert len(outcome.findings) == 2
+    assert {
+        finding.target_agent_id
+        for finding in outcome.findings
+    } == {"agent:off_2", "agent:off_3"}
+
+
 def test_runtime_auditor_freezes_self_reputation_award() -> None:
     state = _mk_state()
     state.tick = 3

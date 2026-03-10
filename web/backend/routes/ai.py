@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os as _os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+
+from magistry_lc.llm import create_provider
 
 from web.backend.auth import require_admin
 from web.backend.database import User
@@ -19,6 +22,27 @@ from web.backend.settings import PERSONALITIES_DIR
 from web.backend.validators import validate_library_id
 
 router = APIRouter(tags=["ai"])
+
+
+async def _generate_structured_via_provider(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    schema: dict[str, Any],
+    temperature: float,
+):
+    """Выполнить structured LLM-вызов вне event loop."""
+
+    def _call():
+        llm = create_provider(mock=False, cache_path=".llm_cache.db", use_tool_calls=True)
+        return llm.generate_structured(
+            system=system_prompt,
+            user=user_prompt,
+            schema=schema,
+            temperature=temperature,
+        )
+
+    return await asyncio.to_thread(_call)
 
 
 @router.post("/api/ai/generate-personality")
@@ -116,11 +140,10 @@ async def generate_personality(
     system_prompt = (payload.system_prompt or system_prompt).strip()
     user_prompt = (payload.user_prompt or f"\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u0436\u0430:\n{payload.description}").strip()
 
-    llm = create_provider(mock=False, cache_path=".llm_cache.db", use_tool_calls=True)
     try:
-        response = llm.generate_structured(
-            system=system_prompt,
-            user=user_prompt,
+        response = await _generate_structured_via_provider(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             schema=schema,
             temperature=0.25,
         )
@@ -192,11 +215,10 @@ async def generate_agent_type(
     system_prompt = (payload.system_prompt or system_prompt_default).strip()
     user_prompt = (payload.user_prompt or user_prompt_default).strip()
 
-    llm = create_provider(mock=False, cache_path=".llm_cache.db", use_tool_calls=True)
     try:
-        response = llm.generate_structured(
-            system=system_prompt,
-            user=user_prompt,
+        response = await _generate_structured_via_provider(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             schema=schema,
             temperature=0.35,
         )
