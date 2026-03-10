@@ -124,7 +124,7 @@ python -m web.backend.manage_users change-role --username viewer1 --role admin
 | Переменная | Описание |
 |---|---|
 | `OPENAI_API_KEY` | Ключ OpenAI API для LLM-вызовов (обязателен для симуляций) |
-| `JWT_SECRET` | Секрет для JWT-токенов (обязателен для веб-интерфейса в продакшен-режиме) |
+| `JWT_SECRET` | Секрет для JWT-токенов длиной не менее 32 байт (обязателен для веб-интерфейса в продакшен-режиме) |
 
 ### LLM и эмбеддинги
 
@@ -139,7 +139,7 @@ python -m web.backend.manage_users change-role --username viewer1 --role admin
 |---|---|---|
 | `JWT_EXPIRE_HOURS` | `24` | Время жизни JWT-токена в часах |
 | `ALLOWED_ORIGIN` | — | Разрешённый домен для CORS |
-| `MAGISTRY_DEV` | `0` | Режим разработки: `1` позволяет работу без `JWT_SECRET` |
+| `MAGISTRY_DEV` | `0` | Режим разработки: `1` позволяет запуск без явного `JWT_SECRET`, при этом backend генерирует одноразовый секрет на процесс |
 | `MAGISTRY_MAX_RUNNING` | `5` | Максимум одновременно запущенных симуляций |
 | `MAGISTRY_MAX_BODY_BYTES` | `2097152` (2 МБ) | Максимальный размер тела HTTP-запроса |
 

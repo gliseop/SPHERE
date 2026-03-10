@@ -1190,8 +1190,19 @@ class WorldEngine:
             event_log.extend(op.apply(state))
 
         for a in self.cfg.agents:
+            agent_meta = {
+                "name": a.name,
+                "internal": a.internal,
+                "capabilities": list(a.capabilities),
+            }
             state.registry.register(
-                EntityRecord(entity_id=a.agent_id, kind=EntityKind.AGENT, created_by=None, created_tick=0, meta={"name": a.name})
+                EntityRecord(
+                    entity_id=a.agent_id,
+                    kind=EntityKind.AGENT,
+                    created_by=None,
+                    created_tick=0,
+                    meta=agent_meta,
+                )
             )
             state.agents[a.agent_id] = AgentState(
                 agent_id=a.agent_id,
@@ -1209,7 +1220,11 @@ class WorldEngine:
                         tick=0,
                         event_type="entity_created",
                         actor_id=None,
-                        payload={"entity_id": a.agent_id, "kind": EntityKind.AGENT.value, "meta": {"name": a.name}},
+                        payload={
+                            "entity_id": a.agent_id,
+                            "kind": EntityKind.AGENT.value,
+                            "meta": agent_meta,
+                        },
                         audience=[INTERNAL_AUDIENCE],
                     ),
                     Event(
@@ -1219,6 +1234,7 @@ class WorldEngine:
                         payload={
                             "target_agent_id": a.agent_id,
                             "score": state.agents[a.agent_id].reputation,
+                            "internal": state.agents[a.agent_id].internal,
                             "frozen": state.agents[a.agent_id].reputation_frozen,
                             "frozen_until_tick": state.agents[a.agent_id].reputation_frozen_until_tick,
                             "title": state.agents[a.agent_id].title,

@@ -274,6 +274,39 @@ def test_runtime_auditor_freezes_self_reputation_award() -> None:
     assert [event.event_type for event in emitted] == ["reputation_frozen"]
 
 
+def test_runtime_auditor_keeps_repeated_same_tick_findings_distinct() -> None:
+    state = _mk_state()
+    state.tick = 3
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True))
+
+    tick_events = [
+        Event(
+            tick=3,
+            event_type="reputation_modified",
+            actor_id="agent:auditor",
+            payload={"target_agent_id": "agent:auditor", "delta": 1.0, "reason": "self"},
+        ),
+        Event(
+            tick=3,
+            event_type="reputation_modified",
+            actor_id="agent:auditor",
+            payload={"target_agent_id": "agent:auditor", "delta": 1.0, "reason": "self"},
+        ),
+    ]
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=tick_events,
+            recent_events=[],
+        )
+    )
+
+    assert len(outcome.findings) == 2
+    assert outcome.findings[0].evidence_refs != outcome.findings[1].evidence_refs
+    assert [event.event_type for event in outcome.events].count("audit_flagged") == 2
+
+
 def test_engine_runtime_auditor_emits_audit_events_and_unfreezes_after_duration(tmp_path: Path) -> None:
     cfg = ScenarioConfig.model_validate(
         {

@@ -125,6 +125,7 @@ class CreateAgentOp:
                 payload={
                     "target_agent_id": self.entity_id,
                     "score": state.agents[self.entity_id].reputation,
+                    "internal": state.agents[self.entity_id].internal,
                     "frozen": state.agents[self.entity_id].reputation_frozen,
                     "frozen_until_tick": state.agents[self.entity_id].reputation_frozen_until_tick,
                     "title": state.agents[self.entity_id].title,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -13,13 +14,14 @@ from jwt import InvalidTokenError
 from .database import User, get_user_by_username
 
 _oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+_MIN_JWT_SECRET_BYTES = 32
 
 _DEV_MODE = os.environ.get("MAGISTRY_DEV", "").strip() == "1"
 _JWT_SECRET_ENV = (os.environ.get("JWT_SECRET") or "").strip()
 if _JWT_SECRET_ENV:
     _JWT_SECRET: str | None = _JWT_SECRET_ENV
 elif _DEV_MODE:
-    _JWT_SECRET = "dev-secret-CHANGE-IN-PRODUCTION"
+    _JWT_SECRET = secrets.token_hex(_MIN_JWT_SECRET_BYTES)
 else:
     _JWT_SECRET = None
 _JWT_ALGORITHM = "HS256"
@@ -30,6 +32,10 @@ except ValueError:
 
 _JWT_SECRET_ERR = (
     "JWT_SECRET is required. Set JWT_SECRET or export MAGISTRY_DEV=1 for dev mode."
+)
+_JWT_SECRET_LEN_ERR = (
+    "JWT_SECRET must be at least 32 bytes for HS256. "
+    "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
 )
 
 
@@ -44,6 +50,8 @@ def validate_jwt_secret() -> None:
 def _require_jwt_secret() -> str:
     if not _JWT_SECRET:
         raise RuntimeError(_JWT_SECRET_ERR)
+    if len(_JWT_SECRET.encode("utf-8")) < _MIN_JWT_SECRET_BYTES:
+        raise RuntimeError(_JWT_SECRET_LEN_ERR)
     return _JWT_SECRET
 
 

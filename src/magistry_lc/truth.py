@@ -223,6 +223,7 @@ def _event_ref(event: Event) -> dict[str, Any]:
         "tick": int(event.tick),
         "event_type": event.event_type,
         "actor_id": event.actor_id,
+        "timestamp": event.timestamp.isoformat(),
         "target_agent_id": (event.payload or {}).get("target_agent_id"),
         "vote_id": (event.payload or {}).get("vote_id"),
     }

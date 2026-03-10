@@ -303,19 +303,22 @@ JSON-файлы с результатами нарративных интерв�
 Каждая строка — JSON-объект с событием:
 
 ```json
-{"tick": 1, "round": 1, "event_type": "entity_created", "actor_id": null, "agent_id": "", "payload": {"entity_id": "agent:off_1", "kind": "agent"}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
-{"tick": 2, "round": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"to": "agent:auditor", "text": "..."}, "audience": ["agent:off_1", "agent:auditor"], "timestamp": "..."}
+{"tick": 1, "round": 1, "event_type": "entity_created", "actor_id": null, "agent_id": "", "payload": {"entity_id": "agent:off_1", "kind": "agent", "meta": {"name": "Козлов И.М.", "internal": true, "capabilities": ["message", "work", "dao"]}}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
+{"tick": 1, "round": 1, "event_type": "reputation_snapshot", "actor_id": null, "agent_id": "agent:off_1", "payload": {"target_agent_id": "agent:off_1", "score": 0.0, "internal": true, "frozen": false, "title": "специалист"}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
+{"tick": 2, "round": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"to_id": "agent:auditor", "text": "..."}, "audience": ["agent:off_1", "agent:auditor"], "timestamp": "..."}
 {"tick": 2, "round": 2, "event_type": "audit_flagged", "actor_id": "agent:auditor", "agent_id": "agent:auditor", "payload": {"finding_id": "finding:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_1", "related_target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact"}, "audience": ["aud:internal"], "timestamp": "..."}
 {"tick": 2, "round": 2, "event_type": "arbiter_approved", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"action_type": "send_message"}, "audience": ["aud:internal"], "timestamp": "..."}
 ```
 
 Поля `tick` и `actor_id` остаются каноническими для движка. Поля `round` и `agent_id` сериализуются как compatibility-aliases для текущего web/UI слоя и legacy-клиентов.
+Для событий об агентах движок дополнительно пишет `payload.meta.internal` (`entity_created`) и `payload.internal` (`reputation_snapshot`), чтобы web UI мог отличать внутренних участников от внешних и не показывать репутацию там, где она не применяется.
 
 Типы событий:
 
 | Тип | Описание |
 |---|---|
 | `entity_created` | Регистрация сущности (агент, канал, организация, work item) |
+| `reputation_snapshot` | Снимок стартовой репутации/статуса агента для UI и sidecar-аналитики |
 | `message_sent` | Отправка сообщения |
 | `work_item_created` | Создание рабочего элемента |
 | `work_note_added` | Добавление заметки |
@@ -388,7 +391,7 @@ JSON-файлы с результатами нарративных интерв�
   "severity": "high",
   "confidence": 1.0,
   "target_agent_id": "agent:auditor",
-  "evidence_refs": [{"tick": 2, "event_type": "reputation_modified"}],
+  "evidence_refs": [{"tick": 2, "event_type": "reputation_modified", "timestamp": "2026-03-05T10:31:12.345678+00:00"}],
   "rationale": "Агент повысил собственную репутацию."
 }
 ```
@@ -398,7 +401,7 @@ JSON-файлы с результатами нарративных интерв�
 - `truth.jsonl` не является продолжением `events.jsonl`;
 - он пишется отдельно и не подаётся агентам;
 - он используется для формального post-hoc сравнения governance-treatment и truth-layer.
-- при дедупликации учитываются не только `tick`/`subject_agent_id`/`violation_type`, но и цель/контекст (`target_agent_id`, `evidence_refs`), чтобы несколько однотипных нарушений в один тик не схлопывались в один кейс.
+- при дедупликации учитываются не только `tick`/`subject_agent_id`/`violation_type`, но и цель/контекст (`target_agent_id`, `evidence_refs`, включая `timestamp` исходного события), чтобы несколько однотипных нарушений в один тик не схлопывались в один кейс.
 
 ### Post-hoc evaluation (`evaluation.json`)
 
@@ -422,7 +425,7 @@ JSON-файлы с результатами нарративных интерв�
 }
 ```
 
-При сопоставлении runtime-сигналов с truth-layer учитываются `related_target_agent_id` и `evidence_refs` из `audit_flagged`, поэтому два однотипных finding'а одного субъекта в один и тот же тик считаются двумя отдельными случаями, если у них разный контекст (например, разные `vote_id`).
+При сопоставлении runtime-сигналов с truth-layer учитываются `related_target_agent_id` и `evidence_refs` из `audit_flagged`, поэтому два однотипных finding'а одного субъекта в один и тот же тик считаются двумя отдельными случаями, если у них разный контекст или разное исходное событие (например, разные `vote_id` или разные `timestamp` в `evidence_refs`).
 
 ### Fidelity sidecar (`fidelity.json`)
 

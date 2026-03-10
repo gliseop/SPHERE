@@ -35,7 +35,7 @@ export default defineConfig({
       http_proxy: '',
       https_proxy: '',
       all_proxy: '',
-      PW_JWT_SECRET: process.env.PW_JWT_SECRET ?? 'playwright-secret',
+      PW_JWT_SECRET: process.env.PW_JWT_SECRET ?? 'playwright-secret-0123456789abcdef0123456789abcdef',
       PW_ADMIN_USER: process.env.PW_ADMIN_USER ?? 'pw_admin',
       PW_ADMIN_PASS: process.env.PW_ADMIN_PASS ?? 'pw_password',
       PW_USERS_DB: process.env.PW_USERS_DB ?? '',

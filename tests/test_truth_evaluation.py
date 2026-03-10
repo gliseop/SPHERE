@@ -63,6 +63,34 @@ def test_truth_detector_records_self_reputation_award() -> None:
     assert records[0].subject_agent_id == "agent:auditor"
 
 
+def test_truth_detector_keeps_repeated_same_tick_events_distinct() -> None:
+    state = _mk_state()
+    detector = TruthDetector()
+    tick_events = [
+        Event(
+            tick=1,
+            event_type="reputation_modified",
+            actor_id="agent:auditor",
+            payload={"target_agent_id": "agent:auditor", "delta": 1.0, "reason": "self"},
+        ),
+        Event(
+            tick=1,
+            event_type="reputation_modified",
+            actor_id="agent:auditor",
+            payload={"target_agent_id": "agent:auditor", "delta": 1.0, "reason": "self"},
+        ),
+    ]
+
+    records = detector.detect_tick(
+        state=state,
+        tick_events=tick_events,
+        recent_events=[],
+    )
+
+    assert len(records) == 2
+    assert records[0].evidence_refs != records[1].evidence_refs
+
+
 def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:
     truth_log = TruthLog(tmp_path / "truth.jsonl")
     truth_log.append(
@@ -102,6 +130,73 @@ def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:
     assert summary.false_negative == 0
     assert summary.precision == 1.0
     assert summary.recall == 1.0
+
+
+def test_evaluate_run_counts_same_target_same_tick_when_evidence_differs(tmp_path: Path) -> None:
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.extend(
+        [
+            TruthRecord(
+                tick=2,
+                subject_agent_id="agent:auditor",
+                violation_type="self_reputation_award",
+                target_agent_id="agent:auditor",
+                evidence_refs=[{"tick": 2, "timestamp": "2026-03-10T10:00:00+00:00"}],
+            ),
+            TruthRecord(
+                tick=2,
+                subject_agent_id="agent:auditor",
+                violation_type="self_reputation_award",
+                target_agent_id="agent:auditor",
+                evidence_refs=[{"tick": 2, "timestamp": "2026-03-10T10:00:01+00:00"}],
+            ),
+        ]
+    )
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "tick": 2,
+                        "event_type": "audit_flagged",
+                        "actor_id": "agent:auditor",
+                        "payload": {
+                            "target_agent_id": "agent:auditor",
+                            "violation_type": "self_reputation_award",
+                            "evidence_refs": [{"tick": 2, "timestamp": "2026-03-10T10:00:00+00:00"}],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "tick": 2,
+                        "event_type": "audit_flagged",
+                        "actor_id": "agent:auditor",
+                        "payload": {
+                            "target_agent_id": "agent:auditor",
+                            "violation_type": "self_reputation_award",
+                            "evidence_refs": [{"tick": 2, "timestamp": "2026-03-10T10:00:01+00:00"}],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(
+        events_path=tmp_path / "events.jsonl",
+        truth_path=tmp_path / "truth.jsonl",
+    )
+
+    assert summary.truth_total == 2
+    assert summary.runtime_flagged_total == 2
+    assert summary.true_positive == 2
+    assert summary.false_positive == 0
+    assert summary.false_negative == 0
 
 
 def test_truth_dedupe_keeps_distinct_targets_same_tick() -> None:

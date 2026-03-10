@@ -99,8 +99,8 @@ class GraphStateBuilder:
             next_threshold = payload.get("next_threshold")
             if target:
                 self._ensure_agent(target)
+                self._apply_internal_flag(target, payload.get("internal"))
                 self.agents[target]["reputation"] = round(float(score), 2)
-                self.agents[target]["has_reputation"] = not _is_governance_agent(target)
                 self.agents[target]["reputation_frozen"] = frozen
                 if isinstance(title, str) and title:
                     self.agents[target]["position_title"] = title
@@ -132,7 +132,8 @@ class GraphStateBuilder:
                 self.agents[target]["reputation"] = round(
                     float(self.agents[target]["reputation"]) + delta, 2
                 )
-                self.agents[target]["has_reputation"] = not _is_governance_agent(target)
+                if self.agents[target].get("internal") is not False:
+                    self.agents[target]["has_reputation"] = not _is_governance_agent(target)
             return
 
         if event_type == "graph_updated":
@@ -149,6 +150,7 @@ class GraphStateBuilder:
             if kind == "agent" and entity_id and _is_agentish_id(entity_id):
                 self._ensure_agent(entity_id)
                 if isinstance(meta, dict):
+                    self._apply_internal_flag(entity_id, meta.get("internal"))
                     name = str(meta.get("name", "") or "")
                     if name:
                         self.agents[entity_id]["name"] = name
@@ -210,6 +212,13 @@ class GraphStateBuilder:
                 "has_reputation": not no_rep,
                 "reputation_frozen": False,
             }
+
+    def _apply_internal_flag(self, agent_id: str, value: Any) -> None:
+        if not isinstance(value, bool):
+            return
+        self._ensure_agent(agent_id)
+        self.agents[agent_id]["internal"] = value
+        self.agents[agent_id]["has_reputation"] = value and not _is_governance_agent(agent_id)
 
     def _add_edge(self, a: str, b: str, delta: float) -> None:
         if not a or not b:

@@ -10,6 +10,7 @@ from web.backend.database import User
 
 ADMIN = User(id=1, username="admin", password_hash="placeholder", role="admin", created_at="2026-01-01T00:00:00+00:00")
 VIEWER = User(id=2, username="alice", password_hash="placeholder", role="viewer", created_at="2026-01-01T00:00:00+00:00")
+_LONG_TEST_SECRET = "test-jwt-secret-0123456789abcdef0123456789abcdef"
 
 
 def test_hash_and_verify():
@@ -46,6 +47,32 @@ def test_jwt_expire_hours_invalid_env(monkeypatch: pytest.MonkeyPatch):
         assert reloaded._JWT_EXPIRE_HOURS == 24
     finally:
         monkeypatch.setenv("JWT_EXPIRE_HOURS", "24")
+        importlib.reload(reloaded)
+
+
+def test_validate_jwt_secret_rejects_short_secret(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("JWT_SECRET", "short-secret")
+    monkeypatch.delenv("MAGISTRY_DEV", raising=False)
+    reloaded = importlib.reload(auth_module)
+    try:
+        with pytest.raises(RuntimeError, match="at least 32 bytes"):
+            reloaded.validate_jwt_secret()
+    finally:
+        monkeypatch.setenv("JWT_SECRET", _LONG_TEST_SECRET)
+        importlib.reload(reloaded)
+
+
+def test_dev_mode_generates_strong_ephemeral_secret(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    monkeypatch.setenv("MAGISTRY_DEV", "1")
+    reloaded = importlib.reload(auth_module)
+    try:
+        reloaded.validate_jwt_secret()
+        assert reloaded._JWT_SECRET is not None
+        assert len(reloaded._JWT_SECRET.encode("utf-8")) >= 32
+    finally:
+        monkeypatch.setenv("JWT_SECRET", _LONG_TEST_SECRET)
+        monkeypatch.delenv("MAGISTRY_DEV", raising=False)
         importlib.reload(reloaded)
 
 

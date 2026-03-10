@@ -19,7 +19,7 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
 PORT="${1:-8767}"
 
-JWT_SECRET="${PW_JWT_SECRET:-playwright-secret}"
+JWT_SECRET="${PW_JWT_SECRET:-playwright-secret-0123456789abcdef0123456789abcdef}"
 ADMIN_USER="${PW_ADMIN_USER:-pw_admin}"
 ADMIN_PASS="${PW_ADMIN_PASS:-pw_password}"
 DB_PATH="${PW_USERS_DB:-$ROOT_DIR/.tmp/playwright-users-$PORT.db}"

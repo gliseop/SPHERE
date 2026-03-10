@@ -183,3 +183,24 @@ def test_graph_state_updates_position_title_from_position_changed():
 
     nodes = {node["id"]: node for node in graph["nodes"]}
     assert nodes["agent:off_1"]["position_title"] == "руководитель отдела"
+
+
+def test_graph_state_hides_reputation_for_external_agent_snapshot():
+    graph = build_graph_state(
+        [
+            {
+                "tick": 0,
+                "event_type": "reputation_snapshot",
+                "payload": {
+                    "target_agent_id": "agent:contractor",
+                    "score": 0.0,
+                    "internal": False,
+                    "frozen": False,
+                    "title": "подрядчик",
+                },
+            }
+        ]
+    )
+
+    nodes = {node["id"]: node for node in graph["nodes"]}
+    assert nodes["agent:contractor"]["has_reputation"] is False

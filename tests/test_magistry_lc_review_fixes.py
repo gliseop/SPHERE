@@ -549,6 +549,7 @@ def test_create_agent_op_emits_initial_reputation_snapshot() -> None:
     assert [event.event_type for event in events] == ["entity_created", "reputation_snapshot"]
     assert events[1].payload["target_agent_id"] == "agent:spawned"
     assert events[1].payload["score"] == 0.0
+    assert events[1].payload["internal"] is True
     assert events[1].payload["title"] == "специалист"
 
 
