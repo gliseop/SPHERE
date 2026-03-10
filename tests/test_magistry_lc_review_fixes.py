@@ -5,6 +5,7 @@ import asyncio
 import json
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -34,6 +35,7 @@ from magistry_lc.ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from magistry_lc.journal import WorldJournal
 from magistry_lc.llm import LLMCaller
 from magistry_lc.llm.caller import create_llm_provider
+from magistry_lc.llm.providers import OpenAICompatibleProvider
 from magistry_lc.memory import AgentMemory
 from magistry_lc.ops import CreateAgentOp
 from magistry_lc.state import AgentState, Vote, WorkItem, WorldState
@@ -704,6 +706,19 @@ def test_create_llm_provider_loads_dotenv_from_cwd(
 
     assert captured["api_key"] == "dotenv-test-key"
     assert captured["base_url"] == "https://dotenv.example/v1"
+
+
+def test_openai_provider_keeps_zero_temperature_for_standard_backends() -> None:
+    provider = SimpleNamespace(_base_url="https://api.openai.com/v1", _model="gpt-4o-mini")
+
+    assert OpenAICompatibleProvider._effective_temperature(provider, 0.0) == 0.0
+    assert OpenAICompatibleProvider._effective_temperature(provider, 0.35) == 0.35
+
+
+def test_openai_provider_clamps_zero_temperature_only_for_minimax() -> None:
+    provider = SimpleNamespace(_base_url="https://api.minimax.chat/v1", _model="MiniMax-Text-01")
+
+    assert OpenAICompatibleProvider._effective_temperature(provider, 0.0) == 0.01
 
 
 def test_runtime_config_rejects_zero_worldgen_interval() -> None:

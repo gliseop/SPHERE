@@ -144,29 +144,16 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
   const [simConfigText, setSimConfigText] = useState('')
   const [simConfigError, setSimConfigError] = useState<string | null>(null)
   const [simConfigLoading, setSimConfigLoading] = useState(false)
-  const [secondaryPrompt, setSecondaryPrompt] = useState('')
-  const [secondaryFamily, setSecondaryFamily] = useState('0')
-  const [secondarySociety, setSecondarySociety] = useState('0')
-  const [secondaryReplace, setSecondaryReplace] = useState(true)
-  const [secondaryLoading, setSecondaryLoading] = useState(false)
   const prevEditingRef = useRef<Scenario | null>(null)
 
   useEffect(() => {
     if (editing && prevEditingRef.current === null) {
       setSimConfigText(editing.sim_config ? JSON.stringify(editing.sim_config, null, 2) : '')
       setSimConfigError(null)
-      setSecondaryPrompt('')
-      setSecondaryFamily('0')
-      setSecondarySociety('0')
-      setSecondaryReplace(true)
     }
     if (!editing && prevEditingRef.current !== null) {
       setSimConfigText('')
       setSimConfigError(null)
-      setSecondaryPrompt('')
-      setSecondaryFamily('0')
-      setSecondarySociety('0')
-      setSecondaryReplace(true)
     }
     prevEditingRef.current = editing
   }, [editing])
@@ -574,120 +561,13 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
           <div className="form-field">
             <div className="form-field-header">
               <label>Вторичные агенты (LLM)</label>
-              <button
-                className="btn-clipped primary small"
-                onClick={async () => {
-                  const familyCount = Math.max(0, Number(secondaryFamily) || 0)
-                  const societyCount = Math.max(0, Number(secondarySociety) || 0)
-                  if ((familyCount + societyCount) <= 0) return
-                  if (!secondaryPrompt.trim()) {
-                    window.alert('Опишите среду/контекст в промпте (хотя бы 1–2 предложения).')
-                    return
-                  }
-
-                  let simConfig: Record<string, unknown> | null = null
-                  if (simConfigText.trim()) {
-                    try {
-                      const parsed = JSON.parse(simConfigText) as unknown
-                      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                        setSimConfigError('Ожидается JSON-объект (ScenarioConfig)')
-                        return
-                      }
-                      simConfig = parsed as Record<string, unknown>
-                    } catch (e) {
-                      setSimConfigError(e instanceof Error ? e.message : 'Некорректный JSON')
-                      return
-                    }
-                  }
-
-                  setSecondaryLoading(true)
-                  try {
-                    const res = await apiClient.post('/api/ai/secondary-agents', {
-                      scenario: editing.scenario,
-                      governance: editing.governance,
-                      seed: editing.seed,
-                      rounds: editing.rounds,
-                      prompt: secondaryPrompt,
-                      family_count: familyCount,
-                      society_count: societyCount,
-                      replace_existing: secondaryReplace,
-                      sim_config: simConfig,
-                    })
-                    if (!res.ok) {
-                      const text = await res.text().catch(() => '')
-                      window.alert(text || 'Не удалось сгенерировать вторичных агентов')
-                      return
-                    }
-                    const cfg = await res.json().catch(() => null) as Record<string, unknown> | null
-                    if (!cfg || typeof cfg !== 'object') {
-                      window.alert('Сервер вернул некорректные данные')
-                      return
-                    }
-                    setSimConfigText(JSON.stringify(cfg, null, 2))
-                    setSimConfigError(null)
-                  } finally {
-                    setSecondaryLoading(false)
-                  }
-                }}
-                disabled={
-                  secondaryLoading
-                  || ((Number(secondaryFamily) || 0) + (Number(secondarySociety) || 0) <= 0)
-                  || !secondaryPrompt.trim()
-                }
-                title="Добавить fam_*/soc_* агентов в сим-конфиг (или создать конфиг из шаблона) через LLM"
-              >
-                {secondaryLoading ? '…' : '+ Сгенерировать'}
-              </button>
+              <span className="badge small">временно скрыто</span>
             </div>
             <div className="text-muted" style={{ fontSize: '0.7rem', marginTop: '0.25rem' }}>
-              Генератор добавляет вторичных агентов (fam_*/soc_*) и обновляет JSON ScenarioConfig.
-              Рекомендуется включать контекст среды: город/организация/давление/«нормы».
+              Веб-генератор вторичных агентов временно скрыт, потому что backend-маршрут ещё не перенесён
+              с legacy-движка и отвечает 501. Для экспериментов с вторичными агентами используйте
+              готовый `ScenarioConfig` в JSON или CLI/сценарии из репозитория.
             </div>
-
-            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-              <div className="form-field" style={{ margin: 0 }}>
-                <label>Семья (fam_*)</label>
-                <input
-                  className="hud-input"
-                  type="number"
-                  min={0}
-                  max={20}
-                  value={secondaryFamily}
-                  onChange={(e) => setSecondaryFamily(e.target.value)}
-                />
-              </div>
-              <div className="form-field" style={{ margin: 0 }}>
-                <label>Общество (soc_*)</label>
-                <input
-                  className="hud-input"
-                  type="number"
-                  min={0}
-                  max={20}
-                  value={secondarySociety}
-                  onChange={(e) => setSecondarySociety(e.target.value)}
-                />
-              </div>
-              <div className="form-field" style={{ margin: 0, alignSelf: 'end' }}>
-                <label style={{ opacity: 0 }}>replace</label>
-                <label style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.75rem', textTransform: 'none', letterSpacing: 0 }}>
-                  <input
-                    type="checkbox"
-                    checked={secondaryReplace}
-                    onChange={() => setSecondaryReplace((v) => !v)}
-                  />
-                  <span className="text-muted">Заменить существующих fam_/soc_</span>
-                </label>
-              </div>
-            </div>
-
-            <textarea
-              className="hud-input"
-              rows={4}
-              value={secondaryPrompt}
-              onChange={(e) => setSecondaryPrompt(e.target.value)}
-              placeholder="Контекст среды: организация, город, нормы, давление, риски, медиа/общественное мнение... (и любые пожелания к вторичным агентам)"
-              style={{ marginTop: '0.5rem' }}
-            />
           </div>
 
           <div className="form-field">
@@ -719,19 +599,6 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                   placeholder="авто"
                   disabled={!editing.parallel_agents}
                   style={{ width: '80px' }}
-                />
-              </div>
-              <div className="form-field" style={{ margin: 0 }}>
-                <label title="Окно батчирования в секундах симулированного времени">Окно (сек)</label>
-                <input
-                  className="hud-input"
-                  type="number"
-                  min={0} max={86400} step={60}
-                  value={editing.parallel_window ?? ''}
-                  onChange={(e) => setEditing({ ...editing, parallel_window: e.target.value ? Number(e.target.value) : null })}
-                  placeholder="0"
-                  disabled={!editing.parallel_agents}
-                  style={{ width: '100px' }}
                 />
               </div>
             </div>

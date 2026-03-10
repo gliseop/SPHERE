@@ -763,6 +763,64 @@ def test_run_scenario_admin_launches_saved_yaml(tmp_path: Path):
     assert r.json()["run_name"] == "custom_lc_G0_seed42_web"
 
 
+def test_run_scenario_legacy_json_without_sim_config_uses_selected_template(tmp_path: Path):
+    (tmp_path / "seed_s1_g1.json").write_text(
+        json.dumps(
+            {
+                "name": "Template S1",
+                "scenario": "S1",
+                "governance": "G1",
+                "rounds": 6,
+                "agents": [
+                    {
+                        "id": "off_1",
+                        "name": "Off 1",
+                        "role": "official",
+                        "initial_reputation": 7.0,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "legacy_saved.json").write_text(
+        json.dumps(
+            {
+                "name": "Saved legacy",
+                "scenario": "S1",
+                "governance": "G2",
+                "rounds": 9,
+                "seed": 13,
+                "agents": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
+                with patch(
+                    "web.backend.runner.launch_simulation_from_config",
+                    return_value={"run_name": "legacy_saved_G2_seed13_web", "pid": 555},
+                ) as mocked:
+                    r = client.post(
+                        "/api/scenarios/legacy_saved/run",
+                        headers={"Authorization": f"Bearer {admin_token()}"},
+                    )
+
+    assert r.status_code == 202
+    payload = mocked.call_args.kwargs["scenario_config"]
+    assert payload["title"] == "Saved legacy"
+    assert payload["ticks"] == 9
+    assert payload["seed"] == 13
+    assert [agent["agent_id"] for agent in payload["agents"]] == ["agent:off_1"]
+    assert payload["governance"]["audit"]["enabled"] is True
+    assert payload["governance"]["audit"]["reputation_freeze_enabled"] is True
+
+
 def test_run_scenario_passes_parallel_settings_from_runtime_config(tmp_path: Path):
     (tmp_path / "custom_lc.yaml").write_text(
         (

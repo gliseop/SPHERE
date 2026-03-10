@@ -303,6 +303,7 @@ def _sync_config_from_payload(
     payload: ScenarioPayload,
     scenario_id: str,
     narrative_context: str = "",
+    preserve_existing_agents_when_empty: bool = False,
 ) -> ScenarioConfig:
     cfg.title = payload.name.strip() or scenario_id
     cfg.description = (payload.description or narrative_context or "").strip()
@@ -322,23 +323,29 @@ def _sync_config_from_payload(
 
     _apply_governance_mode(cfg, payload.governance)
 
-    existing_by_ui_id = {
-        _to_ui_agent_id(agent.agent_id, fallback=f"agent_{index}"): agent
-        for index, agent in enumerate(cfg.agents, start=1)
-    }
-    cfg.agents = [
-        _build_agent_config(
-            agent_data=agent_data.model_dump(mode="json", exclude_none=True),
-            index=index,
-            existing=existing_by_ui_id.get(agent_data.id),
-        )
-        for index, agent_data in enumerate(payload.agents, start=1)
-    ]
+    if payload.agents or not preserve_existing_agents_when_empty:
+        existing_by_ui_id = {
+            _to_ui_agent_id(agent.agent_id, fallback=f"agent_{index}"): agent
+            for index, agent in enumerate(cfg.agents, start=1)
+        }
+        cfg.agents = [
+            _build_agent_config(
+                agent_data=agent_data.model_dump(mode="json", exclude_none=True),
+                index=index,
+                existing=existing_by_ui_id.get(agent_data.id),
+            )
+            for index, agent_data in enumerate(payload.agents, start=1)
+        ]
     _ensure_default_public_channel(cfg)
     return cfg
 
 
-def _legacy_payload_to_config(raw: dict[str, Any], *, scenario_id: str) -> ScenarioConfig:
+def _legacy_payload_to_config(
+    raw: dict[str, Any],
+    *,
+    scenario_id: str,
+    seed_from_template: bool,
+) -> ScenarioConfig:
     payload = ScenarioPayload.model_validate(raw)
     base_cfg: ScenarioConfig | None = None
     sim_config = raw.get("sim_config")
@@ -347,12 +354,21 @@ def _legacy_payload_to_config(raw: dict[str, Any], *, scenario_id: str) -> Scena
             base_cfg = ScenarioConfig.model_validate(sim_config)
         except Exception:
             base_cfg = None
+    if base_cfg is None and seed_from_template:
+        try:
+            base_cfg = load_template_config_for_web(
+                payload.scenario,
+                governance=payload.governance,
+            )
+        except HTTPException:
+            base_cfg = None
     cfg = base_cfg or ScenarioConfig()
     return _sync_config_from_payload(
         cfg,
         payload=payload,
         scenario_id=scenario_id,
         narrative_context=str(raw.get("narrative_context") or ""),
+        preserve_existing_agents_when_empty=base_cfg is not None,
     )
 
 
@@ -366,7 +382,11 @@ def load_scenario_config_for_web(path: Path, *, scenario_id: str | None = None) 
         return ScenarioConfig.model_validate(raw)
     except Exception:
         try:
-            return _legacy_payload_to_config(raw, scenario_id=resolved_id)
+            return _legacy_payload_to_config(
+                raw,
+                scenario_id=resolved_id,
+                seed_from_template=not _is_builtin_scenario_path(path),
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid scenario config: {exc}") from exc
 

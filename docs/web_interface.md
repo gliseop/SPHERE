@@ -69,7 +69,7 @@ web/backend/
 | GET | `/api/runs/active` | Список активных симуляций (`external`, `stop_supported`) |
 | POST | `/api/runs/{run_name}/stop` | Остановить симуляцию |
 
-Web launcher запускает `magistry_lc` как отдельный subprocess и пишет артефакты в `results/{run_name}/`. Для сохранённых legacy-сценариев (`name/scenario/governance/agents` без полного `ScenarioConfig`) backend перед запуском выполняет best-effort конвертацию в валидный `ScenarioConfig`.
+Web launcher запускает `magistry_lc` как отдельный subprocess и пишет артефакты в `results/{run_name}/`. Для сохранённых legacy-сценариев (`name/scenario/governance/agents` без полного `ScenarioConfig`) backend перед запуском выполняет конвертацию в валидный `ScenarioConfig`: если `sim_config` пуст, сначала подгружается выбранный шаблон `S/G`, а затем поверх него накладываются overrides из web-карточки.
 
 `POST /api/runs/launch` принимает также runtime-overrides `parallel_agents`, `parallel_workers` и `parallel_window`. Backend переносит их в `ScenarioConfig.runtime` конкретного запуска, поэтому они отражаются в `_input_scenario.json` и не теряются между UI и subprocess launcher'ом.
 
@@ -127,7 +127,7 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 |---|---|---|
 | POST | `/api/ai/generate-personality` | Сгенерировать личность через LLM |
 | POST | `/api/ai/generate-agent-type` | Сгенерировать тип агента через LLM |
-| POST | `/api/ai/secondary-agents` | Сгенерировать вспомогательных агентов |
+| POST | `/api/ai/secondary-agents` | Сгенерировать вспомогательных агентов (маршрут пока возвращает 501; web UI скрывает интерактивную кнопку) |
 
 #### Шаблоны и отладка
 

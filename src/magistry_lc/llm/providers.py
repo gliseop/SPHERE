@@ -170,6 +170,7 @@ class OpenAICompatibleProvider:
         self._client_local = threading.local()
         self._openai_cls = OpenAI
         self._client_kwargs = dict(kwargs)
+        self._base_url = base_url
         self._model = model
         self._cache = LLMCache(cache_path) if cache_path else None
         self._use_tool_calls = use_tool_calls
@@ -327,6 +328,16 @@ class OpenAICompatibleProvider:
 
         raise RuntimeError("LLM retries exhausted")
 
+    def _effective_temperature(self, temperature: float) -> float:
+        """Вернуть температуру с минимальным workaround только для MiniMax."""
+        if float(temperature) != 0.0:
+            return float(temperature)
+        base_url = (self._base_url or "").lower()
+        model = (self._model or "").lower()
+        if "minimax" in base_url or model.startswith("minimax"):
+            return 0.01
+        return 0.0
+
     def generate(
         self,
         system: str,
@@ -357,9 +368,7 @@ class OpenAICompatibleProvider:
                 )
                 return LLMResponse(text=cached, model=self._model)
 
-        # MiniMax API допускает temperature только в (0, 1].
-        # Значение 0.0 заменяется на минимальное положительное.
-        safe_temperature = max(temperature, 0.01)
+        safe_temperature = self._effective_temperature(temperature)
 
         create_kwargs: dict = {
             "model": self._model,
@@ -471,7 +480,7 @@ class OpenAICompatibleProvider:
         temperature: float,
     ) -> StructuredLLMResponse:
         """Structured output через response_format json_schema."""
-        safe_temperature = max(temperature, 0.01)
+        safe_temperature = self._effective_temperature(temperature)
 
         create_kwargs: dict = {
             "model": self._model,
@@ -530,7 +539,7 @@ class OpenAICompatibleProvider:
         temperature: float,
     ) -> StructuredLLMResponse:
         """Structured output через function calling (tool use)."""
-        safe_temperature = max(temperature, 0.01)
+        safe_temperature = self._effective_temperature(temperature)
 
         create_kwargs: dict = {
             "model": self._model,
