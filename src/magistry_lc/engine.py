@@ -1477,7 +1477,6 @@ class WorldEngine:
         event_log: EventLog,
     ) -> list[Event]:
         """Применить минимальный детерминированный цикл репутации."""
-        actor_id = self.cfg.governance.audit.actor_id
         rewards: dict[str, float] = {}
         rewarded_keys: set[tuple[str, str]] = set()
         vote_target_rewards: set[str] = set()
@@ -1518,7 +1517,7 @@ class WorldEngine:
                 continue
             ops.append(
                 ModifyReputationOp(
-                    actor_id=actor_id,
+                    actor_id=None,
                     target_agent_id=aid,
                     delta=min(delta, 0.75),
                     reason="governance_positive_contribution",

@@ -92,6 +92,19 @@ def test_login_unknown_user():
     assert r.status_code == 401
 
 
+def test_login_malformed_hash_returns_401():
+    broken = User(
+        id=3,
+        username="broken",
+        password_hash="not-a-bcrypt-hash",
+        role="viewer",
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    with patch("web.backend.routes.auth.get_user_by_username", return_value=broken):
+        r = client.post("/api/auth/login", data={"username": "broken", "password": "secret"})
+    assert r.status_code == 401
+
+
 def test_get_runs_no_auth_returns_401():
     r = client.get("/api/runs")
     assert r.status_code == 401

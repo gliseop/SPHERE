@@ -78,7 +78,10 @@ def verify_password(plain: str, hashed: str) -> bool:
     Returns:
         True если совпадает.
     """
-    return bcrypt.checkpw(plain.encode(), hashed.encode())
+    try:
+        return bcrypt.checkpw(plain.encode(), hashed.encode())
+    except ValueError:
+        return False
 
 
 def create_access_token(username: str, role: str) -> str:
