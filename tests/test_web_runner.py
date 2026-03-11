@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from web.backend import runner
+from web.backend.run_artifacts import parse_run_name
 
 
 @pytest.fixture()
@@ -156,6 +157,39 @@ class TestListActiveWithExternal:
 
         running = [item["run_name"] for item in runner.list_active() if item["status"] == "running"]
         assert running == ["api_old", "ext_old", "ext_new", "api_new"]
+
+    def test_list_active_does_not_reclassify_finished_api_run_as_external(self, results_dir: Path):
+        """Упавший launcher-run не должен возвращаться как внешний «running»."""
+
+        class _FinishedProc:
+            pid = 2001
+
+            def poll(self):
+                return 1
+
+        run_name = "failed_run"
+        run_dir = results_dir / run_name
+        run_dir.mkdir()
+        (run_dir / "events.jsonl").write_text("{}\n", encoding="utf-8")
+        (run_dir / "_input_scenario.json").write_text("{}", encoding="utf-8")
+        runner._active[run_name] = _FinishedProc()  # type: ignore[assignment]
+        runner._active_started_at[run_name] = time.time()
+
+        first = runner.list_active()
+        assert first == [
+            {
+                "run_name": run_name,
+                "pid": 2001,
+                "status": "finished",
+                "external": False,
+                "stop_supported": True,
+                "returncode": 1,
+                "stdout_log": f"{run_name}_stdout.log",
+                "stderr_log": f"{run_name}_stderr.log",
+                "activity_at": pytest.approx((run_dir / "events.jsonl").stat().st_mtime),
+            }
+        ]
+        assert runner.list_active() == []
 
 
 # ---------- is_external_run ----------
@@ -331,3 +365,14 @@ class TestLaunchSimulation:
                 )
 
         assert runner._reserved_run_names == set()
+
+
+def test_parse_run_name_uses_rightmost_governance_suffix():
+    """Сценарная часть имени может содержать G<n>-фрагменты."""
+    meta = parse_run_name("My_G2_experiment_G1_seed42_web")
+    assert meta == {
+        "scenario": "My_G2_experiment",
+        "governance": "G1",
+        "seed": 42,
+        "variant": "web",
+    }

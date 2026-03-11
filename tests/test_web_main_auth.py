@@ -482,6 +482,26 @@ def test_prompts_endpoint_reads_trace_sidecar_for_lc_run(tmp_path: Path):
     assert payload[0]["response"] == "RESP"
 
 
+def test_prompts_endpoint_returns_empty_list_for_zero_limit(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+    (run_dir / "trace.jsonl").write_text(
+        '{"role":"agent","name":"agent:off_1","tick":2,"system":"SYS","user":"USER","response":"RESP"}\n',
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/prompts?limit=0",
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+    assert r.status_code == 200
+    assert r.json() == []
+
+
 def test_create_scenario_viewer_gets_403():
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         r = client.post(

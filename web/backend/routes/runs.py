@@ -57,6 +57,8 @@ async def _read_prompt_records_from_trace(
     timestamp: str | None,
     limit: int,
 ) -> list[dict]:
+    if limit <= 0:
+        return []
     results: list[dict] = []
     async with aiofiles.open(path, encoding="utf-8") as f:
         async for line in f:
@@ -90,6 +92,8 @@ async def _read_prompt_records_from_events(
     timestamp: str | None,
     limit: int,
 ) -> list[dict]:
+    if limit <= 0:
+        return []
     results: list[dict] = []
     async with aiofiles.open(path, encoding="utf-8") as f:
         async for line in f:

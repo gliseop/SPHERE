@@ -13,7 +13,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from .run_artifacts import list_run_artifacts, resolve_run_artifact, run_json_sidecar_candidates
+from .run_artifacts import (
+    list_run_artifacts,
+    resolve_run_artifact,
+    run_json_sidecar_candidates,
+    run_log_sidecar_candidates,
+)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _RESULTS_DIR = _PROJECT_ROOT / "results"
@@ -424,7 +429,20 @@ def _close_logs_when_done(
             pass
 
 
-def _discover_external_runs() -> list[dict]:
+def _has_api_launcher_markers(ref) -> bool:
+    """Определить, что артефакт относится к launcher-запуску web API."""
+    if ref.format == "directory" and (ref.events_path.parent / "_input_scenario.json").exists():
+        return True
+    for path in run_log_sidecar_candidates(ref, "stdout", results_dir=_RESULTS_DIR):
+        if path.exists():
+            return True
+    for path in run_log_sidecar_candidates(ref, "stderr", results_dir=_RESULTS_DIR):
+        if path.exists():
+            return True
+    return False
+
+
+def _discover_external_runs(*, exclude_names: set[str] | None = None) -> list[dict]:
     """Обнаружить внешние (CLI-запущенные) прогоны по файловой системе.
 
     Сканирует ``_RESULTS_DIR`` на предмет событий в двух форматах:
@@ -439,11 +457,15 @@ def _discover_external_runs() -> list[dict]:
 
     now = time.time()
     active_names: set[str] = set(_active)
+    if exclude_names:
+        active_names.update(exclude_names)
     external: list[dict] = []
 
     for ref in list_run_artifacts(results_dir=_RESULTS_DIR):
         run_name = ref.name
         if run_name in active_names:
+            continue
+        if _has_api_launcher_markers(ref):
             continue
 
         summary_paths = run_json_sidecar_candidates(ref, "summary", results_dir=_RESULTS_DIR)
@@ -484,6 +506,7 @@ def list_active() -> list[dict]:
     with _active_lock:
         result = []
         finished = []
+        known_names = set(_active)
         for name, proc in _active.items():
             poll = proc.poll()
             activity_at = _run_activity_at(name=name, fallback=_active_started_at.get(name, 0.0))
@@ -521,7 +544,7 @@ def list_active() -> list[dict]:
             _active_started_at.pop(name, None)
 
         # Обнаружить внешние (CLI-запущенные) прогоны
-        result.extend(_discover_external_runs())
+        result.extend(_discover_external_runs(exclude_names=known_names))
 
         result.sort(
             key=lambda item: (

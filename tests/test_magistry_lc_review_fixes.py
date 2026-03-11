@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import subprocess
+import sys
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -264,6 +267,32 @@ def test_arbiter_rejects_vote_from_non_voter(tmp_path: Path) -> None:
     res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
     assert res[0].approved is False
     assert "agent_is_not_eligible_voter" in res[0].reason
+
+
+def test_cli_module_invocation_executes_main() -> None:
+    project_root = Path(__file__).resolve().parent.parent
+    src_dir = project_root / "src"
+    env = os.environ.copy()
+    current_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{src_dir}{os.pathsep}{current_pythonpath}" if current_pythonpath else str(src_dir)
+    )
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+
+    result = subprocess.run(
+        [sys.executable, "-m", "magistry_lc.cli", "--help"],
+        cwd=project_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "MAGISTRY-LC" in result.stdout
 
 
 def test_arbiter_rejects_target_self_vote_by_default(tmp_path: Path) -> None:

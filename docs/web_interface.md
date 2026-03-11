@@ -74,6 +74,8 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 
 `POST /api/runs/launch` принимает также runtime-overrides `parallel_agents`, `parallel_workers` и `parallel_window`. Backend переносит их в `ScenarioConfig.runtime` конкретного запуска, поэтому они отражаются в `_input_scenario.json` и не теряются между UI и subprocess launcher'ом.
 
+Метаданные прогона (`scenario`, `governance`, `seed`, `variant`) извлекаются из правого суффикса имени прогона, поэтому пользовательское название сценария может содержать фрагменты вида `G2` или `G10` без поломки карточки прогона и WebSocket `meta`.
+
 #### Сценарии
 
 | Метод | Путь | Описание |
