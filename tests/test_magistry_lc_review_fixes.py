@@ -864,6 +864,34 @@ def test_memory_summarizes_working_buffer(tmp_path: Path) -> None:
     assert len(mem.working) == 2
 
 
+def test_memory_summarization_failure_preserves_working_buffer(tmp_path: Path) -> None:
+    class _FailingSummaryProvider(MockLLMProvider):
+        def generate(self, system: str, user: str, temperature: float = 0.0):
+            raise RuntimeError("boom")
+
+    mem = AgentMemory(agent_id="agent:off_1")
+    cfg = MemoryConfig(working_max_entries=2, working_summarize_batch=2)
+
+    for t in range(4):
+        mem.add_working(tick=t, text=f"e{t}")
+
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    llm = LLMCaller(provider=_FailingSummaryProvider(), trace=trace)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(
+            mem.maybe_summarize_working(
+                llm=llm,
+                language="ru",
+                cfg=cfg,
+                tick=10,
+                temperature=0.0,
+            )
+        )
+
+    assert [entry.text for entry in mem.working] == ["e0", "e1", "e2", "e3"]
+
+
 def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["dao"], off_2_caps=["message", "work"])
     state.votes["vote:1"] = Vote(

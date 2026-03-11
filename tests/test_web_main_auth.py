@@ -100,6 +100,60 @@ def test_get_run_reads_directory_events(tmp_path: Path):
     assert isinstance(payload["events"], list) and len(payload["events"]) == 1
 
 
+def test_get_run_hides_private_events_for_viewer(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        (
+            '{"tick":1,"event_type":"message_sent","actor_id":"agent:off_1",'
+            '"payload":{"to_id":"agent:off_2","private":true,"text":"secret"},'
+            '"audience":["agent:off_1","agent:off_2"]}\n'
+            '{"tick":1,"event_type":"world_event","payload":{"description":"public"},'
+            '"audience":["aud:public"]}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run?include_events=true",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["total_events"] == 1
+    assert [event["event_type"] for event in payload["events"]] == ["world_event"]
+
+
+def test_get_run_admin_sees_private_events(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        (
+            '{"tick":1,"event_type":"message_sent","actor_id":"agent:off_1",'
+            '"payload":{"to_id":"agent:off_2","private":true,"text":"secret"},'
+            '"audience":["agent:off_1","agent:off_2"]}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run?include_events=true",
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["total_events"] == 1
+    assert payload["events"][0]["payload"]["text"] == "secret"
+
+
 def test_get_artifact_skips_invalid_jsonl_lines(tmp_path: Path):
     run_dir = tmp_path / "lc_run"
     run_dir.mkdir()
@@ -114,6 +168,32 @@ def test_get_artifact_skips_invalid_jsonl_lines(tmp_path: Path):
     artifacts_dir = tmp_path / "artifacts"
     artifacts_dir.mkdir()
 
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.routes.runs.ARTIFACTS_DIR", artifacts_dir):
+                with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                    r = client.get(
+                        "/api/artifacts/doc_1",
+                        headers={"Authorization": f"Bearer {admin_token()}"},
+                    )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["doc_id"] == "doc_1"
+    assert payload["title"] == "Report"
+    assert payload["content"] == "ok"
+
+
+def test_get_artifact_requires_admin(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        '{"event_type":"document_created","payload":{"doc_id":"doc_1","content":"ok"}}\n',
+        encoding="utf-8",
+    )
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir()
+
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
             with patch("web.backend.routes.runs.ARTIFACTS_DIR", artifacts_dir):
@@ -123,11 +203,7 @@ def test_get_artifact_skips_invalid_jsonl_lines(tmp_path: Path):
                         headers={"Authorization": f"Bearer {viewer_token()}"},
                     )
 
-    assert r.status_code == 200
-    payload = r.json()
-    assert payload["doc_id"] == "doc_1"
-    assert payload["title"] == "Report"
-    assert payload["content"] == "ok"
+    assert r.status_code == 403
 
 
 def test_list_scenarios_includes_yaml_scenario_config(tmp_path: Path):
@@ -329,6 +405,33 @@ def test_export_run_reads_directory_sidecars(tmp_path: Path):
     assert payload["scenario"] == {"title": "demo"}
     assert payload["names"] == {"agent:1": "Alice"}
     assert payload["summary"] == {"score": 1}
+
+
+def test_export_run_hides_private_events_for_viewer(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        (
+            '{"tick":1,"event_type":"message_sent","actor_id":"agent:off_1",'
+            '"payload":{"to_id":"agent:off_2","private":true,"text":"secret"},'
+            '"audience":["agent:off_1","agent:off_2"]}\n'
+            '{"tick":1,"event_type":"world_event","payload":{"description":"public"},'
+            '"audience":["aud:public"]}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/export",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert [event["event_type"] for event in payload["events"]] == ["world_event"]
 
 
 def test_get_run_scenario_normalizes_lc_config_for_frontend(tmp_path: Path):
@@ -1042,6 +1145,43 @@ def test_ws_playback_skips_invalid_json_lines(tmp_path: Path):
     assert not any(message.get("type") == "error" for message in messages)
     event_messages = [message for message in messages if message.get("type") in {"event", "events"}]
     assert event_messages
+
+
+def test_ws_playback_hides_private_events_for_viewer(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        (
+            '{"tick":1,"event_type":"message_sent","actor_id":"agent:off_1",'
+            '"payload":{"to_id":"agent:off_2","private":true,"text":"secret"},'
+            '"audience":["agent:off_1","agent:off_2"]}\n'
+            '{"tick":2,"event_type":"world_event","payload":{"description":"tail"},'
+            '"audience":["aud:public"]}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.websocket.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                with client.websocket_connect("/ws/playback/lc_run?speed=100") as websocket:
+                    websocket.send_json({"type": "auth", "token": viewer_token()})
+                    messages = []
+                    for _ in range(8):
+                        message = websocket.receive_json()
+                        messages.append(message)
+                        if message.get("type") == "done":
+                            break
+
+    streamed: list[dict] = []
+    for message in messages:
+        if message.get("type") == "event":
+            streamed.append(message["data"])
+        elif message.get("type") == "events":
+            streamed.extend(message["data"])
+
+    assert [event.get("event_type") for event in streamed] == ["world_event"]
+    assert all("secret" not in json.dumps(event, ensure_ascii=False) for event in streamed)
 
 
 def test_ws_live_drains_final_event_tail_before_done(tmp_path: Path):

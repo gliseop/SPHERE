@@ -175,7 +175,6 @@ class AgentMemory:
         if batch_size <= 0:
             return
         batch = self.working[:batch_size]
-        self.working = self.working[batch_size:]
 
         prev = self.summary.strip()
         lines = "\n".join(f"- (t{e.tick}) {e.text}" for e in batch)
@@ -198,6 +197,7 @@ class AgentMemory:
             temperature=temperature,
         )
         new_summary = _norm_text(resp.text)
+        self.working = self.working[batch_size:]
         if new_summary:
             self.summary = new_summary
 

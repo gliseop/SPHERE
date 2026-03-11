@@ -69,6 +69,7 @@ MAGISTRY/
 │   │   ├── runner.py           # Фоновый запуск симуляций
 │   │   ├── run_artifacts.py    # Поиск артефактов прогонов (legacy + directory)
 │   │   ├── graph_state.py      # Построение графа для визуализации
+│   │   ├── visibility.py       # Role-based фильтрация/редактура event-потока для REST/WS
 │   │   ├── constants.py        # Enum-значения (GovernanceMode, ScenarioId)
 │   │   └── manage_users.py     # CLI управления пользователями
 │   └── frontend/
@@ -206,6 +207,7 @@ cd web && bash start.sh                   # сервер + фронтенд
 - **Custom governance modes**: пользовательские `G*`-режимы должны содержать валидный `GovernanceConfig` (в поле `config` или в корне JSON); backend применяет их при подстановке шаблона и round-trip сценария, а не игнорирует как неизвестный `G4+`.
 - **Оставшиеся заглушки web API**: HTTP 501 пока сохраняется только для путей, ещё не мигрированных с `magistry_sim` (например, генерация интервью и secondary-agents через LLM); web UI не должен показывать активные кнопки для таких маршрутов.
 - **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.
+- **Role-based visibility в web API/WS**: `viewer` получает только shared-события (`aud:public` / `aud:internal`, плюс legacy без `audience`); point-to-point private events скрываются, `document_created.content` и legacy private payloads редактируются, а `GET /api/artifacts/{doc_id}` доступен только `admin`.
 
 ## Техническое состояние кодовой базы
 

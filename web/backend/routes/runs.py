@@ -23,6 +23,7 @@ from web.backend.run_artifacts import (
 )
 from web.backend.settings import ARTIFACTS_DIR, DOC_ID_RE, RESULTS_DIR
 from web.backend.validators import validate_run_name
+from web.backend.visibility import sanitize_event_for_role
 
 router = APIRouter(tags=["runs"])
 
@@ -192,6 +193,11 @@ async def get_run(
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(event, dict):
+                continue
+            event = sanitize_event_for_role(event, role=_user.role)
+            if event is None:
+                continue
             builder.ingest(event)
             if include_events and total >= offset and len(events) < limit:
                 events.append(normalize_event_compat(event))
@@ -208,12 +214,12 @@ async def get_run(
 
 
 @router.get("/api/artifacts/{doc_id}")
-async def get_artifact(doc_id: str, _user: User = Depends(require_viewer)) -> dict:
+async def get_artifact(doc_id: str, _user: User = Depends(require_admin)) -> dict:
     """Получить документ-артефакт по ID.
 
     Args:
         doc_id: Идентификатор документа.
-        _user: Аутентифицированный пользователь (любая роль).
+        _user: Аутентифицированный пользователь с ролью admin.
     """
     if not DOC_ID_RE.fullmatch(doc_id):
         raise HTTPException(status_code=400, detail="Invalid doc_id")
@@ -280,9 +286,12 @@ async def export_run(name: str, _user: User = Depends(require_viewer)) -> JSONRe
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if isinstance(event, dict):
-                    event = normalize_event_compat(event)
-                events.append(event)
+                if not isinstance(event, dict):
+                    continue
+                event = sanitize_event_for_role(event, role=_user.role)
+                if event is None:
+                    continue
+                events.append(normalize_event_compat(event))
     except OSError:
         raise HTTPException(status_code=404, detail="Run file not found")
 

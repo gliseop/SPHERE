@@ -25,6 +25,7 @@ web/backend/
 ├── runner.py         # Фоновый запуск симуляций
 ├── run_artifacts.py  # Единый поиск run-артефактов (legacy + directory)
 ├── graph_state.py    # Построение графа связей для визуализации
+├── visibility.py     # Role-based фильтрация/редактура event-потока для REST/WS
 └── manage_users.py   # CLI управления пользователями
 ```
 
@@ -36,6 +37,8 @@ web/backend/
 - **viewer** — только чтение: просмотр прогонов, событий, графов
 
 Токен выдаётся через OAuth2 password flow (`POST /api/auth/login`). Время жизни настраивается через `JWT_EXPIRE_HOURS` (по умолчанию 24 часа, при невалидном значении используется fallback). Секрет задаётся через `JWT_SECRET` и должен быть не короче 32 байт; в режиме разработки (`MAGISTRY_DEV=1`) при отсутствии явного секрета backend использует стабильный dev-secret, чтобы токены не отваливались при reload и multi-worker запуске.
+
+Для event-потока роли различаются не только правами на маршруты, но и видимостью данных. `admin` видит весь `events.jsonl`, включая private/direct сообщения и legacy `llm_call`; `viewer` получает только общий слой (`aud:public`, `aud:internal`, legacy события без `audience`). Для shared-событий с потенциально чувствительным payload backend дополнительно редактирует содержимое (`document_created.content`, private `message_sent.text`).
 
 ### REST API
 
@@ -54,12 +57,14 @@ web/backend/
 | GET | `/api/run/{name}/export` | Экспорт полного прогона |
 | GET | `/api/run/{name}/scenario` | Конфигурация сценария прогона |
 | GET | `/api/run/{name}/prompts` | Промпты и ответы LLM (только `admin`, limit ≤ 1000) |
+| GET | `/api/artifacts/{doc_id}` | Артефакты (сгенерированные документы, только `admin`) |
 | DELETE | `/api/runs/{run_name}` | Удалить прогон |
 
 `/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`. CLI `magistry-lc run` по умолчанию пишет прогоны именно в `results/<timestamp>`, поэтому такие запуски сразу видны web UI без дополнительного `--out`.
 Для directory-based LC-run движок дополнительно пишет sidecar-файлы `scenario.json`, `names.json`, `trace.jsonl` и `summary.json`, чтобы web UI мог загрузить конфиг прогона, человеко-читаемые имена агентов и prompt-inspector без отдельной конвертации.
 Для активного directory-based прогона `GET /api/run/{name}/scenario` умеет читать и ранний launcher-sidecar `_input_scenario.json`, поэтому панель сценария доступна сразу после старта, ещё до записи финального `scenario.json`.
 Для MAGISTRY-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl`, если они вынесены из `events.jsonl`.
+Перед отдачей `GET /api/run/{name}` и `GET /api/run/{name}/export` backend теперь применяет `audience`-policy: viewer не получает point-to-point события, адресованные только конкретным `agent:*`, а admin по-прежнему видит полный поток. Это же правило используется и для построения `graph_state`, чтобы скрытые события не просачивались через побочные изменения графа.
 
 #### Живая симуляция
 
@@ -139,7 +144,6 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 | GET | `/api/templates/scenarios` | Встроенные шаблоны сценариев |
 | GET | `/api/templates/scenarios/{id}` | Конкретный шаблон как `ScenarioConfig` |
 | GET | `/api/templates/governance` | Шаблоны режимов управления |
-| GET | `/api/artifacts/{doc_id}` | Артефакты (сгенерированные документы) |
 | GET | `/api/debug/llm-log` | Журнал LLM-вызовов |
 
 Шаблоны сценариев собираются из поддерживаемых `seed_s*_g*.json` сценариев репозитория. Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G*` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора. Для built-in режимов (`G0..G3`) backend применяет жёстко заданные пресеты; для пользовательских `G*` он загружает конфиг из `data/governance_modes/{id}.json`.
@@ -155,6 +159,8 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 После установления WebSocket-соединения клиент обязан первым сообщением отправить JSON вида `{"type":"auth","token":"<JWT>"}`. JWT больше не передаётся в query string, чтобы не утекать в URL-логи и историю браузера.
 
 При logout или client-side событии `auth:logout` фронтенд должен явно закрывать активное `/ws/live` или `/ws/playback` соединение до перехода на форму входа, чтобы не оставлять аутентифицированный поток событий открытым после завершения сессии.
+
+WebSocket-поток использует ту же visibility-policy, что и REST: `viewer` получает только shared-события и уже отредактированные payload'ы, `admin` — полный raw-поток. Это относится и к bootstrap-фазе (`graph_state` + tail истории), и к live-delta при дочитывании `events.jsonl`.
 
 Фактические типы сообщений:
 

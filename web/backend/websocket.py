@@ -14,6 +14,7 @@ import aiofiles
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .auth import verify_ws_token
+from .database import User
 from .graph_state import GraphStateBuilder, normalize_event_compat
 from .run_artifacts import (
     parse_run_name,
@@ -32,6 +33,7 @@ from .settings import (
     RUN_NAME_RE,
 )
 from .validators import validate_run_name
+from .visibility import sanitize_event_for_role
 
 router = APIRouter()
 _WS_AUTH_TIMEOUT_S = 5.0
@@ -212,6 +214,7 @@ async def _bootstrap_graph_from_file(
     path: Path,
     builder: GraphStateBuilder,
     *,
+    role: str,
     tail_events: int,
 ) -> tuple[int, bytes, list[dict]]:
     """Ingest existing JSONL into graph state and return last events for UI.
@@ -248,6 +251,11 @@ async def _bootstrap_graph_from_file(
                     event = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(event, dict):
+                    continue
+                event = sanitize_event_for_role(event, role=role)
+                if event is None:
+                    continue
                 builder.ingest(event)
                 if keep_tail is not None:
                     keep_tail.append(event)
@@ -263,6 +271,7 @@ async def _consume_live_file_delta(
     builder: GraphStateBuilder,
     pending: list[dict[str, Any]],
     names: dict[str, str],
+    role: str,
 ) -> tuple[int, bool]:
     """Дочитать весь доступный прирост events-файла."""
     graph_dirty = False
@@ -287,6 +296,11 @@ async def _consume_live_file_delta(
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            event = sanitize_event_for_role(event, role=role)
+            if event is None:
                 continue
             builder.ingest(event)
             if _ws_should_send_event(event):
@@ -329,34 +343,38 @@ async def _reject_websocket(websocket: WebSocket, message: str, *, code: int = 1
     await websocket.close(code=code)
 
 
-async def _authenticate_websocket(websocket: WebSocket) -> bool:
+async def _authenticate_websocket(websocket: WebSocket) -> User | None:
     try:
         raw_message = await asyncio.wait_for(websocket.receive_text(), timeout=_WS_AUTH_TIMEOUT_S)
     except asyncio.TimeoutError:
         await _reject_websocket(websocket, "Unauthorized")
-        return False
+        return None
     except WebSocketDisconnect:
-        return False
+        return None
     except Exception:
         await _reject_websocket(websocket, "Unauthorized")
-        return False
+        return None
 
     try:
         message = json.loads(raw_message)
     except json.JSONDecodeError:
         await _reject_websocket(websocket, "Unauthorized")
-        return False
+        return None
 
     if not isinstance(message, dict) or str(message.get("type") or "") != "auth":
         await _reject_websocket(websocket, "Unauthorized")
-        return False
+        return None
 
     token = message.get("token")
-    if not isinstance(token, str) or verify_ws_token(token) is None:
+    if not isinstance(token, str):
         await _reject_websocket(websocket, "Unauthorized")
-        return False
+        return None
+    user = verify_ws_token(token)
+    if user is None:
+        await _reject_websocket(websocket, "Unauthorized")
+        return None
 
-    return True
+    return user
 
 
 # ---------------------------------------------------------------------------
@@ -378,8 +396,10 @@ async def ws_playback(
         speed: Скорость воспроизведения.
     """
     await websocket.accept()
-    if not await _authenticate_websocket(websocket):
+    user = await _authenticate_websocket(websocket)
+    if user is None:
         return
+    role = user.role
     if not math.isfinite(speed) or speed <= 0:
         await _reject_websocket(websocket, "Invalid speed")
         return
@@ -407,6 +427,11 @@ async def ws_playback(
     pending_since = time.monotonic()
     try:
         async for event in _stream_events_from_file(path, speed=speed):
+            if not isinstance(event, dict):
+                continue
+            event = sanitize_event_for_role(event, role=role)
+            if event is None:
+                continue
             builder.ingest(event)
             if _ws_should_send_event(event):
                 pending.append(_event_for_ws(event, names))
@@ -448,8 +473,10 @@ async def ws_live(
         run_name: Имя конкретного прогона (опционально).
     """
     await websocket.accept()
-    if not await _authenticate_websocket(websocket):
+    user = await _authenticate_websocket(websocket)
+    if user is None:
         return
+    role = user.role
 
     from web.backend.runner import list_active
 
@@ -481,6 +508,7 @@ async def ws_live(
                             builder=builder,
                             pending=pending,
                             names=names,
+                            role=role,
                         )
                 else:
                     file_pos, drained_dirty = await _consume_live_file_delta(
@@ -490,6 +518,7 @@ async def ws_live(
                         builder=builder,
                         pending=pending,
                         names=names,
+                        role=role,
                     )
             except OSError:
                 return
@@ -584,6 +613,7 @@ async def ws_live(
                     file_pos, leftover, tail_events = await _bootstrap_graph_from_file(
                         watched_path,
                         builder,
+                        role=role,
                         tail_events=LIVE_HISTORY_EVENTS,
                     )
                 except OSError:
@@ -624,6 +654,7 @@ async def ws_live(
                             builder=builder,
                             pending=pending,
                             names=names,
+                            role=role,
                         )
                         graph_dirty = graph_dirty or drained_dirty
                         if len(pending) >= WS_EVENT_BATCH_SIZE:
