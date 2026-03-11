@@ -176,7 +176,7 @@ class SendMessageOp:
 class CreateWorkItemOp:
     """Создать work item."""
 
-    created_by: str
+    created_by: str | None
     work_id: str
     work_type: str
     title: str

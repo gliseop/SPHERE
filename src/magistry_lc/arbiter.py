@@ -272,6 +272,7 @@ class Arbiter:
             for vote in state.votes.values()
             if vote.status == "open"
         }
+        reserved_entity_ids: set[str] = set(state.registry.list_ids())
 
         def _reserve_open_vote_target(res: ActionResult) -> ActionResult:
             if not res.approved:
@@ -288,6 +289,40 @@ class Arbiter:
                     )
                 reserved_vote_targets.add(op.target_agent_id)
             return res
+
+        def _reserve_created_entities(res: ActionResult) -> ActionResult:
+            if not res.approved or not res.ops:
+                return res
+
+            filtered_ops: list[StateOp] = []
+            reason = res.reason
+            for op in res.ops:
+                if isinstance(op, CreateEntityOp):
+                    if op.entity_id in reserved_entity_ids:
+                        reason = "entity_already_exists"
+                        continue
+                    reserved_entity_ids.add(op.entity_id)
+                    filtered_ops.append(op)
+                    continue
+
+                if isinstance(op, CreateAgentOp):
+                    if op.entity_id in reserved_entity_ids:
+                        return ActionResult(
+                            res.action_index,
+                            False,
+                            f"agent_id_conflict:{op.entity_id}",
+                            [],
+                        )
+                    reserved_entity_ids.add(op.entity_id)
+                    filtered_ops.append(op)
+                    continue
+
+                filtered_ops.append(op)
+
+            return ActionResult(res.action_index, True, reason, filtered_ops)
+
+        def _reserve_result(res: ActionResult) -> ActionResult:
+            return _reserve_created_entities(_reserve_open_vote_target(res))
 
         for aid in sorted(proposed.keys()):
             arbitration[aid] = []
@@ -307,8 +342,9 @@ class Arbiter:
                         journal_yaml=journal_yaml,
                         spawn_used=spawn_used,
                     )
-                    arbitration[aid].append(_reserve_open_vote_target(res))
-                    if isinstance(act, SpawnAgentAction) and res.approved:
+                    reserved_res = _reserve_result(res)
+                    arbitration[aid].append(reserved_res)
+                    if isinstance(act, SpawnAgentAction) and reserved_res.approved:
                         spawn_used = True
 
         async def _decide(m: tuple[str, int, PerformAction, set[str]]) -> _PerformArbiterOutput:
@@ -345,7 +381,7 @@ class Arbiter:
                 action_index=idx,
                 decision=decision,
             )
-            arbitration[aid][idx] = _reserve_open_vote_target(res)
+            arbitration[aid][idx] = _reserve_result(res)
 
         # Убираем None (на всякий случай) и приводим тип.
         out: dict[str, list[ActionResult]] = {}

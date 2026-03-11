@@ -19,6 +19,7 @@ from magistry_lc.actions import (
     CreateWorkItemAction,
     NominatePositionChangeAction,
     PerformAction,
+    RequestEntityAction,
     RespondNominationAction,
     SendMessageAction,
     SpawnAgentAction,
@@ -386,6 +387,44 @@ def test_arbiter_rejects_second_open_vote_for_same_target_in_tick(tmp_path: Path
     assert "open_vote_already_exists_for_target" in out["agent:off_1"][1].reason
 
 
+def test_arbiter_deduplicates_request_entity_in_same_tick(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    out = asyncio.run(
+        arbiter.arbitrate_tick(
+            state=state,
+            proposed={
+                "agent:off_1": [
+                    RequestEntityAction(
+                        type=ActionType.REQUEST_ENTITY,
+                        kind="chan",
+                        slug="shared",
+                        description="",
+                        justification="",
+                    )
+                ],
+                "agent:off_2": [
+                    RequestEntityAction(
+                        type=ActionType.REQUEST_ENTITY,
+                        kind="chan",
+                        slug="shared",
+                        description="",
+                        justification="",
+                    )
+                ],
+            },
+            journal_yaml=state.journal_yaml(),
+        )
+    )
+
+    assert out["agent:off_1"][0].approved is True
+    assert [type(op).__name__ for op in out["agent:off_1"][0].ops] == ["CreateEntityOp"]
+    assert out["agent:off_2"][0].approved is True
+    assert out["agent:off_2"][0].reason == "entity_already_exists"
+    assert out["agent:off_2"][0].ops == []
+
+
 def test_arbiter_open_vote_excludes_target_from_voters_by_default(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
     arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
@@ -668,6 +707,42 @@ def test_engine_init_uses_agent_initial_reputation(tmp_path: Path) -> None:
         if event.event_type == "reputation_snapshot"
     ]
     assert snapshots[0].payload["score"] == 7.0
+
+
+def test_engine_init_rejects_initial_work_item_with_unknown_participant(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "title": "init-phantom-work-item",
+            "ticks": 1,
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "capabilities": ["work"],
+                }
+            ],
+            "world": {
+                "work_items": [
+                    {
+                        "work_id": "work:init",
+                        "work_type": "task",
+                        "title": "Task",
+                        "participants": ["agent:ghost"],
+                    }
+                ]
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider())
+
+    with pytest.raises(ValueError, match="Participant agent not found"):
+        engine._init_state(event_log=EventLog(artifacts.events_path))
 
 
 def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) -> None:

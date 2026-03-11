@@ -58,6 +58,7 @@ web/backend/
 
 `/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`. CLI `magistry-lc run` по умолчанию пишет прогоны именно в `results/<timestamp>`, поэтому такие запуски сразу видны web UI без дополнительного `--out`.
 Для directory-based LC-run движок дополнительно пишет sidecar-файлы `scenario.json`, `names.json`, `trace.jsonl` и `summary.json`, чтобы web UI мог загрузить конфиг прогона, человеко-читаемые имена агентов и prompt-inspector без отдельной конвертации.
+Для активного directory-based прогона `GET /api/run/{name}/scenario` умеет читать и ранний launcher-sidecar `_input_scenario.json`, поэтому панель сценария доступна сразу после старта, ещё до записи финального `scenario.json`.
 Для MAGISTRY-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl`, если они вынесены из `events.jsonl`.
 
 #### Живая симуляция
@@ -140,6 +141,7 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 | GET | `/api/debug/llm-log` | Журнал LLM-вызовов |
 
 Шаблоны сценариев собираются из поддерживаемых `seed_s*_g*.json` сценариев репозитория. Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G*` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора. Для built-in режимов (`G0..G3`) backend применяет жёстко заданные пресеты; для пользовательских `G*` он загружает конфиг из `data/governance_modes/{id}.json`.
+Идентификатор `governance` валидируется как безопасный library-id: backend не читает произвольные JSON-файлы вне `data/governance_modes/`, даже если в query передать path-like строку.
 
 ### WebSocket-протокол
 

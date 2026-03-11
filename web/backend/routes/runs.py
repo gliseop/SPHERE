@@ -310,6 +310,14 @@ async def export_run(name: str, _user: User = Depends(require_viewer)) -> JSONRe
     )
 
 
+def _iter_run_scenario_candidates(ref) -> list[Path]:
+    """Вернуть кандидаты scenario-sidecar для сохранённого или живого прогона."""
+    candidates = list(run_json_sidecar_candidates(ref, "scenario", results_dir=RESULTS_DIR))
+    if ref.format == "directory":
+        candidates.append(ref.events_path.parent / "_input_scenario.json")
+    return candidates
+
+
 @router.get("/api/run/{name}/scenario")
 async def get_run_scenario(name: str, _user: User = Depends(require_viewer)) -> dict:
     """Получить конфигурацию сценария для указанного прогона.
@@ -326,7 +334,7 @@ async def get_run_scenario(name: str, _user: User = Depends(require_viewer)) -> 
     if ref is None:
         raise HTTPException(status_code=404, detail="Run not found")
     scenario_path: Path | None = None
-    for candidate in run_json_sidecar_candidates(ref, "scenario", results_dir=RESULTS_DIR):
+    for candidate in _iter_run_scenario_candidates(ref):
         if candidate.exists():
             scenario_path = candidate
             break

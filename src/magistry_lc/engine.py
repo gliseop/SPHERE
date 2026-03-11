@@ -34,7 +34,14 @@ from .ids import (
 )
 from .journal import WorldJournal
 from .llm import LLMCaller, create_llm_provider
-from .ops import CreateAgentOp, CreateEntityOp, ModifyReputationOp, SetReputationFreezeOp, StateOp
+from .ops import (
+    CreateAgentOp,
+    CreateEntityOp,
+    CreateWorkItemOp,
+    ModifyReputationOp,
+    SetReputationFreezeOp,
+    StateOp,
+)
 from .persona import (
     INTERVIEW_QUESTIONS_V2,
     PersonaArtifact,
@@ -1262,25 +1269,15 @@ class WorldEngine:
             )
 
         for w in self.cfg.world.work_items:
-            state.registry.register(
-                EntityRecord(entity_id=w.work_id, kind=EntityKind.WORK_ITEM, created_by=None, created_tick=0, meta={"work_type": w.work_type, "title": w.title})
-            )
-            state.work_items[w.work_id] = WorkItem(
+            op = CreateWorkItemOp(
+                created_by=None,
                 work_id=w.work_id,
                 work_type=w.work_type,
                 title=w.title,
                 description=w.description,
                 participants=list(w.participants),
             )
-            event_log.append(
-                Event(
-                    tick=0,
-                    event_type="work_item_created",
-                    actor_id=None,
-                    payload={"work_id": w.work_id, "work_type": w.work_type, "title": w.title, "description": w.description, "participants": list(w.participants)},
-                    audience=[INTERNAL_AUDIENCE],
-                )
-            )
+            event_log.extend(op.apply(state))
 
         return state
 

@@ -22,7 +22,12 @@ from web.backend.settings import (
     PERSONALITIES_DIR,
     SCENARIOS_DIR,
 )
-from web.backend.validators import S_NUM_RE, next_s_number, validate_scenario_id
+from web.backend.validators import (
+    S_NUM_RE,
+    next_s_number,
+    validate_library_id,
+    validate_scenario_id,
+)
 
 router = APIRouter(tags=["scenarios"])
 _ALLOCATE_ID_ATTEMPTS = 256
@@ -136,6 +141,7 @@ def _normalize_capabilities(raw: Any) -> list[str]:
 
 
 def _load_governance_mode_record(mode_id: str) -> dict[str, Any] | None:
+    validate_library_id(mode_id, GOVERNANCE_MODES_DIR, kind="governance-mode")
     path = GOVERNANCE_MODES_DIR / f"{mode_id}.json"
     raw = _read_mapping(path)
     if raw is None:

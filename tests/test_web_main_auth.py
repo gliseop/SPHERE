@@ -369,6 +369,40 @@ def test_get_run_scenario_normalizes_lc_config_for_frontend(tmp_path: Path):
     assert payload["agents"][0]["initial_reputation"] == 7.0
 
 
+def test_get_run_scenario_falls_back_to_input_sidecar_for_live_run(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+    (run_dir / "_input_scenario.json").write_text(
+        (
+            '{'
+            '"version":1,'
+            '"title":"Live Input Scenario",'
+            '"description":"demo",'
+            '"ticks":6,'
+            '"seed":13,'
+            '"agents":[{"agent_id":"agent:off_1","name":"Off 1","internal":true,"persona":{},"capabilities":["message"],"initial_reputation":3.0,"initial_title":"специалист"}],'
+            '"world":{"channels":[{"channel_id":"chan:public","title":"Public"}],"orgs":[],"work_items":[]}'
+            '}'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/scenario",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["name"] == "Live Input Scenario"
+    assert payload["rounds"] == 6
+    assert payload["seed"] == 13
+
+
 def test_get_interview_rejects_backslash_path_traversal():
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         r = client.get(
@@ -688,6 +722,34 @@ def test_template_scenario_applies_custom_governance_mode(tmp_path: Path):
     assert payload["governance"]["allow_self_nomination"] is True
     assert payload["governance"]["allow_target_self_vote"] is True
     assert payload["governance"]["audit"]["reputation_penalty_delta"] == -0.5
+
+
+def test_template_scenario_rejects_governance_path_traversal(tmp_path: Path):
+    (tmp_path / "seed_s1_g1.json").write_text(
+        json.dumps(
+            {
+                "name": "Прямой сговор",
+                "scenario": "S1",
+                "governance": "G1",
+                "rounds": 4,
+                "agents": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    governance_dir = tmp_path / "governance"
+    governance_dir.mkdir()
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            with patch("web.backend.routes.scenarios.GOVERNANCE_MODES_DIR", governance_dir):
+                r = client.get(
+                    "/api/templates/scenarios/S1?governance=..%5C..%5Cscenarios%5Cseed_s1_g1",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+
+    assert r.status_code == 400
 
 
 def test_launch_run_admin_starts_template_process():
