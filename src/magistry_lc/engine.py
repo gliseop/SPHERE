@@ -9,6 +9,7 @@ import logging
 import os
 import random
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -79,6 +80,7 @@ class RunArtifacts:
     trace_path: Path
     scenario_path: Path | None = None
     names_path: Path | None = None
+    status_path: Path | None = None
     truth_path: Path | None = None
     evaluation_path: Path | None = None
     fidelity_path: Path | None = None
@@ -99,6 +101,8 @@ class WorldEngine:
             self.artifacts.scenario_path = self.artifacts.out_dir / "scenario.json"
         if self.artifacts.names_path is None:
             self.artifacts.names_path = self.artifacts.out_dir / "names.json"
+        if self.artifacts.status_path is None:
+            self.artifacts.status_path = self.artifacts.out_dir / "status.json"
         if self.artifacts.truth_path is None:
             self.artifacts.truth_path = self.artifacts.out_dir / "truth.jsonl"
         if self.artifacts.evaluation_path is None:
@@ -110,6 +114,18 @@ class WorldEngine:
 
     async def run(self) -> WorldState:
         """Запустить симуляцию и вернуть финальный WorldState."""
+        self._write_status_sidecar(state="running", tick=None)
+        try:
+            return await self._run_inner()
+        except Exception as exc:
+            self._write_status_sidecar(
+                state="failed",
+                tick=None,
+                error={"type": exc.__class__.__name__, "message": str(exc)},
+            )
+            raise
+
+    async def _run_inner(self) -> WorldState:
         provider = self.provider_override or create_llm_provider(self.cfg.llm)
         trace = TraceLog(self.artifacts.trace_path, max_chars=self.cfg.llm.trace_max_chars)
         llm = LLMCaller(provider=provider, trace=trace)
@@ -242,6 +258,7 @@ class WorldEngine:
             state.tick = tick
             journal.set_tick(tick)
             logger.info("tick=%s", tick)
+            self._write_status_sidecar(state="running", tick=tick)
 
             agent_order = self._agent_order(state=state, tick=tick)
             tick_events = self._expire_reputation_freezes(state=state, event_log=event_log)
@@ -438,6 +455,7 @@ class WorldEngine:
                 encoding="utf-8",
             )
         self._write_names_sidecar(state=state)
+        self._write_status_sidecar(state="finished", tick=state.tick)
         return state
 
     def _write_run_sidecars(self, *, state: WorldState, include_scenario: bool) -> None:
@@ -460,6 +478,30 @@ class WorldEngine:
             json.dumps(names, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    def _write_status_sidecar(
+        self,
+        *,
+        state: str,
+        tick: int | None,
+        error: dict[str, str] | None = None,
+    ) -> None:
+        if self.artifacts.status_path is None:
+            return
+        payload = {
+            "state": state,
+            "pid": os.getpid(),
+            "tick": tick,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "error": error,
+        }
+        try:
+            self.artifacts.status_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("Failed to write status sidecar: %s", exc)
 
     def _agent_order(self, *, state: WorldState, tick: int) -> list[str]:
         """Детерминированный порядок агентов на тик (использует seed)."""
@@ -1702,6 +1744,7 @@ def default_artifacts(out_dir: str | Path) -> RunArtifacts:
         out_dir=d,
         events_path=d / "events.jsonl",
         trace_path=d / "trace.jsonl",
+        status_path=d / "status.json",
         truth_path=d / "truth.jsonl",
         evaluation_path=d / "evaluation.json",
     )

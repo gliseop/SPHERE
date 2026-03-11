@@ -61,8 +61,8 @@ web/backend/
 | DELETE | `/api/runs/{run_name}` | Удалить прогон |
 
 `/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`. CLI `magistry-lc run` по умолчанию пишет прогоны именно в `results/<timestamp>`, поэтому такие запуски сразу видны web UI без дополнительного `--out`.
-Для directory-based LC-run движок дополнительно пишет sidecar-файлы `scenario.json`, `names.json`, `trace.jsonl` и `summary.json`, чтобы web UI мог загрузить конфиг прогона, человеко-читаемые имена агентов и prompt-inspector без отдельной конвертации.
-Для активного directory-based прогона `GET /api/run/{name}/scenario` умеет читать и ранний launcher-sidecar `_input_scenario.json`, поэтому панель сценария доступна сразу после старта, ещё до записи финального `scenario.json`.
+Для directory-based LC-run движок дополнительно пишет sidecar-файлы `scenario.json`, `names.json`, `status.json`, `trace.jsonl` и `summary.json`, чтобы web UI мог загрузить конфиг прогона, человеко-читаемые имена агентов, heartbeat-статус и prompt-inspector без отдельной конвертации.
+Для активного directory-based прогона `GET /api/run/{name}/scenario` и `GET /api/run/{name}/export` умеют читать и ранний launcher-sidecar `_input_scenario.json`, поэтому конфиг доступен сразу после старта, ещё до записи финального `scenario.json`.
 Для MAGISTRY-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl`, если они вынесены из `events.jsonl`.
 Перед отдачей `GET /api/run/{name}` и `GET /api/run/{name}/export` backend теперь применяет `audience`-policy: viewer не получает point-to-point события, адресованные только конкретным `agent:*`, а admin по-прежнему видит полный поток. Это же правило используется и для построения `graph_state`, чтобы скрытые события не просачивались через побочные изменения графа.
 
@@ -78,6 +78,8 @@ web/backend/
 Web launcher запускает `magistry_lc` как отдельный subprocess и пишет артефакты в `results/{run_name}/`. Для сохранённых legacy-сценариев (`name/scenario/governance/agents` без полного `ScenarioConfig`) backend перед запуском выполняет конвертацию в валидный `ScenarioConfig`: если `sim_config` пуст, сначала подгружается выбранный шаблон `S/G`, а затем поверх него накладываются overrides из web-карточки.
 
 `POST /api/runs/launch` принимает также runtime-overrides `parallel_agents`, `parallel_workers` и `parallel_window`. Backend переносит их в `ScenarioConfig.runtime` конкретного запуска, поэтому они отражаются в `_input_scenario.json` и не теряются между UI и subprocess launcher'ом.
+
+Внешние CLI-прогоны теперь попадают в `/api/runs/active` не по одному только свежему `events.jsonl`, а по sidecar-файлу `status.json`/`*_status.json` со статусом `running` и свежим heartbeat (`updated_at`). Это снижает число ложноположительных «живых» прогонов после аварийного завершения без `summary.json`.
 
 Метаданные прогона (`scenario`, `governance`, `seed`, `variant`) извлекаются из правого суффикса имени прогона, поэтому пользовательское название сценария может содержать фрагменты вида `G2` или `G10` без поломки карточки прогона и WebSocket `meta`.
 

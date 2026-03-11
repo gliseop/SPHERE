@@ -426,6 +426,7 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert artifacts.summary_path is not None and artifacts.summary_path.exists()
     assert artifacts.scenario_path is not None and artifacts.scenario_path.exists()
     assert artifacts.names_path is not None and artifacts.names_path.exists()
+    assert artifacts.status_path is not None and artifacts.status_path.exists()
 
     truth_records = [
         json.loads(line)
@@ -437,6 +438,7 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     combined = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
     scenario = json.loads(artifacts.scenario_path.read_text(encoding="utf-8"))
     names = json.loads(artifacts.names_path.read_text(encoding="utf-8"))
+    status = json.loads(artifacts.status_path.read_text(encoding="utf-8"))
 
     assert truth_records
     assert evaluation["truth_total"] >= 1
@@ -446,3 +448,4 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert "fidelity" in combined
     assert scenario["title"] == "lc-truth-evaluation"
     assert names == {"agent:auditor": "Auditor"}
+    assert status["state"] == "finished"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,6 +25,22 @@ def results_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return tmp_path
 
 
+def _write_status(path: Path, *, state: str = "running", pid: int = 0, updated_at: float | None = None) -> None:
+    ts = time.time() if updated_at is None else updated_at
+    path.write_text(
+        json.dumps(
+            {
+                "state": state,
+                "pid": pid,
+                "tick": 0,
+                "updated_at": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+                "error": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 # ---------- _discover_external_runs ----------
 
 
@@ -34,10 +51,11 @@ class TestDiscoverExternalRuns:
         """Пустая директория — нет внешних прогонов."""
         assert runner._discover_external_runs() == []
 
-    def test_fresh_events_no_summary(self, results_dir: Path):
-        """Свежий events-файл без summary — внешний прогон обнаружен."""
+    def test_fresh_events_with_running_status_detected(self, results_dir: Path):
+        """Свежий status-sidecar делает legacy-run видимым как внешний running."""
         events = results_dir / "S2_G1_seed1_cognitive_events.jsonl"
         events.write_text('{"type": "action"}\n')
+        _write_status(results_dir / "S2_G1_seed1_cognitive_status.json")
 
         runs = runner._discover_external_runs()
         assert len(runs) == 1
@@ -46,12 +64,13 @@ class TestDiscoverExternalRuns:
         assert runs[0]["external"] is True
         assert runs[0]["pid"] == 0
 
-    def test_fresh_directory_events_no_summary(self, results_dir: Path):
-        """Свежий directory-based events-файл без summary — прогон обнаружен."""
+    def test_fresh_directory_events_with_running_status_detected(self, results_dir: Path):
+        """Свежий directory-based status-sidecar делает прогон видимым как внешний running."""
         run_dir = results_dir / "lc_run"
         run_dir.mkdir()
         events = run_dir / "events.jsonl"
         events.write_text('{"type": "action"}\n')
+        _write_status(run_dir / "status.json")
 
         runs = runner._discover_external_runs()
         assert len(runs) == 1
@@ -60,24 +79,29 @@ class TestDiscoverExternalRuns:
         assert runs[0]["external"] is True
         assert runs[0]["pid"] == 0
 
+    def test_events_without_status_are_not_treated_as_running(self, results_dir: Path):
+        """Одного свежего events.jsonl больше недостаточно для статуса running."""
+        events = results_dir / "no_status_events.jsonl"
+        events.write_text('{"type": "action"}\n')
+
+        assert runner._discover_external_runs() == []
+
     def test_events_with_summary_ignored(self, results_dir: Path):
         """Если summary-файл существует — прогон считается завершённым."""
         events = results_dir / "run1_events.jsonl"
         events.write_text('{"type": "action"}\n')
+        _write_status(results_dir / "run1_status.json")
         summary = results_dir / "run1_summary.json"
         summary.write_text("{}")
 
         assert runner._discover_external_runs() == []
 
-    def test_stale_events_ignored(self, results_dir: Path):
-        """Если файл не обновлялся дольше порога — не считать живым."""
+    def test_stale_status_ignored(self, results_dir: Path):
+        """Если heartbeat в status-sidecar устарел — не считать прогон живым."""
         events = results_dir / "old_run_events.jsonl"
         events.write_text('{"type": "action"}\n')
-        # Сделать файл «старым»: mtime < now - _EXTERNAL_ALIVE_THRESHOLD
-        import os
-
         old_time = time.time() - (runner._EXTERNAL_ALIVE_THRESHOLD + 5)
-        os.utime(events, (old_time, old_time))
+        _write_status(results_dir / "old_run_status.json", updated_at=old_time)
 
         assert runner._discover_external_runs() == []
 
@@ -85,6 +109,7 @@ class TestDiscoverExternalRuns:
         """Прогон, зарегистрированный в _active, не дублируется."""
         events = results_dir / "api_run_events.jsonl"
         events.write_text('{"type": "action"}\n')
+        _write_status(results_dir / "api_run_status.json")
 
         # Имитировать присутствие в _active
         runner._active["api_run"] = object()  # type: ignore[assignment]
@@ -98,6 +123,7 @@ class TestDiscoverExternalRuns:
         """Несколько внешних прогонов обнаруживаются одновременно."""
         for name in ("run_a", "run_b", "run_c"):
             (results_dir / f"{name}_events.jsonl").write_text("{}\n")
+            _write_status(results_dir / f"{name}_status.json")
 
         runs = runner._discover_external_runs()
         found = {r["run_name"] for r in runs}
@@ -119,6 +145,7 @@ class TestListActiveWithExternal:
         """list_active() возвращает внешние прогоны вместе с API-запущенными."""
         events = results_dir / "ext_run_events.jsonl"
         events.write_text('{"type": "action"}\n')
+        _write_status(results_dir / "ext_run_status.json")
 
         result = runner.list_active()
         external = [r for r in result if r.get("external")]
@@ -149,11 +176,8 @@ class TestListActiveWithExternal:
         old_ext.write_text("{}\n")
         new_ext = results_dir / "ext_new_events.jsonl"
         new_ext.write_text("{}\n")
-
-        import os
-
-        os.utime(old_ext, (now - 20, now - 20))
-        os.utime(new_ext, (now - 10, now - 10))
+        _write_status(results_dir / "ext_old_status.json", updated_at=now - 20)
+        _write_status(results_dir / "ext_new_status.json", updated_at=now - 10)
 
         running = [item["run_name"] for item in runner.list_active() if item["status"] == "running"]
         assert running == ["api_old", "ext_old", "ext_new", "api_new"]
@@ -202,6 +226,7 @@ class TestIsExternalRun:
         """Возвращает True для обнаруженного внешнего прогона."""
         events = results_dir / "ext_events.jsonl"
         events.write_text("{}\n")
+        _write_status(results_dir / "ext_status.json")
 
         assert runner.is_external_run("ext") is True
 
@@ -220,6 +245,7 @@ class TestStopExternalRun:
         """Попытка остановить внешний прогон вызывает RuntimeError."""
         events = results_dir / "ext_stop_events.jsonl"
         events.write_text("{}\n")
+        _write_status(results_dir / "ext_stop_status.json")
 
         with pytest.raises(RuntimeError, match="Невозможно остановить внешний прогон"):
             runner.stop_simulation("ext_stop")
@@ -355,7 +381,7 @@ class TestLaunchSimulation:
         assert result["run_name"] == "S1_G1_seed7_cognitive_2"
 
     def test_launch_simulation_releases_reservation_on_popen_failure(self, results_dir: Path):
-        """При ошибке старта резервирование имени снимается."""
+        """При ошибке старта резервирование и временные артефакты удаляются."""
         with patch("web.backend.runner.subprocess.Popen", side_effect=RuntimeError("boom")):
             with pytest.raises(RuntimeError, match="boom"):
                 runner.launch_simulation_from_config(
@@ -365,6 +391,9 @@ class TestLaunchSimulation:
                 )
 
         assert runner._reserved_run_names == set()
+        assert not (results_dir / "S1_G1_seed7_cognitive").exists()
+        assert not (results_dir / "S1_G1_seed7_cognitive_stdout.log").exists()
+        assert not (results_dir / "S1_G1_seed7_cognitive_stderr.log").exists()
 
 
 def test_parse_run_name_uses_rightmost_governance_suffix():

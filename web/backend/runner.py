@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -213,6 +214,8 @@ def launch_simulation_from_config(
     run_name, out_dir = _reserve_run_dir(base_name)
 
     scenario_path = out_dir / "_input_scenario.json"
+    stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
+    stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
     stdout_handle = None
     stderr_handle = None
     try:
@@ -221,8 +224,6 @@ def launch_simulation_from_config(
             encoding="utf-8",
         )
 
-        stdout_path = _RESULTS_DIR / f"{run_name}_stdout.log"
-        stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
         stdout_handle = stdout_path.open("a", encoding="utf-8")
         stderr_handle = stderr_path.open("a", encoding="utf-8")
 
@@ -261,6 +262,19 @@ def launch_simulation_from_config(
             stdout_handle.close()
         if stderr_handle is not None:
             stderr_handle.close()
+        for path in (stdout_path, stderr_path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                pass
+        try:
+            shutil.rmtree(out_dir)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
         _release_reserved_run_name(run_name)
         raise
 
@@ -442,12 +456,48 @@ def _has_api_launcher_markers(ref) -> bool:
     return False
 
 
+def _read_run_status(ref) -> tuple[dict[str, object], Path] | None:
+    """Прочитать status-sidecar прогона."""
+    for path in run_json_sidecar_candidates(ref, "status", results_dir=_RESULTS_DIR):
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(data, dict):
+            return data, path
+    return None
+
+
+def _status_activity_at(status: dict[str, object], path: Path) -> float:
+    raw = str(status.get("updated_at") or "").strip()
+    if raw:
+        try:
+            return datetime.fromisoformat(raw).timestamp()
+        except ValueError:
+            pass
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _status_pid(status: dict[str, object]) -> int:
+    try:
+        pid = int(status.get("pid") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return pid if pid >= 0 else 0
+
+
 def _discover_external_runs(*, exclude_names: set[str] | None = None) -> list[dict]:
     """Обнаружить внешние (CLI-запущенные) прогоны по файловой системе.
 
     Сканирует ``_RESULTS_DIR`` на предмет событий в двух форматах:
-    ``*_events.jsonl`` и ``{run}/events.jsonl``. Прогон считается внешним,
-    если отсутствует summary и events-файл обновлялся недавно.
+    ``*_events.jsonl`` и ``{run}/events.jsonl``. Внешний прогон считается
+    живым только если рядом есть ``status.json``/``*_status.json`` со
+    статусом ``running`` и свежим heartbeat.
 
     Returns:
         Список словарей с информацией о внешних прогонах.
@@ -472,22 +522,28 @@ def _discover_external_runs(*, exclude_names: set[str] | None = None) -> list[di
         if any(path.exists() for path in summary_paths):
             continue
 
-        try:
-            mtime = ref.events_path.stat().st_mtime
-        except OSError:
+        status_record = _read_run_status(ref)
+        if status_record is None:
+            continue
+        status, status_path = status_record
+        if str(status.get("state") or "").strip().lower() != "running":
             continue
 
-        if (now - mtime) > _EXTERNAL_ALIVE_THRESHOLD:
+        activity_at = _status_activity_at(status, status_path)
+        if activity_at <= 0.0:
+            continue
+
+        if (now - activity_at) > _EXTERNAL_ALIVE_THRESHOLD:
             continue
 
         external.append(
             {
                 "run_name": run_name,
-                "pid": 0,
+                "pid": _status_pid(status),
                 "status": "running",
                 "external": True,
                 "stop_supported": False,
-                "activity_at": mtime,
+                "activity_at": activity_at,
             }
         )
 

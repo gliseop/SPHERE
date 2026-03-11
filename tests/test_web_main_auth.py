@@ -407,6 +407,25 @@ def test_export_run_reads_directory_sidecars(tmp_path: Path):
     assert payload["summary"] == {"score": 1}
 
 
+def test_export_run_falls_back_to_input_sidecar_for_live_run(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+    (run_dir / "_input_scenario.json").write_text('{"title":"live demo"}\n', encoding="utf-8")
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/export",
+                    headers={"Authorization": f"Bearer {viewer_token()}"},
+                )
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["scenario"] == {"title": "live demo"}
+
+
 def test_export_run_hides_private_events_for_viewer(tmp_path: Path):
     run_dir = tmp_path / "lc_run"
     run_dir.mkdir()

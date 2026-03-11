@@ -360,6 +360,7 @@ JSON-файлы с результатами нарративных интерв�
 
 - `scenario.json` — сериализованный `ScenarioConfig` конкретного прогона.
 - `names.json` — отображение `agent_id -> display name`, используемое web UI и WebSocket `meta`.
+- `status.json` — heartbeat-статус прогона (`running` / `finished` / `failed`) с `updated_at`, `pid` и последним tick.
 - `summary.json` — итоговая агрегированная сводка (`governance` + `fidelity`).
 
 Примеры:
@@ -387,6 +388,17 @@ JSON-файлы с результатами нарративных интерв�
 {
   "agent:off_1": "Козлов И.М.",
   "agent:auditor": "Аудитор"
+}
+```
+
+```json
+// status.json
+{
+  "state": "running",
+  "pid": 18432,
+  "tick": 2,
+  "updated_at": "2026-03-11T18:42:10.123456+00:00",
+  "error": null
 }
 ```
 

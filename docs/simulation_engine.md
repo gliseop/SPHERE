@@ -41,7 +41,7 @@ flowchart TD
     MEM --> NEXT{Ещё тики?}
     NEXT -->|да| TICK
     NEXT -->|нет| EVAL[Governance eval + fidelity sidecars]
-    EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + evaluation.json + fidelity.json + summary.json]
+    EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + status.json + evaluation.json + fidelity.json + summary.json]
 ```
 
 Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry` и запускает цикл тиков.
@@ -130,6 +130,8 @@ Runtime-аудитор не подменяет собой `ViolationOracle` и �
 ## Truth-layer и evaluation
 
 После формирования фактических `tick_events`, но до эмиссии audit-интервенций, движок прогоняет deterministic `TruthDetector`. Он пишет sidecar `truth.jsonl` с каноническими `TruthRecord`, которые не зависят от того, сработал ли runtime-аудитор.
+
+В ходе исполнения движок также поддерживает `status.json`: sidecar с heartbeat-обновлением на каждом тике и финальным состоянием `finished` или `failed`. Web backend использует его для более надёжного обнаружения живых CLI-прогонов.
 
 По завершении прогона движок пишет два независимых sidecar-контура:
 

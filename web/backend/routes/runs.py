@@ -306,11 +306,21 @@ async def export_run(name: str, _user: User = Depends(require_viewer)) -> JSONRe
                 continue
         return None
 
+    def _read_scenario_json() -> dict | None:
+        for p in _iter_run_scenario_candidates(ref):
+            if not p.exists():
+                continue
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+        return None
+
     result = {
         "name": name,
         "meta": parse_run_name(name),
         "events": events,
-        "scenario": _read_json("_scenario.json"),
+        "scenario": _read_scenario_json(),
         "names": _read_json("_names.json"),
         "summary": _read_json("_summary.json"),
     }
