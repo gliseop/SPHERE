@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _DEFAULT_DB_PATH = Path(__file__).parent / "users.db"
-DB_PATH = Path(os.environ.get("MAGISTRY_USERS_DB") or _DEFAULT_DB_PATH)
+DB_PATH: Path | None = None
+_DOTENV_LOADED = False
 
 
 @dataclass
@@ -23,9 +24,39 @@ class User:
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
+    db_path = _resolve_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _load_dotenv_if_available() -> None:
+    """Подгрузить `.env`, если библиотека доступна."""
+    global _DOTENV_LOADED
+    if _DOTENV_LOADED:
+        return
+    try:
+        from dotenv import find_dotenv, load_dotenv
+    except ImportError:
+        _DOTENV_LOADED = True
+        return
+
+    env_path = find_dotenv(usecwd=True)
+    if env_path:
+        load_dotenv(env_path)
+    else:
+        load_dotenv()
+    _DOTENV_LOADED = True
+
+
+def _resolve_db_path() -> Path:
+    """Определить путь к users.db с учётом `.env` и test override."""
+    if DB_PATH is not None:
+        return Path(DB_PATH)
+    _load_dotenv_if_available()
+    raw = (os.environ.get("MAGISTRY_USERS_DB") or "").strip()
+    return Path(raw) if raw else _DEFAULT_DB_PATH
 
 
 def init_db() -> None:

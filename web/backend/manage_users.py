@@ -12,6 +12,19 @@ import argparse
 import getpass
 import sys
 
+try:
+    from dotenv import find_dotenv, load_dotenv
+except ImportError:  # pragma: no cover - dotenv является optional dep
+    find_dotenv = None
+    load_dotenv = None
+
+if load_dotenv is not None:
+    env_path = find_dotenv(usecwd=True) if find_dotenv is not None else ""
+    if env_path:
+        load_dotenv(env_path)
+    else:
+        load_dotenv()
+
 from .auth import hash_password
 from .database import (
     create_user,

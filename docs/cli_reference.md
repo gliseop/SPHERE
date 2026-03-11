@@ -87,6 +87,8 @@ magistry-lc oracle --events results/run_50/events.jsonl \
 ## manage_users.py
 
 Управление учётными записями веб-интерфейса.
+CLI подхватывает `.env` автоматически, поэтому `MAGISTRY_USERS_DB` и другие
+переменные можно хранить рядом с проектом.
 
 ```bash
 python -m web.backend.manage_users <команда> [аргументы]
@@ -138,6 +140,7 @@ python -m web.backend.manage_users change-role --username viewer1 --role admin
 | Переменная | По умолчанию | Описание |
 |---|---|---|
 | `JWT_EXPIRE_HOURS` | `24` | Время жизни JWT-токена в часах |
+| `MAGISTRY_USERS_DB` | `web/backend/users.db` | Путь к SQLite-базе пользователей для backend и `manage_users.py` |
 | `ALLOWED_ORIGIN` | — | Разрешённый домен для CORS |
 | `MAGISTRY_DEV` | `0` | Режим разработки: `1` позволяет запуск без явного `JWT_SECRET`, при этом backend генерирует одноразовый секрет на процесс |
 | `MAGISTRY_MAX_RUNNING` | `5` | Максимум одновременно запущенных симуляций |

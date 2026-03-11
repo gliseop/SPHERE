@@ -107,7 +107,7 @@ bash web/start.sh --port 3000
 Сервер доступен по адресу `http://localhost:8765`. Для первого входа создайте пользователя:
 
 ```bash
-python web/backend/manage_users.py add admin admin_password --role admin
+python -m web.backend.manage_users create --username admin --role admin
 ```
 
 Подробности о веб-интерфейсе — в [web_interface.md](./web_interface.md).

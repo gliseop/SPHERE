@@ -18,6 +18,7 @@ def results_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(runner, "_RESULTS_DIR", tmp_path)
     # Очистить глобальное состояние между тестами
     runner._active.clear()
+    runner._active_started_at.clear()
     runner._reserved_run_names.clear()
     return tmp_path
 
@@ -126,6 +127,35 @@ class TestListActiveWithExternal:
     def test_list_active_empty_when_no_runs(self, results_dir: Path):
         """Без прогонов — пустой список."""
         assert runner.list_active() == []
+
+    def test_list_active_sorts_running_runs_by_activity(self, results_dir: Path):
+        """list_active() отдаёт running-прогоны в порядке старения, чтобы последний был самым свежим."""
+        class _Proc:
+            def __init__(self, pid: int):
+                self.pid = pid
+
+            def poll(self):
+                return None
+
+        now = time.time()
+        runner._active["api_old"] = _Proc(1001)  # type: ignore[assignment]
+        runner._active_started_at["api_old"] = now - 30
+
+        runner._active["api_new"] = _Proc(1002)  # type: ignore[assignment]
+        runner._active_started_at["api_new"] = now - 5
+
+        old_ext = results_dir / "ext_old_events.jsonl"
+        old_ext.write_text("{}\n")
+        new_ext = results_dir / "ext_new_events.jsonl"
+        new_ext.write_text("{}\n")
+
+        import os
+
+        os.utime(old_ext, (now - 20, now - 20))
+        os.utime(new_ext, (now - 10, now - 10))
+
+        running = [item["run_name"] for item in runner.list_active() if item["status"] == "running"]
+        assert running == ["api_old", "ext_old", "ext_new", "api_new"]
 
 
 # ---------- is_external_run ----------

@@ -13,13 +13,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from .run_artifacts import list_run_artifacts, run_json_sidecar_candidates
+from .run_artifacts import list_run_artifacts, resolve_run_artifact, run_json_sidecar_candidates
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _RESULTS_DIR = _PROJECT_ROOT / "results"
 
 # Хранилище активных процессов: run_name -> subprocess.Popen
 _active: dict[str, subprocess.Popen] = {}
+_active_started_at: dict[str, float] = {}
 _reserved_run_names: set[str] = set()
 _active_lock = threading.Lock()
 
@@ -267,6 +268,7 @@ def launch_simulation_from_config(
     with _active_lock:
         _reserved_run_names.discard(run_name)
         _active[run_name] = proc
+        _active_started_at[run_name] = time.time()
     return {"run_name": run_name, "pid": proc.pid}
 
 
@@ -463,6 +465,7 @@ def _discover_external_runs() -> list[dict]:
                 "status": "running",
                 "external": True,
                 "stop_supported": False,
+                "activity_at": mtime,
             }
         )
 
@@ -483,6 +486,7 @@ def list_active() -> list[dict]:
         finished = []
         for name, proc in _active.items():
             poll = proc.poll()
+            activity_at = _run_activity_at(name=name, fallback=_active_started_at.get(name, 0.0))
             if poll is None:
                 result.append(
                     {
@@ -493,6 +497,7 @@ def list_active() -> list[dict]:
                         "stop_supported": True,
                         "stdout_log": f"{name}_stdout.log",
                         "stderr_log": f"{name}_stderr.log",
+                        "activity_at": activity_at,
                     }
                 )
             else:
@@ -506,15 +511,25 @@ def list_active() -> list[dict]:
                         "returncode": poll,
                         "stdout_log": f"{name}_stdout.log",
                         "stderr_log": f"{name}_stderr.log",
+                        "activity_at": activity_at,
                     }
                 )
                 finished.append(name)
         # Очистить завершённые
         for name in finished:
             del _active[name]
+            _active_started_at.pop(name, None)
 
         # Обнаружить внешние (CLI-запущенные) прогоны
         result.extend(_discover_external_runs())
+
+        result.sort(
+            key=lambda item: (
+                0 if item.get("status") == "running" else 1,
+                float(item.get("activity_at") or 0.0),
+                str(item.get("run_name") or ""),
+            )
+        )
 
         return result
 
@@ -563,4 +578,16 @@ def stop_simulation(run_name: str) -> Optional[dict]:
     with _active_lock:
         if _active.get(run_name) is proc:
             del _active[run_name]
+            _active_started_at.pop(run_name, None)
     return {"run_name": run_name, "status": "stopped"}
+
+
+def _run_activity_at(*, name: str, fallback: float) -> float:
+    """Время последней активности/старта прогона для сортировки live-списка."""
+    ref = resolve_run_artifact(name, results_dir=_RESULTS_DIR)
+    if ref is None:
+        return fallback
+    try:
+        return max(float(fallback), float(ref.events_path.stat().st_mtime))
+    except OSError:
+        return fallback

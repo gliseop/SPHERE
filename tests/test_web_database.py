@@ -47,3 +47,22 @@ def test_update_role():
     db_module.create_user("alice", "h1", "viewer")
     assert db_module.update_role("alice", "admin") is True
     assert db_module.get_user_by_username("alice").role == "admin"
+
+
+def test_init_db_reads_magistry_users_db_from_dotenv(tmp_path, monkeypatch):
+    env_root = tmp_path / "env_root"
+    env_root.mkdir()
+    db_path = env_root / "custom" / "users.db"
+    (env_root / ".env").write_text(
+        f"MAGISTRY_USERS_DB={db_path.as_posix()}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(env_root)
+    monkeypatch.setattr(db_module, "DB_PATH", None)
+    monkeypatch.setattr(db_module, "_DOTENV_LOADED", False)
+    monkeypatch.delenv("MAGISTRY_USERS_DB", raising=False)
+
+    db_module.init_db()
+
+    assert db_path.exists()

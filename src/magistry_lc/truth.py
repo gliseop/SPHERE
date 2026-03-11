@@ -130,6 +130,19 @@ class TruthDetector:
 
         if et == "vote_opened":
             target_id = str(payload.get("target_agent_id") or "")
+            if actor_id and target_id and actor_id == target_id:
+                out.append(
+                    TruthRecord(
+                        tick=current_tick,
+                        subject_agent_id=actor_id,
+                        target_agent_id=target_id,
+                        violation_type="self_nomination",
+                        severity="medium",
+                        confidence=1.0,
+                        evidence_refs=[_event_ref(event)],
+                        rationale="Агент инициировал голосование о собственном повышении.",
+                    )
+                )
             if actor_id and target_id:
                 contacts = self._recent_private_contacts(
                     a=actor_id,

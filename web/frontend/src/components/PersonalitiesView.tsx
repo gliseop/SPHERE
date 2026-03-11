@@ -167,7 +167,6 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
   const [genUserPrompt, setGenUserPrompt] = useState(defaultGeneratePersonalityUserPrompt(''))
   const [genSystemDirty, setGenSystemDirty] = useState(false)
   const [genUserDirty, setGenUserDirty] = useState(false)
-  const [generatingInterviewId, setGeneratingInterviewId] = useState<string | null>(null)
   const [loadingInterviewId, setLoadingInterviewId] = useState<string | null>(null)
   const [viewingInterviewId, setViewingInterviewId] = useState<string | null>(null)
   const [interviewData, setInterviewData] = useState<InterviewData | null>(null)
@@ -307,31 +306,6 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
     if (set.has(value)) set.delete(value)
     else set.add(value)
     setEditing({ ...editing, neutralization_techniques: [...set] })
-  }
-
-  async function handleGenerateInterview(personalityId: string) {
-    setGeneratingInterviewId(personalityId)
-    try {
-      const res = await apiClient.post(
-        `/api/personalities/${personalityId}/interview/generate`,
-        { role: 'чиновник' },
-      )
-      if (!res.ok) {
-        const text = await res.text().catch(() => '')
-        window.alert(text || 'Не удалось сгенерировать интервью')
-        return
-      }
-      const data: InterviewData = await res.json()
-      setInterviewData(data)
-      setViewingInterviewId(personalityId)
-      setItems((prev) =>
-        Array.isArray(prev)
-          ? prev.map((p) => (p.id === personalityId ? { ...p, has_interview: true } : p))
-          : prev,
-      )
-    } finally {
-      setGeneratingInterviewId(null)
-    }
   }
 
   async function handleViewInterview(personalityId: string) {
@@ -683,16 +657,6 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
                     {loadingInterviewId === p.id ? '...' : '📋'}
                   </button>
                 )}
-                {user?.role === 'admin' && p.id && (
-                  <button
-                    className="btn-clipped small"
-                    onClick={() => handleGenerateInterview(p.id!)}
-                    disabled={generatingInterviewId === p.id}
-                    title={p.has_interview ? 'Перегенерировать интервью' : 'Сгенерировать интервью'}
-                  >
-                    {generatingInterviewId === p.id ? '...' : p.has_interview ? '↻' : '🎤'}
-                  </button>
-                )}
                 {user?.role === 'admin' && (
                   <>
                     <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_PERSONALITY, ...p })} title="Редактировать">✎</button>
@@ -773,18 +737,6 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
         </div>
       )}
 
-      {generatingInterviewId && (
-        <div className="hud-panel" style={{ marginTop: '1rem', padding: '1rem', textAlign: 'center' }}>
-          <div className="corner tl" /><div className="corner tr" />
-          <div className="corner bl" /><div className="corner br" />
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Генерация интервью (30 вопросов + экспертные оценки)...
-          </div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-            Это может занять 30-60 секунд
-          </div>
-        </div>
-      )}
     </div>
   )
 }

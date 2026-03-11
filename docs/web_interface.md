@@ -107,7 +107,7 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 | PUT | `/api/personalities/{id}` | Обновить архетип |
 | DELETE | `/api/personalities/{id}` | Удалить архетип |
 | GET | `/api/personalities/{id}/interview` | Получить интервью |
-| POST | `/api/personalities/{id}/interview/generate` | Сгенерировать интервью через LLM |
+| POST | `/api/personalities/{id}/interview/generate` | Маршрут временно возвращает `501`; web UI не показывает активную кнопку |
 | DELETE | `/api/personalities/{id}/interview` | Удалить интервью |
 
 #### Режимы управления

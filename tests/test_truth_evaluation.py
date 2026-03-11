@@ -91,6 +91,34 @@ def test_truth_detector_keeps_repeated_same_tick_events_distinct() -> None:
     assert records[0].evidence_refs != records[1].evidence_refs
 
 
+def test_truth_detector_records_self_nomination() -> None:
+    state = _mk_state()
+    detector = TruthDetector()
+    tick_events = [
+        Event(
+            tick=1,
+            event_type="vote_opened",
+            actor_id="agent:off_1",
+            payload={
+                "vote_id": "vote:1",
+                "target_agent_id": "agent:off_1",
+                "new_title": "head",
+            },
+        )
+    ]
+
+    records = detector.detect_tick(
+        state=state,
+        tick_events=tick_events,
+        recent_events=[],
+    )
+
+    assert len(records) == 1
+    assert records[0].violation_type == "self_nomination"
+    assert records[0].subject_agent_id == "agent:off_1"
+    assert records[0].target_agent_id == "agent:off_1"
+
+
 def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:
     truth_log = TruthLog(tmp_path / "truth.jsonl")
     truth_log.append(
@@ -130,6 +158,47 @@ def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:
     assert summary.false_negative == 0
     assert summary.precision == 1.0
     assert summary.recall == 1.0
+
+
+def test_evaluate_run_matches_self_nomination_against_truth(tmp_path: Path) -> None:
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.append(
+        TruthRecord(
+            tick=2,
+            subject_agent_id="agent:off_1",
+            target_agent_id="agent:off_1",
+            violation_type="self_nomination",
+            severity="medium",
+        )
+    )
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "tick": 2,
+                "event_type": "audit_flagged",
+                "actor_id": "agent:auditor",
+                "payload": {
+                    "subject_agent_id": "agent:off_1",
+                    "target_agent_id": "agent:off_1",
+                    "violation_type": "self_nomination",
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(
+        events_path=tmp_path / "events.jsonl",
+        truth_path=tmp_path / "truth.jsonl",
+    )
+
+    assert summary.truth_total == 1
+    assert summary.runtime_flagged_total == 1
+    assert summary.true_positive == 1
+    assert summary.false_positive == 0
+    assert summary.false_negative == 0
 
 
 def test_evaluate_run_counts_same_target_same_tick_when_evidence_differs(tmp_path: Path) -> None:
