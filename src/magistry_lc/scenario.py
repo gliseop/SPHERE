@@ -14,7 +14,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
         import yaml  # type: ignore
     except ImportError as exc:
         raise ImportError(
-            "Для YAML-сценариев установите зависимости: pip install magistry-sim[lc]"
+            'Для YAML-сценариев установите зависимости: pip install -e ".[lc]"'
         ) from exc
 
     with path.open("r", encoding="utf-8") as f:
@@ -29,7 +29,7 @@ def _dump_yaml(data: dict[str, Any]) -> str:
         import yaml  # type: ignore
     except ImportError as exc:
         raise ImportError(
-            "Для YAML-сценариев установите зависимости: pip install magistry-sim[lc]"
+            'Для YAML-сценариев установите зависимости: pip install -e ".[lc]"'
         ) from exc
 
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False)

@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import TextIO
 
 from rich.console import Console
 
@@ -20,6 +22,27 @@ from .tracing import TraceLog
 
 
 console = Console(file=sys.stdout, force_terminal=False)
+
+
+class _SafeArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser, устойчивый к несовместимой кодировке stdout/stderr."""
+
+    def _print_message(self, message: str, file: TextIO | None = None) -> None:
+        if not message:
+            return
+        target = sys.stderr if file is None else file
+        try:
+            target.write(message)
+        except UnicodeEncodeError:
+            encoding = getattr(target, "encoding", None) or "utf-8"
+            buffer = getattr(target, "buffer", None)
+            if buffer is not None:
+                buffer.write(message.encode(encoding, errors="replace"))
+                return
+            safe_message = message.encode(encoding, errors="replace").decode(
+                encoding, errors="replace"
+            )
+            target.write(safe_message)
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
@@ -92,9 +115,11 @@ def _cmd_oracle(args: argparse.Namespace) -> None:
     console.print(f"[green]Oracle done[/green] violations={len(violations)} out={args.out}")
 
 
-def main() -> None:
-    """Точка входа CLI."""
-    parser = argparse.ArgumentParser(description="MAGISTRY-LC: greenfield-движок на LangChain/LangGraph")
+def build_parser() -> argparse.ArgumentParser:
+    """Построить parser CLI."""
+    parser = _SafeArgumentParser(
+        description="MAGISTRY-LC: greenfield-движок на LangChain/LangGraph"
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_run = sub.add_parser("run", help="Запустить симуляцию по YAML/JSON сценарию")
@@ -139,8 +164,13 @@ def main() -> None:
     p_oracle.add_argument("--temperature", type=float, default=None)
     p_oracle.add_argument("--trace", type=str, default=None, help="JSONL trace path")
     p_oracle.set_defaults(fn=_cmd_oracle)
+    return parser
 
-    args = parser.parse_args()
+
+def main(argv: Sequence[str] | None = None) -> None:
+    """Точка входа CLI."""
+    parser = build_parser()
+    args = parser.parse_args(list(argv) if argv is not None else None)
     args.fn(args)
 
 

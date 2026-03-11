@@ -163,8 +163,8 @@ class OpenAICompatibleProvider:
             from openai import OpenAI
         except ImportError as exc:
             raise ImportError(
-                "Для OpenAI-провайдера установите пакет: "
-                "pip install magistry-sim[llm]"
+                "Для OpenAI-провайдера установите зависимости проекта: "
+                "pip install -e ."
             ) from exc
 
         kwargs: dict = {"timeout": 120.0}

@@ -16,7 +16,9 @@ MAGISTRY (Multi-Agent Governance and Institutional Simulation for Testing and Re
 
 ```bash
 git clone <repository-url> && cd MAGISTRY
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+# Linux/macOS: source .venv/bin/activate
+# Windows (PowerShell): .\.venv\Scripts\Activate.ps1
 pip install -e ".[lc,dev]"
 ```
 
@@ -59,6 +61,8 @@ magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc
 ```bash
 cd web && bash start.sh
 ```
+
+Скрипт `web/start.sh` сам находит Python как в `.venv/bin`, так и в `.venv/Scripts`, поэтому одинаково подходит для Unix- и Windows-окружений с Git Bash.
 
 Подробные инструкции — в [docs/getting_started.md](docs/getting_started.md).
 

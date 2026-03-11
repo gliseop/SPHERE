@@ -19,6 +19,12 @@ python -m venv .venv
 source .venv/bin/activate  # Linux/macOS
 ```
 
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
 ### Установка зависимостей
 
 ```bash
@@ -94,7 +100,7 @@ magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc
 
 ## Запуск веб-интерфейса
 
-Скрипт `web/start.sh` собирает фронтенд и запускает FastAPI-сервер.
+Скрипт `web/start.sh` собирает фронтенд и запускает FastAPI-сервер. Он автоматически ищет Python как в `.venv/bin`, так и в `.venv/Scripts`, поэтому подходит и для Windows-окружения с Git Bash.
 
 ```bash
 # Запуск на порту 8765 (по умолчанию)

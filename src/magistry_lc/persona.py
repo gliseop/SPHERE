@@ -241,7 +241,7 @@ class PersonaLibrary:
                 import yaml  # type: ignore
             except ImportError as exc:
                 raise ImportError(
-                    "Для PersonaLibrary YAML установите зависимости: pip install magistry-sim[lc]"
+                    'Для PersonaLibrary YAML установите зависимости: pip install -e ".[lc]"'
                 ) from exc
             with path.open("r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)

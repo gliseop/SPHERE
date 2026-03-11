@@ -17,6 +17,27 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
+resolve_python_bin() {
+    local candidates=(
+        "$ROOT_DIR/.venv/bin/python"
+        "$ROOT_DIR/.venv/Scripts/python.exe"
+        "$ROOT_DIR/.venv/Scripts/python"
+    )
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [[ -f "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    if command -v python >/dev/null 2>&1; then
+        command -v python
+        return 0
+    fi
+    echo "Не найден Python-интерпретатор (.venv/bin, .venv/Scripts или python из PATH)." >&2
+    return 1
+}
+
 PORT="${1:-8767}"
 
 JWT_SECRET="${PW_JWT_SECRET:-playwright-secret-0123456789abcdef0123456789abcdef}"
@@ -37,7 +58,8 @@ npm run build
 
 echo "Инициализация users DB и тестового admin..."
 cd "$ROOT_DIR"
-MAGISTRY_USERS_DB="$DB_PATH" "$ROOT_DIR/.venv/bin/python" - <<PY
+PYTHON_BIN="$(resolve_python_bin)"
+MAGISTRY_USERS_DB="$DB_PATH" "$PYTHON_BIN" - <<PY
 from web.backend.auth import hash_password
 from web.backend.database import create_user, init_db
 
@@ -50,5 +72,4 @@ export MAGISTRY_USERS_DB="$DB_PATH"
 export JWT_SECRET="$JWT_SECRET"
 export JWT_EXPIRE_HOURS=24
 export ALLOWED_ORIGIN="http://127.0.0.1:$PORT"
-exec "$ROOT_DIR/.venv/bin/uvicorn" web.backend.main:app --port "$PORT" --host 127.0.0.1
-
+exec "$PYTHON_BIN" -m uvicorn web.backend.main:app --port "$PORT" --host 127.0.0.1

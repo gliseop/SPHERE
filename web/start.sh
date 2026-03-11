@@ -13,6 +13,27 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
+resolve_python_bin() {
+    local candidates=(
+        "$ROOT_DIR/.venv/bin/python"
+        "$ROOT_DIR/.venv/Scripts/python.exe"
+        "$ROOT_DIR/.venv/Scripts/python"
+    )
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [[ -f "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    if command -v python >/dev/null 2>&1; then
+        command -v python
+        return 0
+    fi
+    echo "Не найден Python-интерпретатор (.venv/bin, .venv/Scripts или python из PATH)." >&2
+    return 1
+}
+
 # Загрузить переменные окружения из .env (если файл существует)
 if [ -f "$ROOT_DIR/.env" ]; then
     set -a
@@ -38,4 +59,5 @@ npm run build
 
 echo "Запуск сервера на http://localhost:$PORT"
 cd "$ROOT_DIR"
-exec .venv/bin/uvicorn web.backend.main:app --port "$PORT" --host 0.0.0.0
+PYTHON_BIN="$(resolve_python_bin)"
+exec "$PYTHON_BIN" -m uvicorn web.backend.main:app --port "$PORT" --host 0.0.0.0
