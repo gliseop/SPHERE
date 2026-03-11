@@ -224,7 +224,7 @@ Agent prompt использует не один общий retrieval-блок, �
 
 ### Реализации
 
-- **OpenAICompatibleProvider** — провайдер для OpenAI-совместимых API с поддержкой повторных попыток, `provider_order` (фоллбэк между провайдерами), валидации JSON Schema и `tool_calls`.
+- **OpenAICompatibleProvider** — провайдер для OpenAI-совместимых API с поддержкой повторных попыток, валидации JSON Schema и `tool_calls`; `provider_order` добавляется только для OpenRouter provider routing.
 - **MockLLMProvider** — детерминированный провайдер для тестов. Параметр `structured_responses` задаёт словарь ответов для различных вызовов.
 
 ### EmbeddingProvider
@@ -284,7 +284,7 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 Ключевые поля `governance.audit`:
 - `enabled`: включить runtime-аудитор.
 - `actor_id`: какой агент-идентификатор использовать как `actor_id` audit-событий.
-- `mode`: `rules`/`hybrid`/`llm` (в v1 основная логика rules-first).
+- `mode`: `rules` (в `RuntimeAuditor` v1 поддерживается только rules-first режим; другие значения отклоняются при валидации).
 - `lookback_events`: глубина окна истории для audit detection.
 - `private_contact_window_ticks`: окно приватных контактов для conflict-like heuristics.
 - `min_confidence_to_flag`: минимальная уверенность для `audit_flagged`.

@@ -16,7 +16,7 @@ ticks: 3
 llm:
   model: "gpt-4o-mini"
   base_url: null
-  provider_order: ["Groq"]
+  provider_order: []  # опционально: только для OpenRouter provider routing
   temperature: 0.1
   use_tool_calls: true
 
@@ -42,7 +42,7 @@ runtime:
   worldgen_allow_internal_spawns: false
 
 governance:
-  position_policy: "dao"
+  position_policy: "dao"  # v1: единственный поддерживаемый режим
   quorum: 0.5
   pass_threshold: 0.5
   vote_duration_ticks: 2
@@ -167,7 +167,7 @@ world:
 |---|---|---|
 | `enabled` | `bool` | Включить runtime-аудитор |
 | `actor_id` | `agent:* \| null` | Какой agent ID использовать как `actor_id` в audit-событиях |
-| `mode` | `rules` / `hybrid` / `llm` | Режим detection; v1 использует rules-first логику |
+| `mode` | `rules` | Режим detection; в `RuntimeAuditor` v1 поддерживается только rules-first режим |
 | `lookback_events` | `int` | Глубина окна recent events |
 | `private_contact_window_ticks` | `int` | Окно приватных контактов для conflict-like правил |
 | `max_findings_per_tick` | `int` | Лимит findings на тик |

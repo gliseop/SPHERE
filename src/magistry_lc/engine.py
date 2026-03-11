@@ -180,10 +180,7 @@ class WorldEngine:
             runtime=self.cfg.runtime,
             temperature=self.cfg.llm.temperature,
         )
-        auditor = RuntimeAuditor(
-            cfg=self.cfg.governance.audit,
-            llm=llm if self.cfg.governance.audit.mode != "rules" else None,
-        )
+        auditor = RuntimeAuditor(cfg=self.cfg.governance.audit)
         worldgen = WorldGenerator(llm=llm, temperature=self.cfg.llm.temperature)
 
         runners: dict[str, AgentRunner] = {}

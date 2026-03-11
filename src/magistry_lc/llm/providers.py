@@ -29,6 +29,11 @@ from ._utils import (
 from ._debug_logger import _LLMDebugLogger
 
 
+def _supports_provider_routing(base_url: str | None) -> bool:
+    """Проверить, что backend понимает OpenRouter provider routing."""
+    return "openrouter" in (base_url or "").lower()
+
+
 class MockLLMProvider:
     """Детерминированный mock-провайдер для тестов и отладки."""
 
@@ -182,7 +187,7 @@ class OpenAICompatibleProvider:
         log_path = _resolve_llm_log_path()
         self._debug_logger = _LLMDebugLogger(log_path, max_chars=self._log_max_chars) if log_path else None
         self._extra_body: dict | None = None
-        if provider_order:
+        if provider_order and _supports_provider_routing(base_url):
             self._extra_body = {
                 "provider": {
                     "order": provider_order,

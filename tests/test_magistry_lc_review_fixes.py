@@ -28,7 +28,14 @@ from magistry_lc.actions import (
     SpawnAgentAction,
 )
 from magistry_lc.arbiter import Arbiter
-from magistry_lc.config import GovernanceConfig, LLMConfig, MemoryConfig, RuntimeConfig, ScenarioConfig
+from magistry_lc.config import (
+    AuditRuntimeConfig,
+    GovernanceConfig,
+    LLMConfig,
+    MemoryConfig,
+    RuntimeConfig,
+    ScenarioConfig,
+)
 from magistry_lc.dao import DaoEngine
 from magistry_lc.cli import _cmd_run
 from magistry_lc.engine import RunArtifacts, WorldEngine
@@ -786,6 +793,7 @@ def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
     _ = create_llm_provider(LLMConfig(model="gpt-4o-mini", base_url=None))
     assert captured["base_url"] == "https://example.test/v1"
+    assert captured["provider_order"] is None
 
 
 def test_create_llm_provider_loads_dotenv_from_cwd(
@@ -823,6 +831,36 @@ def test_openai_provider_clamps_zero_temperature_only_for_minimax() -> None:
     provider = SimpleNamespace(_base_url="https://api.minimax.chat/v1", _model="MiniMax-Text-01")
 
     assert OpenAICompatibleProvider._effective_temperature(provider, 0.0) == 0.01
+
+
+def test_openai_provider_only_sets_provider_order_for_openrouter() -> None:
+    standard = OpenAICompatibleProvider(
+        model="gpt-4o-mini",
+        api_key="test-key",
+        base_url="https://api.openai.com/v1",
+        provider_order=["Groq"],
+    )
+    routed = OpenAICompatibleProvider(
+        model="gpt-4o-mini",
+        api_key="test-key",
+        base_url="https://openrouter.ai/api/v1",
+        provider_order=["Groq"],
+    )
+
+    assert standard._extra_body is None
+    assert routed._extra_body == {
+        "provider": {"order": ["Groq"], "allow_fallbacks": True}
+    }
+
+
+def test_governance_config_rejects_auto_position_policy() -> None:
+    with pytest.raises(ValidationError, match="position_policy='auto'"):
+        GovernanceConfig(position_policy="auto")
+
+
+def test_audit_runtime_config_rejects_non_rules_mode() -> None:
+    with pytest.raises(ValidationError, match="audit.mode='rules'"):
+        AuditRuntimeConfig(mode="hybrid")
 
 
 def test_runtime_config_rejects_zero_worldgen_interval() -> None:

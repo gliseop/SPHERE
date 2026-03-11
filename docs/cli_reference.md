@@ -44,7 +44,7 @@ magistry-lc compose --description <текст> --out <путь> [опции]
 | `--language` | строка | `ru` | Язык генерации |
 | `--model` | строка | из LLMConfig | Модель LLM |
 | `--base-url` | строка | — | Базовый URL API |
-| `--provider-order` | строка | — | Приоритет провайдеров через запятую (например, `Groq,OpenAI`) |
+| `--provider-order` | строка | — | Опциональный приоритет провайдеров через запятую для OpenRouter (например, `Groq,OpenAI`) |
 | `--temperature` | дробное | из LLMConfig | Температура генерации |
 | `--trace` | путь | `results/compose_trace.jsonl` | Путь к файлу трассировки |
 
@@ -61,7 +61,7 @@ magistry-lc oracle --events <путь> --out <путь> [опции]
 | `--window` | целое | `5` | Размер окна в тиках |
 | `--model` | строка | из LLMConfig | Модель LLM |
 | `--base-url` | строка | — | Базовый URL API |
-| `--provider-order` | строка | — | Приоритет провайдеров через запятую |
+| `--provider-order` | строка | — | Опциональный приоритет провайдеров через запятую для OpenRouter |
 | `--temperature` | дробное | из LLMConfig | Температура генерации |
 | `--trace` | путь | `<out>.trace.jsonl` | Путь к файлу трассировки |
 

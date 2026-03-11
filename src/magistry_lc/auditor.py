@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .config import AuditRuntimeConfig
 from .events import Event
-from .llm import LLMCaller
 from .ops import ModifyReputationOp, SetReputationFreezeOp
 from .state import WorldState
 
@@ -49,7 +48,6 @@ class RuntimeAuditor:
     """Rules-first runtime-аудитор, работающий поверх событий тика."""
 
     cfg: AuditRuntimeConfig
-    llm: LLMCaller | None = None
 
     async def inspect_tick(
         self,

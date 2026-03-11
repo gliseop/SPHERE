@@ -2,7 +2,7 @@
 
 Использует ``OpenAICompatibleProvider`` из пакета ``magistry_lc.llm``:
 - поддержка OpenAI-compatible API (включая OpenRouter);
-- ``provider_order`` (например, Groq по умолчанию);
+- опциональный ``provider_order`` для OpenRouter provider routing;
 - кеш/логирование/ретраи.
 """
 

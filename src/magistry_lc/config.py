@@ -19,10 +19,26 @@ class LLMConfig(BaseModel):
     model: str = "gpt-4o-mini"
     base_url: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
-    provider_order: list[str] = Field(default_factory=lambda: ["Groq"])
+    provider_order: list[str] = Field(default_factory=list)
     temperature: float = 0.0
     use_tool_calls: bool = True
     trace_max_chars: int = 0
+
+    @field_validator("provider_order")
+    @classmethod
+    def _normalize_provider_order(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in v or []:
+            value = str(raw or "").strip()
+            if not value:
+                continue
+            key = value.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(value)
+        return out
 
 
 class MemoryWeights(BaseModel):
@@ -264,6 +280,13 @@ class AuditRuntimeConfig(BaseModel):
         ensure_kind(v, EntityKind.AGENT)
         return v
 
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode_supported(cls, v: Literal["rules", "hybrid", "llm"]) -> Literal["rules", "hybrid", "llm"]:
+        if v != "rules":
+            raise ValueError("RuntimeAuditor v1 supports only audit.mode='rules'")
+        return v
+
     @field_validator("lookback_events", "private_contact_window_ticks", "max_findings_per_tick", "freeze_duration_ticks")
     @classmethod
     def _validate_non_negative_int(cls, v: int) -> int:
@@ -308,6 +331,13 @@ class GovernanceConfig(BaseModel):
     def _validate_ratio(cls, v: float) -> float:
         if not (0.0 < v <= 1.0):
             raise ValueError("ratio must be in (0, 1]")
+        return v
+
+    @field_validator("position_policy")
+    @classmethod
+    def _validate_position_policy_supported(cls, v: Literal["dao", "auto"]) -> Literal["dao", "auto"]:
+        if v != "dao":
+            raise ValueError("position_policy='auto' is not implemented yet; use 'dao'")
         return v
 
     @field_validator("vote_duration_ticks")
