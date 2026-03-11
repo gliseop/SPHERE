@@ -24,8 +24,7 @@ router = APIRouter(tags=["run-control"])
 async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -> dict:
     """Запустить прогон по сценарию.
 
-    Для legacy web-представления сценарий при необходимости конвертируется
-    в ``ScenarioConfig`` перед запуском.
+    Сценарий должен быть сохранён как полноценный ``ScenarioConfig``.
     """
     from web.backend.runner import TooManyRunsError, launch_simulation_from_config
 

@@ -23,7 +23,7 @@ web/backend/
 ├── database.py       # SQLite через встроенный sqlite3 / aiosqlite
 ├── constants.py      # Enum-значения (GovernanceMode, ScenarioId, NEUTRALIZATION_TECHNIQUES)
 ├── runner.py         # Фоновый запуск симуляций
-├── run_artifacts.py  # Единый поиск run-артефактов (legacy + directory)
+├── run_artifacts.py  # Единый поиск run-артефактов (directory + переходные legacy-sidecars)
 ├── graph_state.py    # Построение графа связей для визуализации
 ├── visibility.py     # Role-based фильтрация/редактура event-потока для REST/WS
 └── manage_users.py   # CLI управления пользователями
@@ -38,7 +38,7 @@ web/backend/
 
 Токен выдаётся через OAuth2 password flow (`POST /api/auth/login`). Время жизни настраивается через `JWT_EXPIRE_HOURS` (по умолчанию 24 часа, при невалидном значении используется fallback). Секрет задаётся через `JWT_SECRET` и должен быть не короче 32 байт; в режиме разработки (`MAGISTRY_DEV=1`) при отсутствии явного секрета backend использует стабильный dev-secret, чтобы токены не отваливались при reload и multi-worker запуске.
 
-Для event-потока роли различаются не только правами на маршруты, но и видимостью данных. `admin` видит весь `events.jsonl`, включая private/direct сообщения и legacy `llm_call`; `viewer` получает только общий слой (`aud:public`, `aud:internal`, legacy события без `audience`). Для shared-событий с потенциально чувствительным payload backend дополнительно редактирует содержимое (`document_created.content`, private `message_sent.text`).
+Для event-потока роли различаются не только правами на маршруты, но и видимостью данных. `admin` видит весь `events.jsonl`, включая private/direct сообщения и `llm_call`; `viewer` получает только общий слой (`aud:public`, `aud:internal`). Для shared-событий с потенциально чувствительным payload backend дополнительно редактирует содержимое (`document_created.content`, private `message_sent.text`/`content`). Audience-less legacy stream не считается API-контрактом.
 
 ### REST API
 
@@ -75,11 +75,11 @@ web/backend/
 | GET | `/api/runs/active` | Список активных симуляций (`external`, `stop_supported`) |
 | POST | `/api/runs/{run_name}/stop` | Остановить симуляцию |
 
-Web launcher запускает `magistry_lc` как отдельный subprocess и пишет артефакты в `results/{run_name}/`. Для сохранённых legacy-сценариев (`name/scenario/governance/agents` без полного `ScenarioConfig`) backend перед запуском выполняет конвертацию в валидный `ScenarioConfig`: если `sim_config` пуст, сначала подгружается выбранный шаблон `S/G`, а затем поверх него накладываются overrides из web-карточки.
+Web launcher запускает `magistry_lc` как отдельный subprocess и пишет артефакты в `results/{run_name}/`. Backend больше не поддерживает сохранённые legacy-карточки сценариев; пользовательские сценарии должны храниться как полноценный `ScenarioConfig`. Если при сохранении web-карточки поле `sim_config` пусто, backend сначала материализует выбранный шаблон `S/G`, а затем накладывает на него overrides из UI и сохраняет уже полный `ScenarioConfig`.
 
 `POST /api/runs/launch` принимает также runtime-overrides `parallel_agents`, `parallel_workers` и `parallel_window`. Backend переносит их в `ScenarioConfig.runtime` конкретного запуска, поэтому они отражаются в `_input_scenario.json` и не теряются между UI и subprocess launcher'ом.
 
-Внешние CLI-прогоны теперь попадают в `/api/runs/active` не по одному только свежему `events.jsonl`, а по sidecar-файлу `status.json`/`*_status.json` со статусом `running` и свежим heartbeat (`updated_at`). Это снижает число ложноположительных «живых» прогонов после аварийного завершения без `summary.json`.
+Внешние CLI-прогоны и ранее запущенные web-launcher subprocess теперь попадают в `/api/runs/active` не по одному только свежему `events.jsonl`, а по sidecar-файлу `status.json`/`*_status.json` со статусом `running` и свежим heartbeat (`updated_at`). Это позволяет переживать рестарт backend и снижает число ложноположительных «живых» прогонов после аварийного завершения без `summary.json`.
 
 Метаданные прогона (`scenario`, `governance`, `seed`, `variant`) извлекаются из правого суффикса имени прогона, поэтому пользовательское название сценария может содержать фрагменты вида `G2` или `G10` без поломки карточки прогона и WebSocket `meta`.
 
@@ -93,7 +93,7 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 | PUT | `/api/scenarios/{id}` | Обновить сценарий |
 | DELETE | `/api/scenarios/{id}` | Удалить сценарий |
 
-Маршруты сценариев читают файлы `*.json`, `*.yaml` и `*.yml`. Если файл содержит полноценный `ScenarioConfig`, backend возвращает web-совместимую карточку сценария и кладёт исходный конфиг в поле `sim_config`, чтобы фронтенд мог редактировать его без потери данных. Если файл ещё хранится в legacy web-формате, backend оставляет карточку совместимой с UI, а при запуске/подстановке шаблона конвертирует её в `ScenarioConfig`.
+Маршруты сценариев читают файлы `*.json`, `*.yaml` и `*.yml`, но поддерживают только полноценный `ScenarioConfig`. Backend возвращает web-совместимую карточку сценария и кладёт исходный конфиг в поле `sim_config`, чтобы фронтенд мог редактировать его без потери данных. Старый web-формат (`name/scenario/governance/agents` без полного `ScenarioConfig`) больше не поддерживается и должен быть мигрирован вручную.
 
 `/api/scenarios` теперь показывает только пользовательские сценарии. Встроенные seed-файлы (`seed_s*_g*.json`) считаются template-backend'ом для `/api/templates/scenarios/*`, не выдаются в CRUD-списке и не могут быть изменены или удалены через `/api/scenarios/{id}`.
 
@@ -148,7 +148,7 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 | GET | `/api/templates/governance` | Шаблоны режимов управления |
 | GET | `/api/debug/llm-log` | Журнал LLM-вызовов |
 
-Шаблоны сценариев собираются из поддерживаемых `seed_s*_g*.json` сценариев репозитория. Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G*` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора. Для built-in режимов (`G0..G3`) backend применяет жёстко заданные пресеты; для пользовательских `G*` он загружает конфиг из `data/governance_modes/{id}.json`.
+Шаблоны сценариев собираются из поддерживаемых `seed_s*_g*.json` сценариев репозитория, которые также хранятся как валидный `ScenarioConfig`. Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G*` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора. Для built-in режимов (`G0..G3`) backend применяет жёстко заданные пресеты; для пользовательских `G*` он загружает конфиг из `data/governance_modes/{id}.json`.
 Идентификатор `governance` валидируется как безопасный library-id: backend не читает произвольные JSON-файлы вне `data/governance_modes/`, даже если в query передать path-like строку.
 
 ### WebSocket-протокол

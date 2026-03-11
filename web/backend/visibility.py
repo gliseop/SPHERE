@@ -11,7 +11,8 @@ def event_visible_to_role(event: dict[str, Any], *, role: str) -> bool:
     """Определить, должен ли пользователь видеть событие.
 
     `admin` видит полный поток. Для `viewer` доступны только общие слои:
-    `aud:public`, `aud:internal` и legacy-события без поля `audience`.
+    `aud:public`, `aud:internal`; audience-less события терпим только как
+    переходный входной формат.
     """
     if role == "admin":
         return True
@@ -48,11 +49,17 @@ def sanitize_event_for_role(
         payload["content_len"] = len(content)
         changed = True
 
-    if event_type == "message_sent" and bool(payload.get("private", True)) and "text" in payload:
+    if event_type == "message_sent" and bool(payload.get("private", True)):
         text = str(payload.get("text") or "")
-        payload["text"] = "<redacted>"
-        payload["text_len"] = len(text)
-        changed = True
+        content = str(payload.get("content") or "")
+        if "text" in payload:
+            payload["text"] = "<redacted>"
+            payload["text_len"] = len(text)
+            changed = True
+        if "content" in payload:
+            payload["content"] = "<redacted>"
+            payload["content_len"] = len(content)
+            changed = True
 
     if changed:
         result["payload"] = payload

@@ -35,12 +35,12 @@ _SCENARIO_SUFFIXES = (".json", ".yaml", ".yml")
 _DEFAULT_SCENARIO_TEMPLATE = "S1"
 _DEFAULT_GOVERNANCE_MODE = "G1"
 _DEFAULT_PUBLIC_CHANNEL = {"channel_id": "chan:public", "title": "Публичный канал"}
-_LEGACY_TEMPLATE_FILE_MAP = {
+_TEMPLATE_FILE_MAP = {
     "S0": "seed_s0_g0.json",
     "S1": "seed_s1_g1.json",
     "S2": "seed_s2_g2.json",
 }
-_BUILTIN_SCENARIO_FILES = frozenset(_LEGACY_TEMPLATE_FILE_MAP.values())
+_BUILTIN_SCENARIO_FILES = frozenset(_TEMPLATE_FILE_MAP.values())
 _GOVERNANCE_METADATA_KEYS = frozenset({"id", "label", "description", "custom"})
 _UNSET = object()
 _KNOWN_ROLE_ALIASES = {
@@ -346,35 +346,21 @@ def _sync_config_from_payload(
     return cfg
 
 
-def _legacy_payload_to_config(
-    raw: dict[str, Any],
-    *,
-    scenario_id: str,
-    seed_from_template: bool,
-) -> ScenarioConfig:
-    payload = ScenarioPayload.model_validate(raw)
-    base_cfg: ScenarioConfig | None = None
-    sim_config = raw.get("sim_config")
-    if isinstance(sim_config, dict):
+def _payload_to_scenario_config(payload: ScenarioPayload, *, scenario_id: str) -> ScenarioConfig:
+    """Материализовать web-payload в полноценный ScenarioConfig."""
+    if payload.sim_config is not None:
         try:
-            base_cfg = ScenarioConfig.model_validate(sim_config)
-        except Exception:
-            base_cfg = None
-    if base_cfg is None and seed_from_template:
-        try:
-            base_cfg = load_template_config_for_web(
-                payload.scenario,
-                governance=payload.governance,
-            )
-        except HTTPException:
-            base_cfg = None
-    cfg = base_cfg or ScenarioConfig()
+            cfg = ScenarioConfig.model_validate(payload.sim_config)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid ScenarioConfig: {exc}") from exc
+        return _sync_config_from_payload(cfg, payload=payload, scenario_id=scenario_id)
+
+    cfg = load_template_config_for_web(payload.scenario, governance=payload.governance)
     return _sync_config_from_payload(
         cfg,
         payload=payload,
         scenario_id=scenario_id,
-        narrative_context=str(raw.get("narrative_context") or ""),
-        preserve_existing_agents_when_empty=base_cfg is not None,
+        preserve_existing_agents_when_empty=True,
     )
 
 
@@ -383,18 +369,16 @@ def load_scenario_config_for_web(path: Path, *, scenario_id: str | None = None) 
     if raw is None:
         raise HTTPException(status_code=404, detail="Scenario not found")
 
-    resolved_id = scenario_id or path.stem
     try:
         return ScenarioConfig.model_validate(raw)
-    except Exception:
-        try:
-            return _legacy_payload_to_config(
-                raw,
-                scenario_id=resolved_id,
-                seed_from_template=not _is_builtin_scenario_path(path),
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid scenario config: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Legacy web-scenario format is no longer supported; "
+                "save scenarios as full ScenarioConfig"
+            ),
+        ) from exc
 
 
 def load_template_config_for_web(
@@ -402,7 +386,7 @@ def load_template_config_for_web(
     *,
     governance: str | None = None,
 ) -> ScenarioConfig:
-    candidate_name = _LEGACY_TEMPLATE_FILE_MAP.get(scenario_id)
+    candidate_name = _TEMPLATE_FILE_MAP.get(scenario_id)
     if candidate_name is None:
         candidate_path = _resolve_scenario_path(scenario_id)
         if candidate_path is None:
@@ -555,35 +539,18 @@ def _scenario_config_to_payload(cfg: ScenarioConfig, *, scenario_id: str) -> dic
 
 
 def _read_scenario_payload(path: Path) -> dict[str, Any] | None:
-    raw = _read_mapping(path)
-    if raw is None:
-        return None
-
     try:
         cfg = load_scenario_config_for_web(path, scenario_id=path.stem)
     except HTTPException:
-        payload = dict(raw)
-        payload["id"] = str(payload.get("id") or path.stem)
-        return payload
+        return None
 
     return _scenario_config_to_payload(cfg, scenario_id=path.stem)
 
 
 def _save_payload(path: Path, payload: ScenarioPayload, *, scenario_id: str) -> dict[str, Any]:
-    if payload.sim_config is not None:
-        try:
-            cfg = ScenarioConfig.model_validate(payload.sim_config)
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"Invalid ScenarioConfig: {exc}") from exc
-
-        cfg = _sync_config_from_payload(cfg, payload=payload, scenario_id=scenario_id)
-        save_scenario(cfg, path)
-        return _scenario_config_to_payload(cfg, scenario_id=scenario_id)
-
-    data = payload.model_dump(mode="json")
-    data["id"] = scenario_id
-    _write_mapping(path, data)
-    return data
+    cfg = _payload_to_scenario_config(payload, scenario_id=scenario_id)
+    save_scenario(cfg, path)
+    return _scenario_config_to_payload(cfg, scenario_id=scenario_id)
 
 
 @router.get("/api/scenarios")
@@ -616,10 +583,8 @@ async def get_scenario(scenario_id: str, _user: User = Depends(require_viewer)) 
     path = _resolve_scenario_path(scenario_id)
     if path is None:
         raise HTTPException(status_code=404, detail="Scenario not found")
-    data = _read_scenario_payload(path)
-    if data is None:
-        raise HTTPException(status_code=404, detail="Scenario not found")
-    return data
+    cfg = load_scenario_config_for_web(path, scenario_id=scenario_id)
+    return _scenario_config_to_payload(cfg, scenario_id=scenario_id)
 
 
 @router.post("/api/scenarios", status_code=201)

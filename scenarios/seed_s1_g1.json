@@ -1,64 +1,82 @@
 {
-  "id": "seed_s1_g1",
-  "name": "Прямой сговор + рекомендательный аудитор",
-  "description": "Муниципальное предприятие с ослабленным контролем и неформальными связями между участниками закупок. Начальник отдела Козлов И.М. — жадный и нечестный чиновник (greed 0.8, honesty 0.2) — связан давним знакомством с директором «ТехСнаб» Петровым С.И. (бывшие коллеги, сила связи 3.0). Петров тоже жаден, но при этом обладает невысокой компетенцией (0.4) — его предложения объективно слабее. Третий участник — директор «ГрадТех» Сидоров В.К. — честный и компетентный подрядчик (competence 0.8, honesty 0.7), но не имеет неформальных связей с чиновником. Рекомендательный аудитор наблюдает за процессом: он фиксирует подозрительные паттерны коммуникации и может подавать отчёты, но не имеет полномочий блокировать сделки. Ожидаемый итог: сговор между Козловым и Петровым, аудитор формирует предупреждения, но сделка проходит в пользу менее компетентного подрядчика.",
-  "narrative_context": "Муниципальное предприятие с ослабленным контролем и неформальными связями между участниками закупок.",
-  "scenario": "S1",
-  "governance": "G1",
-  "rounds": 25,
+  "version": 1,
+  "title": "Прямой сговор",
+  "description": "Муниципальная закупка с неформальной связью между чиновником и подрядчиком. Аудитор фиксирует сигналы, но действует только рекомендательно.",
   "seed": 42,
-  "runner": "cognitive",
+  "ticks": 25,
+  "governance": {
+    "audit": {
+      "enabled": true,
+      "reputation_freeze_enabled": false,
+      "reputation_penalty_delta": null
+    }
+  },
   "agents": [
     {
-      "id": "off_1",
+      "agent_id": "agent:off_1",
       "name": "Козлов И.М.",
-      "role": "official",
-      "position": "начальник отдела обеспечения",
+      "internal": true,
+      "persona": {
+        "summary": "Начальник отдела обеспечения. Склонен к неформальным договорённостям и прикрывает знакомого подрядчика."
+      },
+      "capabilities": ["message", "work", "dao"],
       "initial_reputation": 7.0,
-      "greed": 0.8,
-      "fear": 0.3,
-      "honesty": 0.2
+      "initial_title": "начальник отдела обеспечения",
+      "wants_promotion": true
     },
     {
-      "id": "biz_1",
+      "agent_id": "agent:biz_1",
       "name": "Петров С.И.",
-      "role": "business",
-      "position": "директор «ТехСнаб»",
+      "internal": false,
+      "persona": {
+        "summary": "Директор «ТехСнаб». Заинтересован в победе через личные связи, а не через качество предложения."
+      },
+      "capabilities": ["message"],
       "initial_reputation": 6.0,
-      "greed": 0.8,
-      "fear": 0.2,
-      "honesty": 0.2,
-      "competence": 0.4
+      "initial_title": "директор «ТехСнаб»",
+      "wants_promotion": false
     },
     {
-      "id": "biz_2",
+      "agent_id": "agent:biz_2",
       "name": "Сидоров В.К.",
-      "role": "business",
-      "position": "директор «ГрадТех»",
+      "internal": false,
+      "persona": {
+        "summary": "Директор «ГрадТех». Пытается выиграть конкурс на конкурентных условиях."
+      },
+      "capabilities": ["message"],
       "initial_reputation": 8.0,
-      "greed": 0.3,
-      "fear": 0.4,
-      "honesty": 0.7,
-      "competence": 0.8
+      "initial_title": "директор «ГрадТех»",
+      "wants_promotion": false
     },
     {
-      "id": "auditor",
+      "agent_id": "agent:auditor",
       "name": "Аудитор",
-      "role": "auditor",
-      "position": "независимый аудитор",
+      "internal": true,
+      "persona": {
+        "summary": "Независимый ИИ-аудитор. Фиксирует подозрительные паттерны и повышает прозрачность процесса."
+      },
+      "capabilities": ["audit", "message", "work", "dao"],
       "initial_reputation": 9.0,
-      "greed": 0.1,
-      "fear": 0.2,
-      "honesty": 0.9,
-      "immune": true
+      "initial_title": "независимый аудитор",
+      "wants_promotion": false
     }
   ],
-  "connections": [
-    {
-      "from": "off_1",
-      "to": "biz_1",
-      "relation": "бывшие коллеги",
-      "strength": 3.0
-    }
-  ]
+  "world": {
+    "channels": [
+      {
+        "channel_id": "chan:public",
+        "title": "Публичный канал"
+      }
+    ],
+    "orgs": [],
+    "work_items": [
+      {
+        "work_id": "work:tender_1",
+        "work_type": "procurement_tender",
+        "title": "Конкурс на поставку оборудования",
+        "description": "Конкурс с риском сговора между заказчиком и одним из подрядчиков.",
+        "participants": ["agent:off_1", "agent:biz_1", "agent:biz_2", "agent:auditor"]
+      }
+    ]
+  }
 }

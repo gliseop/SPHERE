@@ -14,7 +14,7 @@ from web.backend.constants import (
 )
 from web.backend.database import User
 from web.backend.settings import GOVERNANCE_MODES_DIR
-from .scenarios import _LEGACY_TEMPLATE_FILE_MAP, load_template_config_for_web
+from .scenarios import _TEMPLATE_FILE_MAP, load_template_config_for_web
 
 router = APIRouter(tags=["templates"])
 
@@ -26,7 +26,7 @@ async def list_template_scenarios(_user: User = Depends(require_viewer)) -> list
     Шаблоны собираются из поддерживаемых seed-сценариев репозитория.
     """
     result: list[dict] = []
-    for scenario_id in sorted(_LEGACY_TEMPLATE_FILE_MAP):
+    for scenario_id in sorted(_TEMPLATE_FILE_MAP):
         try:
             cfg = load_template_config_for_web(scenario_id)
         except HTTPException:

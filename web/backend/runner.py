@@ -18,7 +18,6 @@ from .run_artifacts import (
     list_run_artifacts,
     resolve_run_artifact,
     run_json_sidecar_candidates,
-    run_log_sidecar_candidates,
 )
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -443,19 +442,6 @@ def _close_logs_when_done(
             pass
 
 
-def _has_api_launcher_markers(ref) -> bool:
-    """Определить, что артефакт относится к launcher-запуску web API."""
-    if ref.format == "directory" and (ref.events_path.parent / "_input_scenario.json").exists():
-        return True
-    for path in run_log_sidecar_candidates(ref, "stdout", results_dir=_RESULTS_DIR):
-        if path.exists():
-            return True
-    for path in run_log_sidecar_candidates(ref, "stderr", results_dir=_RESULTS_DIR):
-        if path.exists():
-            return True
-    return False
-
-
 def _read_run_status(ref) -> tuple[dict[str, object], Path] | None:
     """Прочитать status-sidecar прогона."""
     for path in run_json_sidecar_candidates(ref, "status", results_dir=_RESULTS_DIR):
@@ -514,8 +500,6 @@ def _discover_external_runs(*, exclude_names: set[str] | None = None) -> list[di
     for ref in list_run_artifacts(results_dir=_RESULTS_DIR):
         run_name = ref.name
         if run_name in active_names:
-            continue
-        if _has_api_launcher_markers(ref):
             continue
 
         summary_paths = run_json_sidecar_candidates(ref, "summary", results_dir=_RESULTS_DIR)

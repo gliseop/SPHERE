@@ -79,6 +79,23 @@ class TestDiscoverExternalRuns:
         assert runs[0]["external"] is True
         assert runs[0]["pid"] == 0
 
+    def test_launcher_directory_run_recovered_after_restart(self, results_dir: Path):
+        """Directory-run с _input_scenario.json должен переобнаруживаться после рестарта backend."""
+        run_dir = results_dir / "web_run"
+        run_dir.mkdir()
+        (run_dir / "events.jsonl").write_text('{"type": "action"}\n', encoding="utf-8")
+        (run_dir / "_input_scenario.json").write_text('{"title": "web run"}\n', encoding="utf-8")
+        _write_status(run_dir / "status.json", pid=4242)
+
+        runs = runner._discover_external_runs()
+        assert len(runs) == 1
+        assert runs[0]["run_name"] == "web_run"
+        assert runs[0]["pid"] == 4242
+        assert runs[0]["status"] == "running"
+        assert runs[0]["external"] is True
+        assert runs[0]["stop_supported"] is False
+        assert runs[0]["activity_at"] > 0.0
+
     def test_events_without_status_are_not_treated_as_running(self, results_dir: Path):
         """Одного свежего events.jsonl больше недостаточно для статуса running."""
         events = results_dir / "no_status_events.jsonl"

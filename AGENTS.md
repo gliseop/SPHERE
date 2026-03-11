@@ -67,7 +67,7 @@ MAGISTRY/
 │   │   ├── auth.py             # JWT-аутентификация, роли
 │   │   ├── database.py         # SQLite через aiosqlite
 │   │   ├── runner.py           # Фоновый запуск симуляций
-│   │   ├── run_artifacts.py    # Поиск артефактов прогонов (legacy + directory)
+│   │   ├── run_artifacts.py    # Поиск артефактов прогонов (directory + переходные legacy-sidecars)
 │   │   ├── graph_state.py      # Построение графа для визуализации
 │   │   ├── visibility.py       # Role-based фильтрация/редактура event-потока для REST/WS
 │   │   ├── constants.py        # Enum-значения (GovernanceMode, ScenarioId)
@@ -202,12 +202,12 @@ cd web && bash start.sh                   # сервер + фронтенд
 - **Status/truth/evaluation/fidelity sidecars**: каждый прогон теперь может писать `status.json` (heartbeat и финальный статус `running`/`finished`/`failed`), `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина) и `summary.json` (разделённая сводка), отдельно от `events.jsonl` и `trace.jsonl`.
 - **DAO по умолчанию**: self-nomination и self-vote цели отключены; нормальный путь для кандидата — `respond_nomination`, а `vote_closed` пишет детерминированную причину результата. `governance.position_policy` в v1 поддерживает только `dao`; `auto` отклоняется при валидации.
 - **Веб-launcher на `magistry_lc`**: `POST /api/scenarios/{id}/run` и `POST /api/runs/launch` запускают `magistry_lc` как subprocess, пишут артефакты в `results/{run_name}/` и показываются в `/api/runs/active` как обычные API-запуски.
-- **Built-in seed-сценарии**: `seed_s*_g*.json` используются только как backing-файлы для `/api/templates/scenarios/*`; backend не показывает их в CRUD-списке `/api/scenarios` и не позволяет менять/удалять через сценарные маршруты.
-- **Legacy web-сценарии**: сохранённые JSON-карточки старого формата (`name/scenario/governance/agents` без полного `ScenarioConfig`) по-прежнему читаются UI; перед запуском и подстановкой шаблона backend конвертирует их в валидный `ScenarioConfig`, а при пустом `sim_config` сначала подгружает выбранный шаблон `S/G`, чтобы не терять зашитый мир и дефолтных агентов.
+- **Built-in seed-сценарии**: `seed_s*_g*.json` используются только как backing-файлы для `/api/templates/scenarios/*` и уже хранятся как полноценный `ScenarioConfig`; backend не показывает их в CRUD-списке `/api/scenarios` и не позволяет менять/удалять через сценарные маршруты.
+- **Отказ от legacy web-сценариев**: старый формат JSON-карточек (`name/scenario/governance/agents` без полного `ScenarioConfig`) больше не поддерживается. Web backend сохраняет пользовательские сценарии только как полный `ScenarioConfig`; если `sim_config` пуст, при сохранении сначала материализуется выбранный шаблон `S/G`, а затем поверх него накладываются overrides из UI.
 - **Custom governance modes**: пользовательские `G*`-режимы должны содержать валидный `GovernanceConfig` (в поле `config` или в корне JSON); backend применяет их при подстановке шаблона и round-trip сценария, а не игнорирует как неизвестный `G4+`.
 - **Оставшиеся заглушки web API**: HTTP 501 пока сохраняется только для путей, ещё не мигрированных с `magistry_sim` (например, генерация интервью и secondary-agents через LLM); web UI не должен показывать активные кнопки для таких маршрутов.
 - **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.
-- **Role-based visibility в web API/WS**: `viewer` получает только shared-события (`aud:public` / `aud:internal`, плюс legacy без `audience`); point-to-point private events скрываются, `document_created.content` и legacy private payloads редактируются, а `GET /api/artifacts/{doc_id}` доступен только `admin`.
+- **Role-based visibility в web API/WS**: `viewer` получает только shared-события (`aud:public` / `aud:internal`); point-to-point private events скрываются, чувствительные payload'ы shared-событий редактируются, а `GET /api/artifacts/{doc_id}` доступен только `admin`. Audience-less legacy event-stream не считается поддерживаемым контрактом API.
 
 ## Техническое состояние кодовой базы
 
