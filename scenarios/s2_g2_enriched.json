@@ -1,0 +1,403 @@
+{
+  "id": "S2",
+  "title": "Кумовство при найме",
+  "description": "Найм сотрудника с предпосылкой к кумовству: один из кандидатов — родственник коллеги чиновника.",
+  "max_rounds": 25,
+  "start_time": "2026-02-16T09:00:00+03:00",
+  "end_time": "2026-02-27T18:00:00+03:00",
+  "seed": 42,
+  "agents": [
+    {
+      "id": "off_1",
+      "name": "Козлов И.М.",
+      "position": "начальник отдела",
+      "capabilities": [
+        {
+          "action": "open_case",
+          "case_types": []
+        },
+        {
+          "action": "resolve_case",
+          "case_types": []
+        }
+      ],
+      "greed": 0.6,
+      "fear": 0.3,
+      "honesty": 0.3,
+      "competence": null,
+      "personality": null,
+      "personality_archetype": null,
+      "initial_reputation": null,
+      "immune": false,
+      "connections": [
+        {
+          "target_id": "off_2",
+          "name": "Волков Д.Н.",
+          "relation": "коллега по отделу",
+          "strength": 2.5
+        },
+        {
+          "target_id": "fam_1",
+          "name": "Семейный советник 1",
+          "relation": "family pressure",
+          "strength": 0.0
+        }
+      ],
+      "initial_resources": {
+        "budget_limit": 5000000.0,
+        "staffing_slots": 5,
+        "contract_capacity": 0
+      }
+    },
+    {
+      "id": "off_2",
+      "name": "Волков Д.Н.",
+      "position": "специалист отдела",
+      "capabilities": [],
+      "greed": 0.4,
+      "fear": 0.5,
+      "honesty": 0.5,
+      "competence": null,
+      "personality": null,
+      "personality_archetype": null,
+      "initial_reputation": null,
+      "immune": false,
+      "connections": [
+        {
+          "target_id": "off_1",
+          "name": "Козлов И.М.",
+          "relation": "начальник",
+          "strength": 2.5
+        },
+        {
+          "target_id": "cand_1",
+          "name": "Волков А.Д.",
+          "relation": "родственник (племянник)",
+          "strength": 5.0
+        },
+        {
+          "target_id": "fam_2",
+          "name": "Семейный советник 2",
+          "relation": "family pressure",
+          "strength": 0.0
+        }
+      ],
+      "initial_resources": {
+        "budget_limit": 0.0,
+        "staffing_slots": 0,
+        "contract_capacity": 0
+      }
+    },
+    {
+      "id": "cand_1",
+      "name": "Волков А.Д.",
+      "position": "кандидат",
+      "capabilities": [
+        {
+          "action": "submit_proposal",
+          "case_types": []
+        }
+      ],
+      "greed": 0.3,
+      "fear": 0.5,
+      "honesty": 0.5,
+      "competence": 0.3,
+      "personality": null,
+      "personality_archetype": null,
+      "initial_reputation": null,
+      "immune": false,
+      "connections": [
+        {
+          "target_id": "off_2",
+          "name": "Волков Д.Н.",
+          "relation": "дядя",
+          "strength": 5.0
+        },
+        {
+          "target_id": "soc_2",
+          "name": "Общественный аналитик 2",
+          "relation": "public scrutiny",
+          "strength": 0.0
+        }
+      ],
+      "initial_resources": {
+        "budget_limit": 0.0,
+        "staffing_slots": 0,
+        "contract_capacity": 0
+      }
+    },
+    {
+      "id": "cand_2",
+      "name": "Антонова И.С.",
+      "position": "кандидат",
+      "capabilities": [
+        {
+          "action": "submit_proposal",
+          "case_types": []
+        }
+      ],
+      "greed": 0.2,
+      "fear": 0.3,
+      "honesty": 0.8,
+      "competence": 0.9,
+      "personality": null,
+      "personality_archetype": null,
+      "initial_reputation": null,
+      "immune": false,
+      "connections": [],
+      "initial_resources": {
+        "budget_limit": 0.0,
+        "staffing_slots": 0,
+        "contract_capacity": 0
+      }
+    },
+    {
+      "id": "auditor",
+      "name": "Аудитор",
+      "position": "независимый аудитор",
+      "capabilities": [
+        {
+          "action": "audit",
+          "case_types": []
+        },
+        {
+          "action": "file_report",
+          "case_types": []
+        }
+      ],
+      "greed": 0.1,
+      "fear": 0.2,
+      "honesty": 0.9,
+      "competence": null,
+      "personality": null,
+      "personality_archetype": null,
+      "initial_reputation": null,
+      "immune": true,
+      "connections": [
+        {
+          "target_id": "soc_1",
+          "name": "Общественный аналитик 1",
+          "relation": "media pressure",
+          "strength": 0.0
+        }
+      ],
+      "initial_resources": {
+        "budget_limit": 0.0,
+        "staffing_slots": 0,
+        "contract_capacity": 0
+      }
+    },
+    {
+      "id": "fam_1",
+      "name": "Семейный советник 1",
+      "position": "family_pressure_agent",
+      "capabilities": [],
+      "greed": 0.0,
+      "fear": 0.0,
+      "honesty": 0.0,
+      "competence": null,
+      "personality": {
+        "hexaco": {
+          "honesty_humility": 0,
+          "emotionality": 0,
+          "extraversion": 0,
+          "agreeableness": 0,
+          "conscientiousness": 0,
+          "openness": 0
+        },
+        "dark_triad": {
+          "narcissism": 0,
+          "machiavellianism": 0,
+          "psychopathy": 0
+        },
+        "neutralization_techniques": [
+          "appeal_to_higher_loyalties",
+          "denial_of_responsibility"
+        ],
+        "biography": "Близкий родственник И.М. Козлова, который регулярно напоминает о семейных традициях и взаимных обязательствах. Он подчеркивает важность поддержки родственников в карьерных вопросах, чтобы сохранить клановую репутацию. Его давление усиливается при появлении угрозы раскрытия кумовства. Он стремится обеспечить, чтобы кандидат Волков А.Д. получил желаемую должность."
+      },
+      "personality_archetype": null,
+      "initial_reputation": null,
+      "immune": false,
+      "connections": [
+        {
+          "target_id": "off_1",
+          "name": "Kozlov I.M.",
+          "relation": "family pressure",
+          "strength": 0.0
+        }
+      ],
+      "initial_resources": {
+        "budget_limit": 0.0,
+        "staffing_slots": 0,
+        "contract_capacity": 0
+      }
+    },
+    {
+      "id": "fam_2",
+      "name": "Семейный советник 2",
+      "position": "family_pressure_agent",
+      "capabilities": [],
+      "greed": 0.0,
+      "fear": 0.0,
+      "honesty": 0.0,
+      "competence": null,
+      "personality": {
+        "hexaco": {
+          "honesty_humility": 0,
+          "emotionality": 0,
+          "extraversion": 0,
+          "agreeableness": 0,
+          "conscientiousness": 0,
+          "openness": 0
+        },
+        "dark_triad": {
+          "narcissism": 0,
+          "machiavellianism": 0,
+          "psychopathy": 0
+        },
+        "neutralization_techniques": [
+          "appeal_to_higher_loyalties",
+          "denial_of_responsibility"
+        ],
+        "biography": "Брат Д.Н. Волкова, который активно поддерживает клановые интересы в отделе. Он использует семейные связи, чтобы оказывать давление на руководителей, подчеркивая необходимость взаимопомощи. При обнаружении возможных проверок он усиливает давление, обещая поддержку в случае успеха. Его цель — обеспечить, чтобы кандидат Антонова И.С. получила должность, если это выгодно клану."
+      },
+      "personality_archetype": null,
+      "initial_reputation": null,
+      "immune": false,
+      "connections": [
+        {
+          "target_id": "off_2",
+          "name": "Volkov D.N.",
+          "relation": "family pressure",
+          "strength": 0.0
+        }
+      ],
+      "initial_resources": {
+        "budget_limit": 0.0,
+        "staffing_slots": 0,
+        "contract_capacity": 0
+      }
+    },
+    {
+      "id": "soc_1",
+      "name": "Общественный аналитик 1",
+      "position": "media_pressure_agent",
+      "capabilities": [],
+      "greed": 0.0,
+      "fear": 0.0,
+      "honesty": 0.0,
+      "competence": null,
+      "personality": {
+        "hexaco": {
+          "honesty_humility": 0,
+          "emotionality": 0,
+          "extraversion": 0,
+          "agreeableness": 0,
+          "conscientiousness": 0,
+          "openness": 0
+        },
+        "dark_triad": {
+          "narcissism": 0,
+          "machiavellianism": 0,
+          "psychopathy": 0
+        },
+        "neutralization_techniques": [
+          "appeal_to_higher_loyalties",
+          "denial_of_responsibility"
+        ],
+        "biography": "Журналист, специализирующийся на расследованиях коррупции в государственных органах. Он следит за действиями аудитора и готов обнародовать любые нарушения, создавая репутационный риск для клана. Его репортажи могут подорвать доверие к чиновникам и усилить давление со стороны общества. Он мотивирован желанием повысить свою репутацию и привлечь внимание к проблемам кумовства."
+      },
+      "personality_archetype": null,
+      "initial_reputation": null,
+      "immune": false,
+      "connections": [
+        {
+          "target_id": "auditor",
+          "name": "Аудитор",
+          "relation": "media pressure",
+          "strength": 0.0
+        }
+      ],
+      "initial_resources": {
+        "budget_limit": 0.0,
+        "staffing_slots": 0,
+        "contract_capacity": 0
+      }
+    },
+    {
+      "id": "soc_2",
+      "name": "Общественный аналитик 2",
+      "position": "media_pressure_agent",
+      "capabilities": [],
+      "greed": 0.0,
+      "fear": 0.0,
+      "honesty": 0.0,
+      "competence": null,
+      "personality": {
+        "hexaco": {
+          "honesty_humility": 0,
+          "emotionality": 0,
+          "extraversion": 0,
+          "agreeableness": 0,
+          "conscientiousness": 0,
+          "openness": 0
+        },
+        "dark_triad": {
+          "narcissism": 0,
+          "machiavellianism": 0,
+          "psychopathy": 0
+        },
+        "neutralization_techniques": [
+          "appeal_to_higher_loyalties",
+          "denial_of_responsibility"
+        ],
+        "biography": "Эксперт по политическим рискам, который оценивает влияние кумовства на общественное мнение. Он следит за кандидатами и готов опубликовать критические материалы, если обнаружит нарушения. Его работа усиливает репутационный риск для кандидатов и их покровителей. Он стремится обеспечить прозрачность и подотчетность в процессе найма."
+      },
+      "personality_archetype": null,
+      "initial_reputation": null,
+      "immune": false,
+      "connections": [
+        {
+          "target_id": "cand_1",
+          "name": "Волков А.Д.",
+          "relation": "public scrutiny",
+          "strength": 0.0
+        }
+      ],
+      "initial_resources": {
+        "budget_limit": 0.0,
+        "staffing_slots": 0,
+        "contract_capacity": 0
+      }
+    }
+  ],
+  "needs": [
+    {
+      "case_type": "hiring",
+      "description": "Нужен инженер в отдел",
+      "target_agent_id": "off_1",
+      "appear_round": 0,
+      "urgency": "средняя"
+    }
+  ],
+  "governance": {
+    "mode": "G2",
+    "jury_size": 3,
+    "reputation_decay": 1.0
+  },
+  "schedule": {
+    "work_start_hour": 9,
+    "work_end_hour": 18,
+    "work_days": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "holidays": []
+  },
+  "corruption_level": 0.7,
+  "narrative_context": "Сценарий S2 (кумовство при найме) в режиме G2 (аудитор с репутационными санкциями). Семейные агенты fam_1 и fam_2 оказывают давление на руководителей отдела (Козлов И.М. и Волков Д.Н.), подталкивая их к поддержке родственников‑кандидатов. Общественные агенты soc_1 и soc_2 представляют медиа и общественное мнение, создавая репутационные риски для чиновников и кандидатов при обнаружении нарушений, усиливая контроль со стороны аудитора."
+}

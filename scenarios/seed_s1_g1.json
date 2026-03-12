@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "title": "Прямой сговор",
+  "description": "Муниципальная закупка с неформальной связью между чиновником и подрядчиком. Аудитор фиксирует сигналы, но действует только рекомендательно.",
+  "seed": 42,
+  "ticks": 25,
+  "governance": {
+    "audit": {
+      "enabled": true,
+      "reputation_freeze_enabled": false,
+      "reputation_penalty_delta": null
+    }
+  },
+  "agents": [
+    {
+      "agent_id": "agent:off_1",
+      "name": "Козлов И.М.",
+      "internal": true,
+      "persona": {
+        "summary": "Начальник отдела обеспечения. Склонен к неформальным договорённостям и прикрывает знакомого подрядчика."
+      },
+      "capabilities": ["message", "work", "dao"],
+      "initial_reputation": 7.0,
+      "initial_title": "начальник отдела обеспечения",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:biz_1",
+      "name": "Петров С.И.",
+      "internal": false,
+      "persona": {
+        "summary": "Директор «ТехСнаб». Заинтересован в победе через личные связи, а не через качество предложения."
+      },
+      "capabilities": ["message"],
+      "initial_reputation": 6.0,
+      "initial_title": "директор «ТехСнаб»",
+      "wants_promotion": false
+    },
+    {
+      "agent_id": "agent:biz_2",
+      "name": "Сидоров В.К.",
+      "internal": false,
+      "persona": {
+        "summary": "Директор «ГрадТех». Пытается выиграть конкурс на конкурентных условиях."
+      },
+      "capabilities": ["message"],
+      "initial_reputation": 8.0,
+      "initial_title": "директор «ГрадТех»",
+      "wants_promotion": false
+    },
+    {
+      "agent_id": "agent:auditor",
+      "name": "Аудитор",
+      "internal": true,
+      "persona": {
+        "summary": "Независимый ИИ-аудитор. Фиксирует подозрительные паттерны и повышает прозрачность процесса."
+      },
+      "capabilities": ["audit", "message", "work", "dao"],
+      "initial_reputation": 9.0,
+      "initial_title": "независимый аудитор",
+      "wants_promotion": false
+    }
+  ],
+  "world": {
+    "channels": [
+      {
+        "channel_id": "chan:public",
+        "title": "Публичный канал"
+      }
+    ],
+    "orgs": [],
+    "work_items": [
+      {
+        "work_id": "work:tender_1",
+        "work_type": "procurement_tender",
+        "title": "Конкурс на поставку оборудования",
+        "description": "Конкурс с риском сговора между заказчиком и одним из подрядчиков.",
+        "participants": ["agent:off_1", "agent:biz_1", "agent:biz_2", "agent:auditor"]
+      }
+    ]
+  }
+}

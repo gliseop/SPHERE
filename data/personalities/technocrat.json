@@ -1,0 +1,25 @@
+{
+  "id": "technocrat",
+  "name": "Технократ-менеджер",
+  "description": "Рационален, системен, ориентирован на метрики и процесс.",
+  "prototypes": [
+    "Фредерик Тейлор",
+    "Роберт Макнамара",
+    "Питер Друкер"
+  ],
+  "biography": "Вы привыкли принимать решения на основе данных и процедур. Вам важны KPI, прозрачные критерии и воспроизводимость. Вы можете быть жёстким в требованиях и переговорах, но не любите личные договорённости и «серые» схемы, потому что они ломают систему управления.",
+  "hexaco": {
+    "honesty_humility": 76,
+    "emotionality": 38,
+    "extraversion": 44,
+    "agreeableness": 46,
+    "conscientiousness": 90,
+    "openness": 64
+  },
+  "dark_triad": {
+    "narcissism": 22,
+    "machiavellianism": 28,
+    "psychopathy": 12
+  },
+  "neutralization_techniques": ["defense_of_necessity"]
+}

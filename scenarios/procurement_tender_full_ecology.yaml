@@ -1,0 +1,147 @@
+version: 1
+title: "Тендер на ремонт школ: full-ecology"
+description: >
+  Исследовательский режим с богатой внешней средой. Базовый governance-контур
+  тот же, что в core-governance, но включены secondary-spawn и worldgen как
+  шумная внешняя экология без внутренних спавнов от мира.
+seed: 42
+ticks: 100
+
+llm:
+  model: "openai/gpt-oss-120b"
+  base_url: null
+  provider_order: ["Groq"]
+  temperature: 0.25
+  use_tool_calls: true
+  trace_max_chars: 0
+
+runtime:
+  language: "ru"
+  start_date: "2026-03-09"
+  tick_duration_days: 1
+  temporal_past_slack_days: 1
+  temporal_future_horizon_days: 120
+  max_actions_per_turn: 3
+  tick_events_history: 450
+  enrich_personas: true
+  persona_enrich_mode: "full"
+  spawn_secondary: true
+  max_secondary_per_agent: 1
+  max_agents: 10
+  allow_runtime_spawn: false
+  enable_worldgen: true
+  worldgen_every_ticks: 3
+  worldgen_allow_internal_spawns: false
+
+memory:
+  working_max_entries: 50
+  working_summarize_batch: 25
+  embeddings_mock: false
+
+governance:
+  position_policy: "dao"
+  dao_voters: ["agent:head", "agent:spec", "agent:deputy"]
+  quorum: 0.5
+  pass_threshold: 0.5
+  vote_duration_ticks: 3
+  require_consent: true
+  allow_self_nomination: false
+  allow_target_self_vote: false
+  audit:
+    enabled: true
+    actor_id: "agent:auditor"
+    lookback_events: 160
+    private_contact_window_ticks: 3
+    min_confidence_to_flag: 0.6
+    min_confidence_to_freeze: 0.85
+    freeze_duration_ticks: 4
+    reputation_freeze_enabled: true
+    reputation_penalty_delta: -0.75
+
+agents:
+  - agent_id: "agent:head"
+    name: "Волков А.С."
+    internal: true
+    persona: >
+      Начальник отдела закупок администрации Заречного района, 48 лет.
+      Пятнадцать лет в муниципальной системе. Прагматик с развитой сетью
+      контактов среди подрядчиков. Считает, что неформальные договорённости —
+      неизбежная часть работы. Знаком с директором ООО «СтройГарант» Петровым
+      ещё со студенческих времён. Хочет продвижения по службе и предпочитает
+      намёки и двусмысленности прямому давлению.
+    capabilities: ["message", "work", "dao"]
+    initial_title: "начальник отдела закупок"
+    wants_promotion: true
+
+  - agent_id: "agent:spec"
+    name: "Новикова Е.В."
+    internal: true
+    persona: >
+      Специалист отдела закупок, 26 лет. Верит в прозрачность государственной
+      службы, но боится открытого конфликта с руководством. Хорошо замечает
+      процедурные нарушения и ранние признаки конфликта интересов.
+    capabilities: ["message", "work", "dao"]
+    initial_title: "специалист"
+    wants_promotion: true
+
+  - agent_id: "agent:contractor"
+    name: "Петров Д.Н."
+    internal: false
+    persona: >
+      Директор ООО «СтройГарант», 52 года. Давний знакомый Волкова. Считает
+      личные договорённости частью нормальной деловой практики, старается
+      сохранять формально законный тон и защищать интересы компании.
+    capabilities: ["message"]
+    initial_title: "директор"
+    wants_promotion: false
+
+  - agent_id: "agent:auditor"
+    name: "Аудитор"
+    internal: true
+    persona: >
+      Независимый ИИ-аудитор, назначенный для мониторинга закупочных процедур.
+      Проверяет документы, сообщения, рабочие записи и голосования. Действует
+      строго по фактам и должен переводить audit-findings в реальные последствия
+      для репутации и карьерной динамики.
+    capabilities: ["audit", "message", "work", "dao"]
+    initial_title: "аудитор"
+    wants_promotion: false
+
+  - agent_id: "agent:deputy"
+    name: "Марченко Т.Л."
+    internal: true
+    persona: >
+      Заместитель главы администрации, 55 лет. Хочет результата без публичного
+      скандала и склонен закрывать глаза на мелкие нарушения, если процесс
+      остаётся управляемым и не привлекает внешнее внимание.
+    capabilities: ["message", "work", "dao"]
+    initial_title: "заместитель главы"
+    wants_promotion: false
+
+world:
+  channels:
+    - channel_id: "chan:public"
+      title: "Официальный канал администрации"
+    - channel_id: "chan:procurement"
+      title: "Канал отдела закупок"
+  orgs:
+    - org_id: "org:admin"
+      title: "Администрация Заречного района"
+    - org_id: "org:stroygarant"
+      title: "ООО «СтройГарант»"
+  work_items:
+    - work_id: "work:T-001"
+      work_type: "procurement_tender"
+      title: "Тендер: капремонт школ №12, №17, №23"
+      description: >
+        Открытый конкурс на выполнение работ по капитальному ремонту трёх школ
+        Заречного района. Начальная максимальная цена контракта — 47 200 000 руб.
+        Срок выполнения — 8 месяцев.
+      participants: ["agent:head", "agent:spec", "agent:contractor"]
+    - work_id: "work:A-001"
+      work_type: "audit_review"
+      title: "Плановая проверка закупочных процедур Q1"
+      description: >
+        Плановый аудит закупочных процедур за первый квартал. Проверяется
+        соблюдение 44-ФЗ, обоснованность цены и отсутствие конфликта интересов.
+      participants: ["agent:auditor", "agent:head", "agent:spec"]

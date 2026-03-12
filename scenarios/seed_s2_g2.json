@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "title": "Кумовство при найме",
+  "description": "Найм сотрудника с давлением со стороны внутренних связей. Репутационный аудит в G2 может замораживать доверие к участникам процесса.",
+  "seed": 99,
+  "ticks": 25,
+  "governance": {
+    "audit": {
+      "enabled": true,
+      "reputation_freeze_enabled": true,
+      "reputation_penalty_delta": null
+    }
+  },
+  "agents": [
+    {
+      "agent_id": "agent:off_1",
+      "name": "Козлов И.М.",
+      "internal": true,
+      "persona": {
+        "summary": "Начальник отдела. Склонен принимать решения под давлением внутренних договорённостей."
+      },
+      "capabilities": ["message", "work", "dao"],
+      "initial_reputation": 7.0,
+      "initial_title": "начальник отдела",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:off_2",
+      "name": "Волков Д.Н.",
+      "internal": true,
+      "persona": {
+        "summary": "Специалист отдела, лоббирующий найм родственника."
+      },
+      "capabilities": ["message", "work", "dao"],
+      "initial_reputation": 6.5,
+      "initial_title": "специалист отдела",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:cand_1",
+      "name": "Волков А.Д.",
+      "internal": false,
+      "persona": {
+        "summary": "Кандидат на должность, получающий преимущество через семейную связь."
+      },
+      "capabilities": ["message"],
+      "initial_reputation": 5.0,
+      "initial_title": "кандидат",
+      "wants_promotion": false
+    },
+    {
+      "agent_id": "agent:cand_2",
+      "name": "Антонова И.С.",
+      "internal": false,
+      "persona": {
+        "summary": "Сильный альтернативный кандидат без неформальной поддержки."
+      },
+      "capabilities": ["message"],
+      "initial_reputation": 8.5,
+      "initial_title": "кандидат",
+      "wants_promotion": false
+    },
+    {
+      "agent_id": "agent:auditor",
+      "name": "Аудитор",
+      "internal": true,
+      "persona": {
+        "summary": "Репутационный аудитор, отслеживающий признаки кумовства и конфликтов интересов."
+      },
+      "capabilities": ["audit", "message", "work", "dao"],
+      "initial_reputation": 9.0,
+      "initial_title": "независимый аудитор",
+      "wants_promotion": false
+    }
+  ],
+  "world": {
+    "channels": [
+      {
+        "channel_id": "chan:public",
+        "title": "Публичный канал"
+      }
+    ],
+    "orgs": [],
+    "work_items": [
+      {
+        "work_id": "work:hiring_1",
+        "work_type": "hiring_process",
+        "title": "Найм инженера в отдел",
+        "description": "Вакансия инженера с конкурирующими кандидатами и риском кумовства.",
+        "participants": ["agent:off_1", "agent:off_2", "agent:cand_1", "agent:cand_2", "agent:auditor"]
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "id": "auditor",
+  "name": "Аудитор",
+  "description": "Проводит проверки и подаёт отчёты по делам (в зависимости от режима управления).",
+  "id_prefix": "aud",
+  "capabilities": [
+    { "action": "audit", "case_types": [] },
+    { "action": "file_report", "case_types": [] }
+  ],
+  "resources": { "budget_limit": 0, "staffing_slots": 0, "contract_capacity": 0 }
+}

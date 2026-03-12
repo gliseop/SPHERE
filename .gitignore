@@ -1,0 +1,11 @@
+.env
+*.db
+.venv*
+.tmp
+__pycache__/
+*egg-info/
+.playwright-mcp
+results/
+screenshots/
+test-screenshots
+lc_results

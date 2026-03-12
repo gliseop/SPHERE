@@ -1,0 +1,10 @@
+{
+  "id": "business_contractor",
+  "name": "Подрядчик (коммерция)",
+  "description": "Подаёт предложения по открытым делам и конкурирует за контракты.",
+  "id_prefix": "biz",
+  "capabilities": [
+    { "action": "submit_proposal", "case_types": ["procurement", "budget", "training", "hiring"] }
+  ],
+  "resources": { "budget_limit": 500000, "staffing_slots": 12, "contract_capacity": 10 }
+}
