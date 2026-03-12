@@ -990,6 +990,12 @@ def test_memory_summarization_failure_preserves_working_buffer(tmp_path: Path) -
     assert [entry.text for entry in mem.working] == ["e0", "e1", "e2", "e3"]
 
 
+def test_memory_config_uses_real_embeddings_by_default() -> None:
+    cfg = MemoryConfig()
+
+    assert cfg.embeddings_mock is False
+
+
 def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["dao"], off_2_caps=["message", "work"])
     state.votes["vote:1"] = Vote(

@@ -189,6 +189,7 @@ Runtime-аудитор не подменяет собой `ViolationOracle` и �
 - **Важность** (Importance): статическая оценка по типу события (`importance_by_event`).
 
 Веса настраиваются через `MemoryWeights` в конфигурации. Дедупликация: записи с косинусным сходством выше `dedup_cosine_threshold` объединяются.
+В обычных прогонах `MemoryConfig.embeddings_mock=false` по умолчанию, поэтому движок использует реальные embeddings через OpenAI-совместимый API. Если ключа нет, векторная часть автоматически отключается, и retrieval остаётся в режиме BM25 + recency + importance. `embeddings_mock=true` оставлен для тестов и дешёвых локальных smoke-прогонов.
 
 Типы записей: `persona`, `interview`, `summary`, `observation`, `result`, `reflection`.
 

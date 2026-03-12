@@ -158,7 +158,7 @@ class WorldEngine:
             private_contact_window_ticks=self.cfg.governance.audit.private_contact_window_ticks
         )
 
-        # Memory: embeddings provider (по умолчанию mock — без ключей API).
+        # Memory: embeddings provider (по умолчанию реальные embeddings; без ключа остаётся BM25-only).
         env_key = self.cfg.memory.embeddings_api_key_env
         api_key = os.getenv(env_key) or None
         embedder: EmbeddingProvider | None = None

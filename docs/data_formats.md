@@ -41,6 +41,11 @@ runtime:
   allow_runtime_spawn: false
   worldgen_allow_internal_spawns: false
 
+memory:
+  embeddings_mock: false  # default для обычных прогонов; true имеет смысл в тестах
+  embeddings_model: null
+  embeddings_base_url: null
+
 governance:
   position_policy: "dao"  # v1: единственный поддерживаемый режим
   quorum: 0.5
@@ -124,6 +129,14 @@ world:
 | `max_agents` | `int` | Общий потолок на количество агентов в мире |
 | `allow_runtime_spawn` | `bool` | Разрешить `spawn_agent` и worldgen-spawn в ходе симуляции |
 | `worldgen_allow_internal_spawns` | `bool` | Разрешить worldgen порождать внутренних акторов; по умолчанию выключено |
+
+### Ключевые поля `memory`
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `embeddings_mock` | `bool` | При `false` движок пытается использовать реальные embeddings; при `true` берёт детерминированный mock-провайдер |
+| `embeddings_model` | `str \| null` | Явное имя embedding-модели; если не задано, используется `EMBEDDING_MODEL` или `text-embedding-3-small` |
+| `embeddings_base_url` | `str \| null` | Отдельный OpenAI-compatible endpoint для embeddings; при `null` используется `OPENAI_BASE_URL` или `llm.base_url` |
 
 ### Типизированные ID
 

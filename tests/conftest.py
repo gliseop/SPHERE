@@ -6,6 +6,9 @@ from pathlib import Path
 
 
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-0123456789abcdef0123456789abcdef")
+os.environ.pop("OPENAI_API_KEY", None)
+os.environ.pop("OPENAI_BASE_URL", None)
+os.environ.pop("EMBEDDING_MODEL", None)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = PROJECT_ROOT / "src"

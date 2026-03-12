@@ -35,7 +35,7 @@ runtime:
 memory:
   working_max_entries: 50
   working_summarize_batch: 25
-  embeddings_mock: true
+  embeddings_mock: false
 
 governance:
   position_policy: "dao"

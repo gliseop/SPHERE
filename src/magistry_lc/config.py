@@ -104,8 +104,8 @@ class MemoryConfig(BaseModel):
         }
     )
 
-    # Embeddings provider config (по умолчанию: mock для воспроизводимости в тестах).
-    embeddings_mock: bool = True
+    # Embeddings provider config (по умолчанию: реальные embeddings; mock — для тестов/лёгких прогонов).
+    embeddings_mock: bool = False
     embeddings_model: str | None = None
     embeddings_base_url: str | None = None
     embeddings_api_key_env: str = "OPENAI_API_KEY"
