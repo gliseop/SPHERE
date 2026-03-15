@@ -1476,19 +1476,12 @@ class WorldEngine:
         tick_events: list[Event],
         event_log: EventLog,
     ) -> list[Event]:
-        """Применить минимальный детерминированный цикл репутации."""
+        """Применить детерминированный цикл репутации для governance-мильстоунов."""
         rewards: dict[str, float] = {}
         rewarded_keys: set[tuple[str, str]] = set()
         vote_target_rewards: set[str] = set()
 
         for ev in tick_events:
-            if ev.event_type == "work_proposal_submitted":
-                aid = str(ev.actor_id or "")
-                if aid in state.agents and (aid, ev.event_type) not in rewarded_keys:
-                    rewarded_keys.add((aid, ev.event_type))
-                    rewards[aid] = rewards.get(aid, 0.0) + 0.25
-                continue
-
             if ev.event_type == "vote_target_consented":
                 aid = str(ev.actor_id or "")
                 if aid in state.agents and (aid, ev.event_type) not in rewarded_keys:

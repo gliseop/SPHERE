@@ -101,8 +101,8 @@ class AgentRunner:
     def _build_system(self, agent: AgentState) -> str:
         lang = self.runtime.language
         return (
-            "Ты — автономный агент в симуляции организационных процессов (MAGISTRY-LC).\n"
-            "Выполняй действия, опираясь на личность, наблюдения и здравый смысл.\n"
+            "Ты — автономный участник организационного процесса.\n"
+            "Действуй в рамках своей роли, наблюдений, памяти и здравого смысла.\n"
             f"ВАЖНО: отвечай строго на языке: {lang!r}.\n"
             "Возвращай только JSON, без пояснений и без markdown.\n"
         )
@@ -129,10 +129,10 @@ class AgentRunner:
         work_summaries_text = "\n".join(work_summaries) if work_summaries else "- (нет)"
         simulated_date = self.runtime.simulated_date(state.tick)
         time_line = (
-            f"Каноническая дата мира: {simulated_date.isoformat()} "
+            f"Текущее время мира: тик {state.tick}, дата {simulated_date.isoformat()} "
             f"(1 tick = {self.runtime.tick_duration_days} дн.)\n"
             if simulated_date is not None
-            else ""
+            else f"Текущее время мира: тик {state.tick}\n"
         )
 
         # Для MVP даём события как короткие факты.
@@ -174,8 +174,8 @@ class AgentRunner:
 
         return (
             f"Раунд (tick): {state.tick}\n"
-            f"{time_line}"
             f"Ты: {agent.name} ({agent.agent_id}).\n"
+            f"{time_line}"
             f"Твоя должность: {agent.title if agent.internal else '(внешний)'}.\n\n"
             "Доступные сущности (используй только эти ID):\n"
             f"- Agents: {agent_ids}\n"

@@ -782,9 +782,9 @@ def test_engine_governance_rewards_use_system_actor(tmp_path: Path) -> None:
         tick_events=[
             Event(
                 tick=0,
-                event_type="work_proposal_submitted",
+                event_type="vote_target_consented",
                 actor_id="agent:auditor",
-                payload={"work_id": "work:test"},
+                payload={"vote_id": "vote:test", "accept": True},
             )
         ],
         event_log=event_log,
@@ -803,6 +803,47 @@ def test_engine_governance_rewards_use_system_actor(tmp_path: Path) -> None:
         )
     )
     assert not outcome.findings
+
+
+def test_engine_work_proposals_do_not_grant_reputation(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "title": "no-reward-for-work-proposal",
+            "ticks": 1,
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "capabilities": ["work"],
+                }
+            ],
+            "world": {},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider())
+    event_log = EventLog(artifacts.events_path)
+    state = engine._init_state(event_log=event_log)
+
+    reward_events = engine._apply_reputation_consequences(
+        state=state,
+        tick_events=[
+            Event(
+                tick=0,
+                event_type="work_proposal_submitted",
+                actor_id="agent:off_1",
+                payload={"work_id": "work:test"},
+            )
+        ],
+        event_log=event_log,
+    )
+
+    assert reward_events == []
 
 
 def test_engine_init_rejects_initial_work_item_with_unknown_participant(tmp_path: Path) -> None:

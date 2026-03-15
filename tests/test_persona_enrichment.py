@@ -217,7 +217,7 @@ def test_build_user_surfaces_recent_invalid_work_id(tmp_path: Path) -> None:
     assert "work_id work:ghost не существует" in user
 
 
-def test_build_user_includes_canonical_date(tmp_path: Path) -> None:
+def test_build_user_includes_current_world_time(tmp_path: Path) -> None:
     agent = AgentState(
         agent_id="agent:off_1",
         name="Off 1",
@@ -239,7 +239,27 @@ def test_build_user_includes_canonical_date(tmp_path: Path) -> None:
         mem_text="(пусто)",
     )
 
-    assert "Каноническая дата мира: 2026-03-11" in user
+    assert "Текущее время мира: тик 2, дата 2026-03-11" in user
+
+
+def test_build_system_does_not_expose_simulation_framing(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Краткая персона"),
+        capabilities=["message"],
+    )
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    system = runner._build_system(agent)
+
+    assert "симуляц" not in system.casefold()
+    assert "организационного процесса" in system
 
 
 def test_build_user_includes_work_item_titles(tmp_path: Path) -> None:
