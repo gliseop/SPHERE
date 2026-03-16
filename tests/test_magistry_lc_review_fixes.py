@@ -462,6 +462,31 @@ def test_arbiter_deduplicates_request_entity_in_same_tick(tmp_path: Path) -> Non
     assert out["agent:off_2"][0].ops == []
 
 
+def test_request_entity_requires_internal_actor_by_default(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state.agents["agent:off_2"].internal = False
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    out = asyncio.run(
+        arbiter.arbitrate_actions(
+            state=state,
+            agent_id="agent:off_2",
+            actions=[
+                RequestEntityAction(
+                    type=ActionType.REQUEST_ENTITY,
+                    kind="chan",
+                    slug="external_public",
+                    description="external request",
+                    justification="",
+                )
+            ],
+        )
+    )
+
+    assert out[0].approved is False
+    assert out[0].reason == "request_entity_requires_internal_actor"
+
+
 def test_arbiter_open_vote_excludes_target_from_voters_by_default(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
     arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())

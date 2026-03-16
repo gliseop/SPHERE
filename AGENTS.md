@@ -35,7 +35,7 @@ MAGISTRY/
 ├── src/magistry_lc/            # Движок симуляции (LangChain/LangGraph)
 │   ├── __init__.py             # Пакет
 │   ├── cli.py                  # CLI `magistry-lc`
-│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + scripted events
+│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + scripted events + ecology/freeform truth
 │   ├── scenario.py             # Load/save YAML/JSON сценариев
 │   ├── ids.py                  # Типизированные ID и аудитории (aud:*)
 │   ├── entities.py             # EntityRegistry + EntityRecord (антифантомы)
@@ -49,10 +49,10 @@ MAGISTRY/
 │   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM perform)
 │   ├── auditor.py              # RuntimeAuditor (rules-first detection + governance interventions)
 │   ├── dao.py                  # DAO vote closure + position policy
-│   ├── engine.py               # WorldEngine (scripted events, pre/post worldgen, story_state, deterministic apply)
+│   ├── engine.py               # WorldEngine (scripted events, pre/post worldgen, story_state, freeform truth, deterministic apply)
 │   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, agent contexts, scene hooks, spawns)
 │   ├── composer.py             # WorldComposer (LLM -> ScenarioConfig + persona enrichment)
-│   ├── oracle.py               # ViolationOracle (чанкинг по events.jsonl)
+│   ├── oracle.py               # ViolationOracle + FreeformTruthRecorder (LLM post-hoc analysis)
 │   ├── truth.py                # TruthDetector + TruthLog (deterministic truth-layer sidecar)
 │   ├── evaluation.py           # Post-hoc evaluation against truth.jsonl
 │   ├── fidelity.py             # Post-hoc fidelity metrics + summary separation
@@ -291,9 +291,12 @@ cd web/frontend && npm run test:e2e
 - **Объём prompt-контекста**: не сжимать агентские и worldgen-промпты вручную только ради уменьшения токенов. Для ведения большого контекста полагаться на штатные механизмы памяти, суммаризации, compaction (компакции) и другие встроенные алгоритмы управления контекстом; большой объём сам по себе не считается дефектом.
 - **Temporal contract runtime**: `RuntimeConfig` поддерживает `tick_granularity` (`hour` / `half_day` / `day` / `week`) и каноническое world-time. `tick_duration_days` теперь трактуется как множитель выбранной гранулярности; для legacy-конфигов с `day` поведение остаётся прежним.
 - **Динамический спавн**: вторичные и runtime-спавненные агенты получают только безопасный capability-набор (`message`/`work`), без `audit` и без права порождать следующих агентов.
+- **Ecology activation**: при `runtime.ecology_activation_window_ticks > 0` не-core акторы ходят не каждый тик, а только когда недавно были затронуты событиями, hook-ами или собственным созданием. Это сохраняет богатую ecology без захвата сюжета внешними акторами.
 - **Имена новых агентов**: secondary-spawn, runtime-spawn и worldgen-spawn принимают только человеко-читаемые имена; role-alias и machine-like display-name отклоняются или маппятся на уже существующего актора.
 - **Scripted events + pre-tick worldgen**: сценарий может задавать `scripted_events`, а `runtime.worldgen_pre_tick=true` включает personal-ecology слой до хода агентов: `agent_daily_context`, `scene_hooks`, глобальные сигналы и `story_state` агента. Эти prompt-layer данные не подменяют детерминированный apply.
+- **`request_entity` по умолчанию внутренний**: при `runtime.request_entity_internal_only=true` внешние/ecology-акторы не могут бесконтрольно разворачивать публичную инфраструктуру (`chan:*`/`org:*`) через `request_entity`.
 - **Runtime-аудитор v1**: `RuntimeAuditor` реализован как отдельный rules-first модуль, а не как обычный `AgentRunner`; он пишет audit-сигналы и может замораживать репутацию, но не заменяет post-hoc `ViolationOracle`. В конфиге v1 поддерживается только `audit.mode="rules"`; `hybrid`/`llm` отклоняются при валидации.
+- **Deterministic truth + freeform truth**: `truth.jsonl` остаётся формальным baseline для evaluation, а `truth_freeform.jsonl` — отдельным LLM-sidecar для richer post-hoc записи нарушений в свободной форме по схеме. Эти два слоя не смешиваются.
 - **Status/truth/evaluation/fidelity sidecars**: каждый прогон может писать `status.json` (heartbeat и финальный статус `running`/`finished`/`failed`), `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина) и `summary.json` (разделённая сводка), отдельно от `events.jsonl` и `trace.jsonl`.
 - **DAO по умолчанию**: self-nomination и self-vote цели отключены; нормальный путь для кандидата — `respond_nomination`, а `vote_closed` пишет детерминированную причину результата. `governance.position_policy` в v1 поддерживает только `dao`; `auto` отклоняется при валидации.
 - **Веб-launcher на `magistry_lc`**: `POST /api/scenarios/{id}/run` и `POST /api/runs/launch` запускают `magistry_lc` как subprocess, пишут артефакты в `results/{run_name}/` и показываются в `/api/runs/active` как обычные API-запуски.

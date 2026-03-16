@@ -40,6 +40,14 @@ _LEAK_ACTION_HINTS = (
     "закрыл",
     "закрыла",
 )
+_STRONG_STATE_LEAK_HINTS = (
+    "дело закрыто",
+    "завершив работу",
+    "завершил работу",
+    "итоговый отчёт подписан",
+    "подписал итоговый отчёт",
+    "подписала итоговый отчёт",
+)
 
 
 class FidelitySummary(BaseModel):
@@ -119,7 +127,7 @@ def evaluate_fidelity(
             ):
                 metrics["narrating_leakage_total"] += 1
 
-        if event_type == "arbiter_approved" and str(payload.get("reason") or "") == "perform":
+        if event_type == "arbiter_approved" and _approved_action_is_perform(payload):
             metrics["perform_approved_total"] += 1
 
         if event_type == "reputation_modified":
@@ -245,5 +253,12 @@ def _world_event_has_narrating_leakage(
     has_action = any(token in normalized for token in _LEAK_ACTION_HINTS)
     mentions_agent = any(term and term in normalized for term in agent_terms)
     mentions_work = any(term and term in normalized for term in work_terms)
-    closes_state = "дело закрыто" in normalized or "завершив работу" in normalized or "итоговый отчёт" in normalized
-    return bool(has_action and (mentions_agent or mentions_work or closes_state))
+    closes_state = any(token in normalized for token in _STRONG_STATE_LEAK_HINTS)
+    return bool((has_action and mentions_agent) or (closes_state and mentions_work))
+
+
+def _approved_action_is_perform(payload: dict[str, Any]) -> bool:
+    action_repr = str(payload.get("action") or "")
+    if "ActionType.PERFORM" in action_repr:
+        return True
+    return "'type': 'perform'" in action_repr or '"type": "perform"' in action_repr

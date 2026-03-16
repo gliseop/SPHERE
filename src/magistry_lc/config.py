@@ -177,6 +177,7 @@ class RuntimeConfig(BaseModel):
     agent_context_budget_per_tick: int = 1
     max_scene_changes_per_tick: int = 2
     max_new_actors_per_window: int = 2
+    worldgen_context_scope: Literal["core", "all"] = "core"
     use_langgraph: bool = False
     langgraph_debug: bool = False
     enrich_personas: bool = False
@@ -185,7 +186,11 @@ class RuntimeConfig(BaseModel):
     max_secondary_per_agent: int = 2
     max_agents: int = 15
     allow_runtime_spawn: bool = False
+    request_entity_internal_only: bool = True
+    ecology_activation_window_ticks: int = 2
     worldgen_allow_internal_spawns: bool = False
+    freeform_truth_enabled: bool = False
+    freeform_truth_window_ticks: int = 5
     parallel_agents: bool = True
     parallel_workers: int | None = None
     parallel_window_seconds: float | None = None
@@ -214,6 +219,8 @@ class RuntimeConfig(BaseModel):
         "agent_context_budget_per_tick",
         "max_scene_changes_per_tick",
         "max_new_actors_per_window",
+        "ecology_activation_window_ticks",
+        "freeform_truth_window_ticks",
     )
     @classmethod
     def _validate_non_negative_runtime_budget(cls, v: int) -> int:

@@ -45,7 +45,12 @@ runtime:
   max_secondary_per_agent: 2
   max_agents: 15
   allow_runtime_spawn: false
+  request_entity_internal_only: true
+  ecology_activation_window_ticks: 2
   worldgen_allow_internal_spawns: false
+  worldgen_context_scope: "core"
+  freeform_truth_enabled: false
+  freeform_truth_window_ticks: 5
 
 memory:
   embeddings_mock: false  # default для обычных прогонов; true имеет смысл в тестах
@@ -148,7 +153,12 @@ scripted_events:
 | `max_secondary_per_agent` | `int` | Лимит социальных связей, извлекаемых из одной персоны |
 | `max_agents` | `int` | Общий потолок на количество агентов в мире |
 | `allow_runtime_spawn` | `bool` | Разрешить `spawn_agent` и worldgen-spawn в ходе симуляции |
+| `request_entity_internal_only` | `bool` | При `true` только внутренние акторы могут создавать `chan:*`/`org:*` через `request_entity` |
+| `ecology_activation_window_ticks` | `int` | Если `> 0`, не-core ecology-акторы ходят только при недавней релевантности |
 | `worldgen_allow_internal_spawns` | `bool` | Разрешить worldgen порождать внутренних акторов; по умолчанию выключено |
+| `worldgen_context_scope` | `core` / `all` | Для каких акторов pre-worldgen строит personal contexts (`core` по умолчанию) |
+| `freeform_truth_enabled` | `bool` | Включить post-hoc `truth_freeform.jsonl` |
+| `freeform_truth_window_ticks` | `int` | Размер окна событий для `FreeformTruthRecorder` |
 
 ### `scripted_events`
 
@@ -199,6 +209,8 @@ scripted_events:
 Важно: capability `audit` и `RuntimeAuditor` — не одно и то же. В версии v1 runtime-аудит реализован отдельным rules-first модулем `auditor.py`, который может использовать `actor_id` аудитора из конфигурации, но не сводится к обычному `AgentRunner`.
 
 Для `spawn_agent`, secondary-spawn и worldgen-spawn действует дополнительное правило: новый агент должен иметь человеко-читаемое имя, а не `agent:*`, slug или абстрактную должность. Role-alias ссылки либо переиспользуют уже существующего актора, либо отклоняются.
+
+При `runtime.request_entity_internal_only=true` действие `request_entity` также ограничено внутренними акторами: external/ecology-персонажи не могут бесконтрольно развернуть публичную инфраструктуру мира (`chan:*`, `org:*`) через обычный агентный ход.
 
 Во внутреннем runtime-состоянии (`AgentState`) движок дополнительно поддерживает `story_state: str` — короткую персональную линию агента на текущий момент. Это не отдельный сериализуемый блок сценария, а runtime-sidecar, который обновляется движком по persona и наблюдаемым событиям.
 
@@ -478,6 +490,35 @@ JSON-файлы с результатами нарративных интерв�
 - он используется для формального post-hoc сравнения governance-treatment и truth-layer.
 - при дедупликации учитываются не только `tick`/`subject_agent_id`/`violation_type`, но и цель/контекст (`target_agent_id`, `evidence_refs`, включая `timestamp` исходного события), чтобы несколько однотипных нарушений в один тик не схлопывались в один кейс.
 
+### Freeform truth (`truth_freeform.jsonl`)
+
+Опциональный LLM-sidecar, который пишет richer truth в свободной форме по схеме.
+
+Он включается через `runtime.freeform_truth_enabled=true` и не заменяет deterministic `truth.jsonl`.
+
+Пример записи:
+
+```json
+{
+  "tick": 7,
+  "subject_agent_id": "agent:head",
+  "target_agent_id": "agent:spec",
+  "violation_type_freeform": "pressure_not_to_escalate",
+  "summary": "Руководитель давит на специалиста, чтобы та не эскалировала подозрительное совпадение в документах.",
+  "mechanism": "private_pressure",
+  "beneficiary": "agent:head",
+  "confidence": 0.74,
+  "evidence_refs": [{"tick": 7, "event_type": "message_sent"}],
+  "notes": "Контекст указывает на страх карьерных последствий."
+}
+```
+
+Назначение:
+
+- фиксировать нарушения, которые сложно выразить rules-first детектором;
+- расширять предметную истину без ломки воспроизводимого baseline;
+- поддерживать отдельный исследовательский слой поверх deterministic truth.
+
 ### Post-hoc evaluation (`evaluation.json`)
 
 Итоговая сводка сравнения runtime-аудита и truth-layer.
@@ -514,6 +555,8 @@ JSON-файлы с результатами нарративных интерв�
   "phantom_rejection_total": 3,
   "bureaucratic_loop_total": 5,
   "world_event_total": 12,
+  "narrating_leakage_total": 1,
+  "perform_approved_total": 4,
   "reputation_event_total": 7
 }
 ```
@@ -525,7 +568,8 @@ JSON-файлы с результатами нарративных интерв�
 ```json
 {
   "governance": { "truth_total": 3, "true_positive": 2 },
-  "fidelity": { "temporal_violations_total": 0, "bureaucratic_loop_total": 5 }
+  "fidelity": { "temporal_violations_total": 0, "bureaucratic_loop_total": 5 },
+  "freeform_truth_total": 6
 }
 ```
 

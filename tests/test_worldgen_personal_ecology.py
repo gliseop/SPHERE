@@ -85,6 +85,98 @@ class _PreTickWorldgenProvider(_CaptureAgentPromptProvider):
         return super().generate_structured(system, user, schema, temperature)
 
 
+class _FreeformTruthProvider(MockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.agent_prompts: list[tuple[int, str]] = []
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "post-hoc recorder нарушений" in system:
+            return StructuredLLMResponse(
+                data=[
+                    {
+                        "tick": 0,
+                        "subject_agent_id": "agent:off_1",
+                        "target_agent_id": "agent:off_2",
+                        "violation_type_freeform": "pressure_not_to_escalate",
+                        "summary": "Агент давит на коллегу, чтобы та не поднимала вопрос официально.",
+                        "mechanism": "private_pressure",
+                        "beneficiary": "agent:off_1",
+                        "confidence": 0.72,
+                        "evidence_refs": [{"tick": 0, "event_type": "message_sent"}],
+                        "notes": "freeform",
+                    }
+                ],
+                model="mock",
+            )
+        if "Сгенерируй действия на этот тик." in user:
+            self.agent_prompts.append((0, user))
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "idle"}]},
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
+class _DormantEcologyProvider(MockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.prompts: list[tuple[int, str]] = []
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сгенерируй действия на этот тик." in user:
+            tick = 0
+            marker = "Раунд (tick): "
+            if marker in user:
+                tick = int(user.split(marker, 1)[1].split("\n", 1)[0])
+            if "(agent:spawner)." in user and tick == 0:
+                self.prompts.append((tick, "agent:spawner"))
+                return StructuredLLMResponse(
+                    data={
+                        "actions": [
+                            {
+                                "type": "spawn_agent",
+                                "slug": "witness",
+                                "name": "Анна Свиридова",
+                                "internal": False,
+                                "persona_hint": "Внешний наблюдатель.",
+                                "capabilities": ["message"],
+                            }
+                        ]
+                    },
+                    model="mock",
+                )
+            if "(agent:witness)." in user:
+                self.prompts.append((tick, "agent:witness"))
+                return StructuredLLMResponse(
+                    data={"actions": [{"type": "noop", "justification": "idle"}]},
+                    model="mock",
+                )
+            if "(agent:observer)." in user:
+                self.prompts.append((tick, "agent:observer"))
+                return StructuredLLMResponse(
+                    data={"actions": [{"type": "noop", "justification": "idle"}]},
+                    model="mock",
+                )
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "idle"}]},
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
 def test_runtime_config_simulated_datetime_respects_granularity() -> None:
     hourly = RuntimeConfig(start_date="2026-03-09", tick_granularity="hour", tick_duration_days=2)
     assert hourly.simulated_datetime(3).isoformat() == "2026-03-09T15:00:00"
@@ -280,3 +372,155 @@ def test_fidelity_detects_narrating_leakage(tmp_path: Path) -> None:
     )
 
     assert summary.narrating_leakage_total == 1
+
+
+def test_fidelity_counts_perform_from_approved_payload(tmp_path: Path) -> None:
+    events_path = tmp_path / "events.jsonl"
+    event_log = EventLog(events_path)
+    event_log.append(
+        Event(
+            tick=0,
+            event_type="arbiter_approved",
+            actor_id="agent:off_1",
+            payload={
+                "reason": "approved",
+                "action": "{'type': <ActionType.PERFORM: 'perform'>, 'description': 'Неформально обсудить сроки', 'target_id': 'agent:off_2'}",
+            },
+            audience=["aud:internal"],
+        )
+    )
+
+    summary = evaluate_fidelity(
+        events_path=events_path,
+        start_date=None,
+        tick_duration_days=1,
+        temporal_past_slack_days=1,
+        temporal_future_horizon_days=30,
+    )
+
+    assert summary.perform_approved_total == 1
+
+
+def test_fidelity_ignores_media_reports_without_named_actor_leakage(tmp_path: Path) -> None:
+    events_path = tmp_path / "events.jsonl"
+    event_log = EventLog(events_path)
+    event_log.extend(
+        [
+            Event(
+                tick=0,
+                event_type="work_item_created",
+                actor_id=None,
+                payload={
+                    "work_id": "work:T-001",
+                    "work_type": "task",
+                    "title": "Тендер",
+                    "description": "",
+                    "participants": [],
+                },
+                audience=["aud:internal"],
+            ),
+            Event(
+                tick=0,
+                event_type="world_event",
+                actor_id=None,
+                payload={
+                    "description": "Местные СМИ сообщили, что участники тендера T-001 пока не предоставили полную информацию."
+                },
+                audience=["aud:public"],
+            ),
+        ]
+    )
+
+    summary = evaluate_fidelity(
+        events_path=events_path,
+        start_date=None,
+        tick_duration_days=1,
+        temporal_past_slack_days=1,
+        temporal_future_horizon_days=30,
+    )
+
+    assert summary.narrating_leakage_total == 0
+
+
+def test_engine_writes_freeform_truth_sidecar_when_enabled(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "freeform-truth",
+            "ticks": 1,
+            "runtime": {
+                "freeform_truth_enabled": True,
+                "freeform_truth_window_ticks": 2,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "test",
+                    "capabilities": ["message"],
+                }
+            ],
+            "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=_FreeformTruthProvider()).run())
+
+    truth_freeform_path = tmp_path / "truth_freeform.jsonl"
+    assert truth_freeform_path.exists()
+    lines = [json.loads(line) for line in truth_freeform_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert lines[0]["violation_type_freeform"] == "pressure_not_to_escalate"
+
+    summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
+    assert summary["freeform_truth_total"] == 1
+
+
+def test_ecology_activation_skips_dormant_spawned_actor(tmp_path: Path) -> None:
+    provider = _DormantEcologyProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "ecology-activation",
+            "ticks": 3,
+            "runtime": {
+                "allow_runtime_spawn": True,
+                "ecology_activation_window_ticks": 1,
+                "max_actions_per_turn": 1,
+                "max_agents": 3,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:spawner",
+                    "name": "Spawner",
+                    "internal": True,
+                    "persona": "test",
+                    "capabilities": ["message", "spawn"],
+                },
+                {
+                    "agent_id": "agent:observer",
+                    "name": "Observer",
+                    "internal": True,
+                    "persona": "test",
+                    "capabilities": ["message"],
+                },
+            ],
+            "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    witness_ticks = [tick for tick, actor in provider.prompts if actor == "agent:witness"]
+    assert witness_ticks == [1]

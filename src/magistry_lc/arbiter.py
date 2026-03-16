@@ -612,6 +612,8 @@ class Arbiter:
             )
 
         if isinstance(action, RequestEntityAction):
+            if self.runtime.request_entity_internal_only and not agent.internal:
+                return ActionResult(action_index, False, "request_entity_requires_internal_actor", [])
             kind = EntityKind.ORG if action.kind == "org" else EntityKind.CHANNEL
             eid = make_id(kind, action.slug)
             if state.registry.exists(eid):

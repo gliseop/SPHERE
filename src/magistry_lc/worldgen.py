@@ -239,6 +239,9 @@ def _build_system_prompt(*, phase: Literal["pre", "post"], language: str) -> str
                 "- короткие личные контексты начала дня для релевантных агентов;",
                 "- необязательные scene hooks как поводы к встречам или разговорам.",
                 "Личный контекст должен создавать повод для выбора, а не пересказывать уже совершённое действие.",
+                "Предпочитай такие типы средового давления, как concealment pressure, favor pressure, career fear и time tradeoff.",
+                "Не делай главным hook-ом организацию нового канала, FAQ или публичного слушания, если за этим не стоит личный риск, выгода или соблазн серого решения.",
+                "Lightweight contacts должны быть человеко-читаемыми текстовыми упоминаниями без typed-id.",
             ]
         )
     else:
@@ -388,7 +391,11 @@ class WorldGenerator:
                 social_encounter=raw_ctx.social_encounter.strip(),
                 ambient_signal=raw_ctx.ambient_signal.strip(),
                 today_hook=raw_ctx.today_hook.strip(),
-                lightweight_contacts=[str(item).strip() for item in raw_ctx.lightweight_contacts if str(item).strip()],
+                lightweight_contacts=[
+                    str(item).strip()
+                    for item in raw_ctx.lightweight_contacts
+                    if str(item).strip() and ":" not in str(item)
+                ],
             )
 
         scene_hooks: list[SceneHook] = []

@@ -35,6 +35,7 @@ from .ids import (
 )
 from .journal import WorldJournal
 from .llm import LLMCaller, create_llm_provider
+from .oracle import FreeformTruthRecorder, save_freeform_truth
 from .ops import (
     CreateAgentOp,
     CreateEntityOp,
@@ -88,6 +89,7 @@ class RunArtifacts:
     names_path: Path | None = None
     status_path: Path | None = None
     truth_path: Path | None = None
+    truth_freeform_path: Path | None = None
     evaluation_path: Path | None = None
     fidelity_path: Path | None = None
     summary_path: Path | None = None
@@ -111,6 +113,8 @@ class WorldEngine:
             self.artifacts.status_path = self.artifacts.out_dir / "status.json"
         if self.artifacts.truth_path is None:
             self.artifacts.truth_path = self.artifacts.out_dir / "truth.jsonl"
+        if self.artifacts.truth_freeform_path is None:
+            self.artifacts.truth_freeform_path = self.artifacts.out_dir / "truth_freeform.jsonl"
         if self.artifacts.evaluation_path is None:
             self.artifacts.evaluation_path = self.artifacts.out_dir / "evaluation.json"
         if self.artifacts.fidelity_path is None:
@@ -305,7 +309,10 @@ class WorldEngine:
                         phase="pre",
                         scenario_description=self.cfg.description,
                         state_snapshot=self._build_worldgen_state_snapshot(state=state),
-                        agent_briefs=self._build_worldgen_agent_briefs(state=state),
+                        agent_briefs=self._build_worldgen_agent_briefs(
+                            state=state,
+                            scope=self.cfg.runtime.worldgen_context_scope,
+                        ),
                         worldgen_event_budget_per_tick=self.cfg.runtime.worldgen_event_budget_per_tick,
                         agent_context_budget_per_tick=max(
                             len(state.agents),
@@ -545,6 +552,7 @@ class WorldEngine:
         state.clamp_reputation()
         governance_summary = None
         fidelity_summary = None
+        freeform_truth_total = 0
         if self.artifacts.truth_path is not None and self.artifacts.evaluation_path is not None:
             governance_summary = evaluate_run(
                 events_path=self.artifacts.events_path,
@@ -560,10 +568,23 @@ class WorldEngine:
                 temporal_future_horizon_days=self.cfg.runtime.temporal_future_horizon_days,
             )
             save_fidelity(fidelity_summary, self.artifacts.fidelity_path)
+        if self.cfg.runtime.freeform_truth_enabled and self.artifacts.truth_freeform_path is not None:
+            try:
+                recorder = FreeformTruthRecorder(
+                    llm=llm,
+                    window_ticks=int(self.cfg.runtime.freeform_truth_window_ticks),
+                    temperature=self.cfg.llm.temperature,
+                )
+                freeform_records = await recorder.analyze_events(events_path=self.artifacts.events_path)
+                save_freeform_truth(freeform_records, self.artifacts.truth_freeform_path)
+                freeform_truth_total = len(freeform_records)
+            except Exception as exc:
+                logger.warning("Freeform truth recorder failed: %s", exc)
         if self.artifacts.summary_path is not None:
             payload = {
                 "governance": governance_summary.model_dump(mode="json") if governance_summary is not None else None,
                 "fidelity": fidelity_summary.model_dump(mode="json") if fidelity_summary is not None else None,
+                "freeform_truth_total": freeform_truth_total,
             }
             self.artifacts.summary_path.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
@@ -639,7 +660,7 @@ class WorldEngine:
         return normalized[: max(0, max_chars - 1)].rstrip() + "…"
 
     def _build_worldgen_state_snapshot(self, *, state: WorldState) -> dict[str, Any]:
-        primary_ids = {agent.agent_id for agent in self.cfg.agents}
+        primary_ids = self._primary_agent_ids()
         work_items = []
         for wid in sorted(state.work_items.keys())[:12]:
             work = state.work_items[wid]
@@ -684,9 +705,64 @@ class WorldEngine:
             "max_agents": self.cfg.runtime.max_agents,
         }
 
-    def _build_worldgen_agent_briefs(self, *, state: WorldState) -> list[dict[str, Any]]:
+    def _primary_agent_ids(self) -> set[str]:
+        return {agent.agent_id for agent in self.cfg.agents}
+
+    @staticmethod
+    def _event_mentions_agent(*, event: Event, agent_id: str) -> bool:
+        payload = event.payload or {}
+        if event.event_type == "arbiter_approved" and str(payload.get("reason") or "") == "noop":
+            return False
+        if event.actor_id == agent_id:
+            return True
+        if agent_id in event.audience:
+            return True
+        if not isinstance(payload, dict):
+            return False
+        if str(payload.get("to_id") or "") == agent_id:
+            return True
+        if str(payload.get("target_agent_id") or "") == agent_id:
+            return True
+        if str(payload.get("entity_id") or "") == agent_id:
+            return True
+        participants = payload.get("participants") or payload.get("agents") or []
+        if isinstance(participants, list) and agent_id in [str(item) for item in participants]:
+            return True
+        return False
+
+    def _should_activate_agent(
+        self,
+        *,
+        state: WorldState,
+        agent_id: str,
+        events_history: list[Event],
+        daily_contexts: dict[str, AgentDailyContext] | None,
+        scene_hooks_by_agent: dict[str, list[SceneHook]] | None,
+    ) -> bool:
+        if agent_id in self._primary_agent_ids():
+            return True
+        window = int(self.cfg.runtime.ecology_activation_window_ticks)
+        if window <= 0:
+            return True
+        if agent_id in (daily_contexts or {}):
+            return True
+        if (scene_hooks_by_agent or {}).get(agent_id):
+            return True
+
+        low_tick = max(0, int(state.tick) - window)
+        for event in reversed(events_history):
+            if int(event.tick) < low_tick:
+                break
+            if self._event_mentions_agent(event=event, agent_id=agent_id):
+                return True
+        return False
+
+    def _build_worldgen_agent_briefs(self, *, state: WorldState, scope: str = "all") -> list[dict[str, Any]]:
         briefs: list[dict[str, Any]] = []
-        for aid in sorted(state.agents.keys()):
+        allowed_ids = set(state.agents.keys())
+        if scope == "core":
+            allowed_ids = self._primary_agent_ids() & set(state.agents.keys())
+        for aid in sorted(allowed_ids):
             agent = state.agents[aid]
             briefs.append(
                 {
@@ -1695,6 +1771,17 @@ class WorldEngine:
                 )
 
         order = list(agent_order) if agent_order else sorted(state.agents.keys())
+        order = [
+            aid
+            for aid in order
+            if self._should_activate_agent(
+                state=state,
+                agent_id=aid,
+                events_history=events_history,
+                daily_contexts=daily_contexts,
+                scene_hooks_by_agent=scene_hooks_by_agent,
+            )
+        ]
         if not self.cfg.runtime.parallel_agents or len(order) <= 1:
             pairs = []
             for aid in order:
@@ -2086,5 +2173,6 @@ def default_artifacts(out_dir: str | Path) -> RunArtifacts:
         trace_path=d / "trace.jsonl",
         status_path=d / "status.json",
         truth_path=d / "truth.jsonl",
+        truth_freeform_path=d / "truth_freeform.jsonl",
         evaluation_path=d / "evaluation.json",
     )

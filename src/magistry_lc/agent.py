@@ -254,9 +254,15 @@ class AgentRunner:
                 "spawn_agent (slug, name, internal, persona_hint, capabilities) — ввести нового участника с базовой персоной"
             )
         action_types.append("perform (description, target_id) — свободное действие (когда нет подходящего типа выше)")
-        action_types.append("request_entity (kind: org/chan, slug, description) — запросить создание организации/канала")
+        if agent.internal or not self.runtime.request_entity_internal_only:
+            action_types.append("request_entity (kind: org/chan, slug, description) — запросить создание организации/канала")
         action_types.append("noop — пропустить ход")
         actions_block = "\n".join(f"  - {a}" for a in action_types)
+        request_entity_rule = (
+            "- не выдумывай новые ID; если нужна новая организация/канал — используй request_entity\n"
+            if (agent.internal or not self.runtime.request_entity_internal_only)
+            else ""
+        )
 
         return (
             f"Раунд (tick): {state.tick}\n"
@@ -286,7 +292,7 @@ class AgentRunner:
             "- если упоминаешь даты или сроки, не противоречь канонической дате мира\n"
             "- структурированные действия — это формальные каналы, но они не обязательны во всех ситуациях\n"
             "- если реальный шаг лучше описывается неформально (намёк, давление, просьба, скрытая договорённость, обходной ход), используй perform\n"
-            "- не выдумывай новые ID; если нужна новая организация/канал — используй request_entity\n"
+            f"{request_entity_rule}"
             "- если у тебя есть capability spawn, создавай новых агентов только через spawn_agent и с кратким persona_hint\n"
             "- самономинация на должность запрещена; инициировать голосование можно только за другого агента\n"
             "- цель голосования не голосует сама за себя; если тебя номинировали, используй respond_nomination\n"

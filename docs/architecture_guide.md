@@ -34,7 +34,7 @@ graph TB
     subgraph Генерация["Генерация мира"]
         WORLDGEN[worldgen.py<br/>WorldGenerator]
         COMPOSER[composer.py<br/>WorldComposer]
-        ORACLE[oracle.py<br/>ViolationOracle]
+        ORACLE[oracle.py<br/>ViolationOracle + FreeformTruthRecorder]
         TRUTH[truth.py<br/>TruthDetector + TruthLog]
         EVAL[evaluation.py<br/>EvaluationSummary]
         FID[fidelity.py<br/>FidelitySummary]
@@ -127,7 +127,7 @@ graph TB
 | Как пишется truth-layer | `truth.py` → deterministic truth records в `truth.jsonl` |
 | Как считается post-hoc evaluation | `evaluation.py` → precision/recall runtime-аудита vs truth |
 | Как считаются fidelity-метрики | `fidelity.py` → temporal/identity/phantom/bureaucratic sidecar |
-| Как оракул анализирует нарушения | `oracle.py` → чанкинг по events.jsonl |
+| Как оракул и freeform truth анализируют нарушения | `oracle.py` → `ViolationOracle` + `FreeformTruthRecorder` |
 | Как устроена память агента | `memory.py` → working buffer + long-term hybrid index |
 | Как работает гибридный поиск | `memory.py` (retrieval) + `bm25.py` (лексический) + `embeddings.py` (векторный) |
 | Как устроены LLM-провайдеры | `llm/providers.py` → `OpenAICompatibleProvider`, `MockLLMProvider` |

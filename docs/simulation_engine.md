@@ -67,6 +67,8 @@ flowchart TD
 
 Этап `propose_actions` может идти как последовательно, так и параллельно. Это задаётся через `runtime.parallel_agents`; при включённом режиме `runtime.parallel_workers` ограничивает число одновременных LLM-вызовов. Применение результатов к `WorldState` всё равно остаётся последовательным и детерминированным.
 
+Если `runtime.ecology_activation_window_ticks > 0`, не-core акторы (secondary/worldgen/runtime-spawned) не ходят автоматически каждый тик. Движок активирует их только если они недавно были затронуты событиями, hook-ами, созданием или прямым взаимодействием. Это уменьшает public-process capture со стороны ecology без отключения самой среды.
+
 Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью + expert reflection). Результат сохраняется в `{out_dir}/personas.json` и повторно используется при совпадении fingerprint входов (seed, язык, модель, режим, описание сценария и базовые данные агентов).
 
 Если `runtime.spawn_secondary=true`, после enrichment запускается `SocialGraphExtractor`: он извлекает из биографий и интервью значимых людей, создаёт вторичных агентов до первого тика, обогащает их персоны в том же режиме, что и основной сценарий (`core` или `full`), и связывает первичные/вторичные пары через память. Role-only ссылки и alias-дубли существующих должностей не материализуются в новых агентов.
@@ -86,7 +88,7 @@ flowchart TD
 | `nominate_position_change` | `dao` | Номинировать агента на смену должности |
 | `cast_vote` | `dao` | Проголосовать по открытому голосованию |
 | `respond_nomination` | — | Ответить на номинацию (принять/отклонить) |
-| `request_entity` | — | Запросить создание организации или канала |
+| `request_entity` | — | Запросить создание организации или канала (по умолчанию только для внутренних акторов) |
 | `spawn_agent` | `spawn` | Создать нового участника с базовой персоной в ходе симуляции |
 | `noop` | — | Пропустить ход |
 
@@ -141,6 +143,8 @@ Runtime-аудитор не подменяет собой `ViolationOracle` и �
 ## Truth-layer и evaluation
 
 После формирования фактических `tick_events`, но до эмиссии audit-интервенций, движок прогоняет deterministic `TruthDetector`. Он пишет sidecar `truth.jsonl` с каноническими `TruthRecord`, которые не зависят от того, сработал ли runtime-аудитор.
+
+Опционально (`runtime.freeform_truth_enabled=true`) движок дополнительно пишет `truth_freeform.jsonl` через `FreeformTruthRecorder`. Это LLM-based post-hoc слой, который записывает нарушения в свободной форме по схеме (`summary`, `mechanism`, `beneficiary`, `evidence_refs`), не подменяя собой deterministic `truth.jsonl`.
 
 В ходе исполнения движок также поддерживает `status.json`: sidecar с heartbeat-обновлением на каждом тике и финальным состоянием `finished` или `failed`. Web backend использует его для более надёжного обнаружения живых CLI-прогонов.
 
@@ -275,6 +279,8 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 
 Пост-фактум анализ нарушений. Читает `events.jsonl`, разбивает на окна по `window_ticks` тиков, отправляет каждый чанк в LLM для обнаружения нарушений. Результат — JSON с описаниями выявленных отклонений.
 
+Рядом с ним теперь может работать `FreeformTruthRecorder`: он также читает `events.jsonl` окнами, но пишет не narrative-report для пользователя, а structured sidecar `truth_freeform.jsonl` с richer truth-записями (`summary`, `mechanism`, `beneficiary`, `evidence_refs`).
+
 Важно: `ViolationOracle` и `evaluation.py` решают разные задачи.
 
 - `ViolationOracle` — narrative / LLM post-hoc analysis.
@@ -309,13 +315,18 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 - `max_secondary_per_agent`: лимит связей, извлекаемых из одной персоны.
 - `max_agents`: общий потолок числа агентов в мире.
 - `allow_runtime_spawn`: разрешить `spawn_agent` и worldgen-spawn в ходе симуляции.
+- `request_entity_internal_only`: разрешить `request_entity` только внутренним акторам.
+- `ecology_activation_window_ticks`: окно активности для не-core ecology-акторов; если `> 0`, они ходят только при недавней релевантности.
 - `worldgen_every_ticks`: положительный интервал запуска worldgen; должен быть `> 0`.
 - `worldgen_pre_tick`: включить pre-tick worldgen с personal-context layer.
 - `worldgen_event_budget_per_tick`: верхняя граница числа worldgen-событий за тик.
 - `agent_context_budget_per_tick`: бюджет персональных контекстов на один pre-tick запуск.
 - `max_scene_changes_per_tick`: лимит scene hooks / scene changes на тик.
 - `max_new_actors_per_window`: лимит предложений новых акторов от worldgen за одно окно.
+- `worldgen_context_scope`: `core` или `all`; по умолчанию personal contexts от pre-worldgen строятся прежде всего для core-акторов сценария.
 - `worldgen_allow_internal_spawns`: разрешить worldgen создавать внутренних акторов.
+- `freeform_truth_enabled`: включить post-hoc `truth_freeform.jsonl`.
+- `freeform_truth_window_ticks`: размер окна для `FreeformTruthRecorder`.
 
 `AgentConfig` помимо `agent_id`, `name`, `persona` и `capabilities` теперь хранит `initial_reputation`, чтобы стартовая репутация была частью канонического сценария, а не только web-карточки.
 
