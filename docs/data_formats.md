@@ -23,6 +23,7 @@ llm:
 runtime:
   language: "ru"
   start_date: "2026-01-01"
+  tick_granularity: "day"  # hour | half_day | day | week
   tick_duration_days: 1
   parallel_agents: true
   parallel_workers: 4
@@ -33,6 +34,11 @@ runtime:
   tick_events_history: 200
   enable_worldgen: false
   worldgen_every_ticks: 1
+  worldgen_pre_tick: false
+  worldgen_event_budget_per_tick: 3
+  agent_context_budget_per_tick: 1
+  max_scene_changes_per_tick: 2
+  max_new_actors_per_window: 2
   enrich_personas: false
   persona_enrich_mode: "full"  # full | core
   spawn_secondary: false
@@ -95,6 +101,13 @@ world:
       title: "Найм в отдел"
       description: "Конкурс на вакансию."
       participants: ["agent:off_1", "agent:auditor"]
+
+scripted_events:
+  - event_id: "fork_deadline"
+    tick: 2
+    audience: "internal"
+    description: "Министерство требует ускорить подготовку документов до конца недели."
+    once: true
 ```
 
 ### Блоки конфигурации
@@ -107,6 +120,7 @@ world:
 | `memory` | Рабочий буфер, долгосрочный индекс, веса retrieval, эмбеддинги |
 | `agents` | Список агентов с ID, именем, персоной, полномочиями |
 | `world` | Каналы, организации, рабочие элементы |
+| `scripted_events` | Предопределённые внешние события / развилки сценария |
 
 Поле `agents[].initial_reputation` задаёт стартовую репутацию внутреннего агента. Движок применяет её при инициализации `WorldState`, а первый `reputation_snapshot` в `events.jsonl` отражает именно это значение.
 
@@ -115,13 +129,19 @@ world:
 | Поле | Тип | Назначение |
 |---|---|---|
 | `start_date` | `YYYY-MM-DD \| null` | Каноническая дата тика `0`; если не задана, агент и worldgen видят только номер тика |
-| `tick_duration_days` | `int` | Сколько календарных дней проходит за один тик симуляции |
+| `tick_granularity` | `hour` / `half_day` / `day` / `week` | Качественный временной масштаб тика |
+| `tick_duration_days` | `int` | Множитель для выбранной гранулярности (`day` = дни, `hour` = часы, `half_day` = полудни, `week` = недели) |
 | `parallel_agents` | `bool` | Выполнять `propose_actions` параллельно в пределах тика; при `false` генерация решений идёт последовательно |
 | `parallel_workers` | `int \| null` | Опциональный лимит одновременных LLM-вызовов на этапе генерации действий |
 | `parallel_window_seconds` | `float \| null` | Совместимый параметр окна батчирования для web launcher; в текущем tick-engine один тик образует один batch |
 | `temporal_past_slack_days` | `int` | Сколько дней назад арбитр ещё допускает абсолютную дату в действии |
 | `temporal_future_horizon_days` | `int` | Максимальный горизонт будущих абсолютных дат в структурированных действиях |
 | `worldgen_every_ticks` | `int` | Положительный интервал запуска worldgen в тиках; `0` и отрицательные значения недопустимы |
+| `worldgen_pre_tick` | `bool` | Запускать ли pre-tick worldgen до `propose_actions`, чтобы подать агентам personal contexts |
+| `worldgen_event_budget_per_tick` | `int` | Верхняя граница числа `world_event` от worldgen за один запуск |
+| `agent_context_budget_per_tick` | `int` | Бюджет `agent_daily_context` на один pre-tick запуск |
+| `max_scene_changes_per_tick` | `int` | Лимит scene hooks / scene changes на тик |
+| `max_new_actors_per_window` | `int` | Лимит worldgen-spawn suggestions за одно окно |
 | `enrich_personas` | `bool` | Runtime-обогащение summary → biography/interview перед первым тиком |
 | `persona_enrich_mode` | `full`/`core` | `full` = summary+biography+interview+expert reflection, `core` = summary+biography |
 | `spawn_secondary` | `bool` | Извлекать вторичных агентов из социального графа биографий до первого тика |
@@ -129,6 +149,20 @@ world:
 | `max_agents` | `int` | Общий потолок на количество агентов в мире |
 | `allow_runtime_spawn` | `bool` | Разрешить `spawn_agent` и worldgen-spawn в ходе симуляции |
 | `worldgen_allow_internal_spawns` | `bool` | Разрешить worldgen порождать внутренних акторов; по умолчанию выключено |
+
+### `scripted_events`
+
+`ScenarioConfig.scripted_events` позволяет задать предопределённые события мира без изменения кода движка.
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `event_id` | `str` | Стабильный ID scripted-события; если пуст, движок сгенерирует `scripted:{index}` |
+| `tick` | `int \| null` | Если задан, событие эмитится на конкретном тике |
+| `if_event_types` | `list[str]` | Необязательные условия: какие типы событий должны уже встретиться в истории |
+| `if_work_ids_open` | `list[str]` | Необязательные условия: какие work items должны быть в статусе `open` |
+| `audience` | `public` / `internal` | Аудитория `world_event` |
+| `description` | `str` | Текст внешнего события |
+| `once` | `bool` | При `true` scripted event срабатывает только один раз |
 
 ### Ключевые поля `memory`
 
@@ -165,6 +199,8 @@ world:
 Важно: capability `audit` и `RuntimeAuditor` — не одно и то же. В версии v1 runtime-аудит реализован отдельным rules-first модулем `auditor.py`, который может использовать `actor_id` аудитора из конфигурации, но не сводится к обычному `AgentRunner`.
 
 Для `spawn_agent`, secondary-spawn и worldgen-spawn действует дополнительное правило: новый агент должен иметь человеко-читаемое имя, а не `agent:*`, slug или абстрактную должность. Role-alias ссылки либо переиспользуют уже существующего актора, либо отклоняются.
+
+Во внутреннем runtime-состоянии (`AgentState`) движок дополнительно поддерживает `story_state: str` — короткую персональную линию агента на текущий момент. Это не отдельный сериализуемый блок сценария, а runtime-sidecar, который обновляется движком по persona и наблюдаемым событиям.
 
 ### Ключевые поля `governance`
 

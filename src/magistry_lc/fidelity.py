@@ -16,6 +16,30 @@ from .utils import looks_like_machine_name, looks_like_role_label, normalize_age
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _DOTTED_DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
 _BUREAUCRATIC_TYPES = {"follow_up", "reminder", "control", "verification"}
+_LEAK_ACTION_HINTS = (
+    "отправил",
+    "отправила",
+    "передал",
+    "передала",
+    "сообщил",
+    "сообщила",
+    "подписал",
+    "подписала",
+    "загрузил",
+    "загрузила",
+    "предоставил",
+    "предоставила",
+    "подтвердил",
+    "подтвердила",
+    "напомнил",
+    "напомнила",
+    "одобрил",
+    "одобрила",
+    "завершил",
+    "завершила",
+    "закрыл",
+    "закрыла",
+)
 
 
 class FidelitySummary(BaseModel):
@@ -29,6 +53,8 @@ class FidelitySummary(BaseModel):
     phantom_rejection_total: int = 0
     bureaucratic_loop_total: int = 0
     world_event_total: int = 0
+    narrating_leakage_total: int = 0
+    perform_approved_total: int = 0
     reputation_event_total: int = 0
     by_metric: dict[str, int] = Field(default_factory=dict)
 
@@ -42,6 +68,7 @@ def evaluate_fidelity(
     temporal_future_horizon_days: int,
 ) -> FidelitySummary:
     """Посчитать sidecar-метрики правдоподобия по events.jsonl."""
+    items = _iter_jsonl(events_path)
     metrics = {
         "temporal_violations_total": 0,
         "identity_machine_name_total": 0,
@@ -49,10 +76,35 @@ def evaluate_fidelity(
         "phantom_rejection_total": 0,
         "bureaucratic_loop_total": 0,
         "world_event_total": 0,
+        "narrating_leakage_total": 0,
+        "perform_approved_total": 0,
         "reputation_event_total": 0,
     }
 
-    for item in _iter_jsonl(events_path):
+    agent_terms: set[str] = set()
+    work_terms: set[str] = set()
+    for item in items:
+        event_type = str(item.get("event_type") or "")
+        payload = item.get("payload") or {}
+        if not isinstance(payload, dict):
+            continue
+        if event_type == "entity_created" and str(payload.get("kind") or "") == "agent":
+            meta = payload.get("meta") or {}
+            if isinstance(meta, dict):
+                raw_name = normalize_agent_display_name(str(meta.get("name") or ""))
+                if raw_name:
+                    agent_terms.add(raw_name.casefold())
+                    for part in re.split(r"[\s.()\"«»,-]+", raw_name.casefold()):
+                        if len(part) >= 4:
+                            agent_terms.add(part)
+        if event_type == "work_item_created":
+            work_id = str(payload.get("work_id") or "").strip()
+            if work_id:
+                work_terms.add(work_id.casefold())
+                if ":" in work_id:
+                    work_terms.add(work_id.split(":", 1)[1].casefold())
+
+    for item in items:
         event_type = str(item.get("event_type") or "")
         payload = item.get("payload") or {}
         if not isinstance(payload, dict):
@@ -60,6 +112,15 @@ def evaluate_fidelity(
 
         if event_type == "world_event":
             metrics["world_event_total"] += 1
+            if _world_event_has_narrating_leakage(
+                description=str(payload.get("description") or ""),
+                agent_terms=agent_terms,
+                work_terms=work_terms,
+            ):
+                metrics["narrating_leakage_total"] += 1
+
+        if event_type == "arbiter_approved" and str(payload.get("reason") or "") == "perform":
+            metrics["perform_approved_total"] += 1
 
         if event_type == "reputation_modified":
             metrics["reputation_event_total"] += 1
@@ -170,3 +231,19 @@ def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
             if isinstance(item, dict):
                 out.append(item)
     return out
+
+
+def _world_event_has_narrating_leakage(
+    *,
+    description: str,
+    agent_terms: set[str],
+    work_terms: set[str],
+) -> bool:
+    normalized = " ".join((description or "").casefold().split())
+    if not normalized:
+        return False
+    has_action = any(token in normalized for token in _LEAK_ACTION_HINTS)
+    mentions_agent = any(term and term in normalized for term in agent_terms)
+    mentions_work = any(term and term in normalized for term in work_terms)
+    closes_state = "дело закрыто" in normalized or "завершив работу" in normalized or "итоговый отчёт" in normalized
+    return bool(has_action and (mentions_agent or mentions_work or closes_state))

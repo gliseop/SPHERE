@@ -113,7 +113,7 @@ graph TB
 
 | Хочу понять... | Где читать |
 |---|---|
-| Как устроен тик симуляции | `engine.py` → `WorldEngine.run()` |
+| Как устроен тик симуляции | `engine.py` → `WorldEngine.run()`; обрати внимание на scripted events + pre/post worldgen |
 | Как агент принимает решение | `agent.py` → `AgentRunner`, `memory.py` → гибридный retrieval |
 | Какие действия доступны агенту | `actions.py` → structured actions, `spawn_agent`, `perform` |
 | Как арбитр проверяет действия | `arbiter.py` → полномочия + антифантомы + LLM-perform |
@@ -123,7 +123,7 @@ graph TB
 | Типизированные ID и антифантомы | `ids.py` + `entities.py` → `EntityRegistry` |
 | Детерминированный apply | `ops.py` → `StateOp` преобразуется в `Event` |
 | Как генерируется сценарий через LLM | `composer.py` → `WorldComposer.compose()` |
-| Как работает генератор мира | `worldgen.py` → внешние события + spawn suggestions без приватных утечек, без role-only display-name |
+| Как работает генератор мира | `worldgen.py` → pre/post tick worldgen, external events, `agent_daily_context`, `scene_hooks`, spawn suggestions без приватных утечек |
 | Как пишется truth-layer | `truth.py` → deterministic truth records в `truth.jsonl` |
 | Как считается post-hoc evaluation | `evaluation.py` → precision/recall runtime-аудита vs truth |
 | Как считаются fidelity-метрики | `fidelity.py` → temporal/identity/phantom/bureaucratic sidecar |
@@ -133,7 +133,7 @@ graph TB
 | Как устроены LLM-провайдеры | `llm/providers.py` → `OpenAICompatibleProvider`, `MockLLMProvider` |
 | Как устроен конфиг сценария | `config.py` → `ScenarioConfig` (Pydantic) |
 | Как загружается/сохраняется сценарий | `scenario.py` → YAML/JSON |
-| Как устроена личность агента и социальный граф | `persona.py` → `PersonaArtifact`, `PersonaGenerator`, `SocialGraphExtractor`, expert reflection |
+| Как устроена личность агента и социальный граф | `persona.py` → `PersonaArtifact`, `PersonaGenerator`, `SocialGraphExtractor` (родня/друзья/зависимости в приоритете), expert reflection |
 | Как работает LangGraph-интеграция | `graphs.py` → tick graph + SqliteSaver checkpoints |
 | Как работает CLI | `cli.py` → `run`, `compose`, `oracle` |
 
@@ -151,7 +151,8 @@ sequenceDiagram
     participant S as WorldState
     participant EL as EventLog
 
-    E->>A: decide(agent, state, tick)
+    E->>E: scripted events + pre-tick worldgen (опционально)
+    E->>A: decide(agent, state, tick, context-layer)
     A->>M: retrieve(situation)
     M-->>A: релевантные воспоминания
     A-->>E: Action[]

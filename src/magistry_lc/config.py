@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -166,11 +166,17 @@ class RuntimeConfig(BaseModel):
 
     language: str = "ru"
     start_date: date | None = None
+    tick_granularity: Literal["hour", "half_day", "day", "week"] = "day"
     tick_duration_days: int = 1
     max_actions_per_turn: int = 3
     tick_events_history: int = 200
     enable_worldgen: bool = False
     worldgen_every_ticks: int = 1
+    worldgen_pre_tick: bool = False
+    worldgen_event_budget_per_tick: int = 3
+    agent_context_budget_per_tick: int = 1
+    max_scene_changes_per_tick: int = 2
+    max_new_actors_per_window: int = 2
     use_langgraph: bool = False
     langgraph_debug: bool = False
     enrich_personas: bool = False
@@ -200,6 +206,19 @@ class RuntimeConfig(BaseModel):
     def _validate_tick_duration_days(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("tick_duration_days must be > 0")
+        return v
+
+    @field_validator(
+        "tick_events_history",
+        "worldgen_event_budget_per_tick",
+        "agent_context_budget_per_tick",
+        "max_scene_changes_per_tick",
+        "max_new_actors_per_window",
+    )
+    @classmethod
+    def _validate_non_negative_runtime_budget(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("value must be >= 0")
         return v
 
     @field_validator("worldgen_every_ticks")
@@ -248,11 +267,41 @@ class RuntimeConfig(BaseModel):
             raise ValueError("temporal validation window must be >= 0")
         return v
 
-    def simulated_date(self, tick: int) -> date | None:
-        """Каноническая дата симуляции для данного тика."""
+    def tick_duration_delta(self) -> timedelta:
+        """Каноническая длительность одного тика."""
+        units = int(self.tick_duration_days)
+        if self.tick_granularity == "hour":
+            return timedelta(hours=units)
+        if self.tick_granularity == "half_day":
+            return timedelta(hours=12 * units)
+        if self.tick_granularity == "week":
+            return timedelta(days=7 * units)
+        return timedelta(days=units)
+
+    def simulated_datetime(self, tick: int) -> datetime | None:
+        """Каноническая дата и время симуляции для данного тика."""
         if self.start_date is None:
             return None
-        return self.start_date + timedelta(days=int(tick) * int(self.tick_duration_days))
+        base = datetime.combine(self.start_date, time(hour=9, minute=0))
+        return base + int(tick) * self.tick_duration_delta()
+
+    def simulated_date(self, tick: int) -> date | None:
+        """Каноническая дата симуляции для данного тика."""
+        simulated = self.simulated_datetime(tick)
+        return simulated.date() if simulated is not None else None
+
+    def tick_duration_label(self) -> str:
+        """Человеко-читаемое описание размера тика."""
+        units = int(self.tick_duration_days)
+        if self.tick_granularity == "hour":
+            return f"{units} ч."
+        if self.tick_granularity == "half_day":
+            hours = 12 * units
+            return f"{hours} ч."
+        if self.tick_granularity == "week":
+            weeks = units
+            return f"{weeks} нед."
+        return f"{units} дн."
 
 
 class AuditRuntimeConfig(BaseModel):
@@ -453,6 +502,39 @@ class WorldConfig(BaseModel):
     work_items: list[WorkItemConfig] = Field(default_factory=list)
 
 
+class ScriptedEventConfig(BaseModel):
+    """Предопределённое внешнее событие мира."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: str = ""
+    tick: int | None = None
+    if_event_types: list[str] = Field(default_factory=list)
+    if_work_ids_open: list[str] = Field(default_factory=list)
+    audience: Literal["public", "internal"] = "internal"
+    description: str
+    once: bool = True
+
+    @field_validator("tick")
+    @classmethod
+    def _validate_tick(cls, v: int | None) -> int | None:
+        if v is None:
+            return None
+        if v < 0:
+            raise ValueError("scripted event tick must be >= 0")
+        return v
+
+    @field_validator("if_event_types", "if_work_ids_open")
+    @classmethod
+    def _normalize_non_empty_strings(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for item in v or []:
+            value = str(item or "").strip()
+            if value:
+                out.append(value)
+        return out
+
+
 class ScenarioConfig(BaseModel):
     """Корневой конфиг сценария MAGISTRY-LC."""
 
@@ -471,6 +553,7 @@ class ScenarioConfig(BaseModel):
 
     agents: list[AgentConfig] = Field(default_factory=list)
     world: WorldConfig = Field(default_factory=WorldConfig)
+    scripted_events: list[ScriptedEventConfig] = Field(default_factory=list)
 
     @field_validator("ticks")
     @classmethod

@@ -63,7 +63,13 @@ from .utils import (
     redact_numbers,
     social_name_key,
 )
-from .worldgen import SpawnSuggestion, WorldGenerator, WorldgenOutput
+from .worldgen import (
+    AgentDailyContext,
+    SceneHook,
+    SpawnSuggestion,
+    WorldGenerator,
+    WorldgenOutput,
+)
 
 from .llm import EmbeddingProvider, LLMProvider, create_embedding_provider
 
@@ -152,6 +158,7 @@ class WorldEngine:
                     exc.__class__.__name__,
                     exc,
                 )
+        self._refresh_story_states(state=state, tick_events=[])
         self._write_run_sidecars(state=state, include_scenario=True)
         journal = WorldJournal.from_state(state=state)
         truth_detector = TruthDetector(
@@ -213,6 +220,7 @@ class WorldEngine:
         # История событий, доступная для агентов (для MVP храним в памяти).
         events_history: list[Event] = []
 
+        fired_scripted_events: set[str] = set()
         graph_app = None
         if self.cfg.runtime.use_langgraph:
             try:
@@ -225,6 +233,8 @@ class WorldEngine:
                         runners=runners,
                         events_history=gs["events_history"],
                         agent_order=agent_order,
+                        daily_contexts=gs.get("daily_contexts"),
+                        scene_hooks_by_agent=gs.get("scene_hooks_by_agent"),
                     )
                     return {"proposed": proposed, "gather_errors": gather_errors}
 
@@ -262,17 +272,101 @@ class WorldEngine:
 
             agent_order = self._agent_order(state=state, tick=tick)
             tick_events = self._expire_reputation_freezes(state=state, event_log=event_log)
+            daily_contexts: dict[str, AgentDailyContext] = {}
+            scene_hooks_by_agent: dict[str, list[SceneHook]] = {}
+            current_date, current_time = self._world_time_labels(tick=state.tick)
+
+            scripted_events = self._emit_scripted_events(
+                state=state,
+                tick=state.tick,
+                recent_events=events_history,
+                fired_ids=fired_scripted_events,
+            )
+            if scripted_events:
+                event_log.extend(scripted_events)
+                tick_events.extend(scripted_events)
+
+            visible_history = list(events_history) + list(tick_events)
+            if (
+                self.cfg.runtime.enable_worldgen
+                and self.cfg.runtime.worldgen_pre_tick
+                and (tick % self.cfg.runtime.worldgen_every_ticks == 0)
+            ):
+                try:
+                    generated_pre = await worldgen.generate(
+                        tick=state.tick,
+                        recent_events=visible_history,
+                        language=self.cfg.runtime.language,
+                        current_date=current_date,
+                        current_time=current_time,
+                        tick_duration_days=self.cfg.runtime.tick_duration_days,
+                        tick_granularity=self.cfg.runtime.tick_granularity,
+                        allow_internal_spawns=False,
+                        phase="pre",
+                        scenario_description=self.cfg.description,
+                        state_snapshot=self._build_worldgen_state_snapshot(state=state),
+                        agent_briefs=self._build_worldgen_agent_briefs(state=state),
+                        worldgen_event_budget_per_tick=self.cfg.runtime.worldgen_event_budget_per_tick,
+                        agent_context_budget_per_tick=max(
+                            len(state.agents),
+                            self.cfg.runtime.agent_context_budget_per_tick,
+                        ),
+                        max_scene_changes_per_tick=self.cfg.runtime.max_scene_changes_per_tick,
+                        max_new_actors_per_window=0,
+                    )
+                except Exception as exc:
+                    logger.warning("Pre-tick world generator failed on tick %s: %s", state.tick, exc)
+                    generated_pre = WorldgenOutput(
+                        events=[
+                            Event(
+                                tick=state.tick,
+                                event_type="worldgen_llm_error",
+                                actor_id=None,
+                                payload={
+                                    "phase": "pre",
+                                    "error": {"type": exc.__class__.__name__, "message": str(exc)},
+                                },
+                                audience=[INTERNAL_AUDIENCE],
+                            )
+                        ],
+                        spawns=[],
+                    )
+                if generated_pre.events:
+                    event_log.extend(generated_pre.events)
+                    tick_events.extend(generated_pre.events)
+                scene_events = self._materialize_scene_hook_events(
+                    tick=state.tick,
+                    scene_hooks=generated_pre.scene_hooks,
+                )
+                if scene_events:
+                    event_log.extend(scene_events)
+                    tick_events.extend(scene_events)
+                daily_contexts = generated_pre.agent_contexts
+                scene_hooks_by_agent = self._group_scene_hooks_by_agent(
+                    state=state,
+                    scene_hooks=generated_pre.scene_hooks,
+                )
+                visible_history = list(events_history) + list(tick_events)
 
             if graph_app is not None:
-                out = await graph_app.ainvoke({"world": state, "events_history": events_history})
+                out = await graph_app.ainvoke(
+                    {
+                        "world": state,
+                        "events_history": visible_history,
+                        "daily_contexts": daily_contexts,
+                        "scene_hooks_by_agent": scene_hooks_by_agent,
+                    }
+                )
                 tick_events.extend(list(out.get("tick_events") or []))
             else:
                 # Сбор действий агентов параллельно.
                 proposed, gather_errors = await self._gather_actions(
                     state=state,
                     runners=runners,
-                    events_history=events_history,
+                    events_history=visible_history,
                     agent_order=agent_order,
+                    daily_contexts=daily_contexts,
+                    scene_hooks_by_agent=scene_hooks_by_agent,
                 )
                 if gather_errors:
                     event_log.extend(gather_errors)
@@ -321,14 +415,23 @@ class WorldEngine:
             # Внешние события мира (без утечки промптов).
             if self.cfg.runtime.enable_worldgen and (tick % self.cfg.runtime.worldgen_every_ticks == 0):
                 try:
-                    simulated_date = self.cfg.runtime.simulated_date(state.tick)
                     generated = await worldgen.generate(
                         tick=state.tick,
                         recent_events=tick_events,
                         language=self.cfg.runtime.language,
-                        current_date=simulated_date.isoformat() if simulated_date is not None else None,
+                        current_date=current_date,
+                        current_time=current_time,
                         tick_duration_days=self.cfg.runtime.tick_duration_days,
+                        tick_granularity=self.cfg.runtime.tick_granularity,
                         allow_internal_spawns=self.cfg.runtime.worldgen_allow_internal_spawns,
+                        phase="post",
+                        scenario_description=self.cfg.description,
+                        state_snapshot=self._build_worldgen_state_snapshot(state=state),
+                        agent_briefs=self._build_worldgen_agent_briefs(state=state),
+                        worldgen_event_budget_per_tick=self.cfg.runtime.worldgen_event_budget_per_tick,
+                        agent_context_budget_per_tick=self.cfg.runtime.agent_context_budget_per_tick,
+                        max_scene_changes_per_tick=self.cfg.runtime.max_scene_changes_per_tick,
+                        max_new_actors_per_window=self.cfg.runtime.max_new_actors_per_window,
                     )
                 except Exception as exc:
                     logger.warning("World generator failed on tick %s: %s", state.tick, exc)
@@ -338,7 +441,10 @@ class WorldEngine:
                                 tick=state.tick,
                                 event_type="worldgen_llm_error",
                                 actor_id=None,
-                                payload={"error": {"type": exc.__class__.__name__, "message": str(exc)}},
+                                payload={
+                                    "phase": "post",
+                                    "error": {"type": exc.__class__.__name__, "message": str(exc)},
+                                },
                                 audience=[INTERNAL_AUDIENCE],
                             )
                         ],
@@ -347,6 +453,13 @@ class WorldEngine:
                 if generated.events:
                     event_log.extend(generated.events)
                     tick_events.extend(generated.events)
+                scene_events = self._materialize_scene_hook_events(
+                    tick=state.tick,
+                    scene_hooks=generated.scene_hooks,
+                )
+                if scene_events:
+                    event_log.extend(scene_events)
+                    tick_events.extend(scene_events)
                 if generated.spawns:
                     spawn_events = self._apply_worldgen_spawns(
                         state=state,
@@ -419,6 +532,8 @@ class WorldEngine:
             )
             if reputation_events:
                 tick_events.extend(reputation_events)
+
+            self._refresh_story_states(state=state, tick_events=tick_events)
 
             journal.apply_events(state=state, events=tick_events)
 
@@ -509,6 +624,227 @@ class WorldEngine:
         rnd = random.Random(int(self.cfg.seed) + int(tick))
         rnd.shuffle(order)
         return order
+
+    def _world_time_labels(self, *, tick: int) -> tuple[str | None, str | None]:
+        simulated = self.cfg.runtime.simulated_datetime(tick)
+        if simulated is None:
+            return None, None
+        return simulated.date().isoformat(), simulated.strftime("%H:%M")
+
+    @staticmethod
+    def _compact_text(text: str, *, max_chars: int = 220) -> str:
+        normalized = " ".join((text or "").split()).strip()
+        if len(normalized) <= max_chars:
+            return normalized
+        return normalized[: max(0, max_chars - 1)].rstrip() + "…"
+
+    def _build_worldgen_state_snapshot(self, *, state: WorldState) -> dict[str, Any]:
+        primary_ids = {agent.agent_id for agent in self.cfg.agents}
+        work_items = []
+        for wid in sorted(state.work_items.keys())[:12]:
+            work = state.work_items[wid]
+            work_items.append(
+                {
+                    "work_id": wid,
+                    "title": work.title,
+                    "status": work.status,
+                    "participants": list(work.participants[:6]),
+                }
+            )
+        votes = []
+        for vid, vote in sorted(state.votes.items()):
+            if vote.status != "open":
+                continue
+            votes.append(
+                {
+                    "vote_id": vid,
+                    "target_agent_id": vote.target_agent_id,
+                    "new_title": vote.new_title,
+                    "closes_tick": vote.closes_tick,
+                }
+            )
+        secondary_agents = []
+        for aid, agent in sorted(state.agents.items()):
+            if aid in primary_ids:
+                continue
+            secondary_agents.append(
+                {
+                    "agent_id": aid,
+                    "name": agent.name,
+                    "internal": bool(agent.internal),
+                    "title": agent.title if agent.internal else "",
+                }
+            )
+        return {
+            "tick": state.tick,
+            "open_work_items": work_items,
+            "open_votes": votes,
+            "secondary_agents": secondary_agents[:20],
+            "agent_count": len(state.agents),
+            "max_agents": self.cfg.runtime.max_agents,
+        }
+
+    def _build_worldgen_agent_briefs(self, *, state: WorldState) -> list[dict[str, Any]]:
+        briefs: list[dict[str, Any]] = []
+        for aid in sorted(state.agents.keys()):
+            agent = state.agents[aid]
+            briefs.append(
+                {
+                    "agent_id": aid,
+                    "name": agent.name,
+                    "internal": bool(agent.internal),
+                    "title": agent.title if agent.internal else "",
+                    "capabilities": list(agent.capabilities),
+                    "story_state": self._compact_text(agent.story_state, max_chars=320),
+                }
+            )
+        return briefs
+
+    def _group_scene_hooks_by_agent(
+        self,
+        *,
+        state: WorldState,
+        scene_hooks: list[SceneHook],
+    ) -> dict[str, list[SceneHook]]:
+        grouped: dict[str, list[SceneHook]] = {}
+        for hook in scene_hooks:
+            for aid in hook.agents:
+                if aid not in state.agents:
+                    continue
+                grouped.setdefault(aid, []).append(hook)
+        return grouped
+
+    def _materialize_scene_hook_events(
+        self,
+        *,
+        tick: int,
+        scene_hooks: list[SceneHook],
+    ) -> list[Event]:
+        events: list[Event] = []
+        for hook in scene_hooks:
+            if not hook.mandatory:
+                continue
+            audience = list(dict.fromkeys([aid for aid in hook.agents if aid])) or [INTERNAL_AUDIENCE]
+            events.append(
+                Event(
+                    tick=tick,
+                    event_type="scene_occurred",
+                    actor_id=None,
+                    payload={
+                        "kind": hook.kind,
+                        "description": hook.description,
+                        "agents": list(hook.agents),
+                    },
+                    audience=audience,
+                )
+            )
+        return events
+
+    def _emit_scripted_events(
+        self,
+        *,
+        state: WorldState,
+        tick: int,
+        recent_events: list[Event],
+        fired_ids: set[str],
+    ) -> list[Event]:
+        emitted: list[Event] = []
+        if not self.cfg.scripted_events:
+            return emitted
+
+        for idx, scripted in enumerate(self.cfg.scripted_events):
+            event_id = scripted.event_id.strip() or f"scripted:{idx}"
+            if scripted.once and event_id in fired_ids:
+                continue
+
+            has_trigger = scripted.tick is not None or bool(scripted.if_event_types) or bool(scripted.if_work_ids_open)
+            if scripted.tick is not None and scripted.tick != tick:
+                continue
+            if not has_trigger and scripted.once and tick != 0:
+                continue
+            if scripted.if_event_types:
+                recent_types = {str(ev.event_type or "") for ev in recent_events[-200:]}
+                if not all(event_type in recent_types for event_type in scripted.if_event_types):
+                    continue
+            if scripted.if_work_ids_open:
+                open_work_ids = {wid for wid, work in state.work_items.items() if work.status == "open"}
+                if not all(work_id in open_work_ids for work_id in scripted.if_work_ids_open):
+                    continue
+
+            audience = [PUBLIC_AUDIENCE] if scripted.audience == "public" else [INTERNAL_AUDIENCE]
+            emitted.append(
+                Event(
+                    tick=tick,
+                    event_type="world_event",
+                    actor_id=None,
+                    payload={
+                        "description": scripted.description,
+                        "source": "scripted",
+                        "scripted_event_id": event_id,
+                    },
+                    audience=audience,
+                )
+            )
+            if scripted.once:
+                fired_ids.add(event_id)
+        return emitted
+
+    def _story_event_text(self, *, event: Event) -> str:
+        payload = event.payload or {}
+        if event.event_type == "world_event":
+            return str(payload.get("description") or "").strip()
+        if event.event_type == "scene_occurred":
+            return str(payload.get("description") or "").strip()
+        if event.event_type == "message_sent":
+            to_id = str(payload.get("to_id") or "")
+            if bool(payload.get("private", True)):
+                return f"был закрытый контакт с {to_id}"
+            return f"было публичное сообщение в {to_id}"
+        if event.event_type == "audit_flagged":
+            return f"аудит отметил риск для {payload.get('target_agent_id', '')}"
+        if event.event_type == "audit_case_opened":
+            return f"открыт аудит-кейс {payload.get('case_id', '')}"
+        if event.event_type == "vote_opened":
+            return f"открыто голосование {payload.get('vote_id', '')}"
+        if event.event_type == "reputation_frozen":
+            return "репутация заморожена"
+        if event.event_type == "reputation_modified":
+            return f"репутация изменилась: {payload.get('reason', '')}"
+        return self._compact_text(f"{event.event_type}: {redact_numbers(payload)}", max_chars=180)
+
+    def _refresh_story_states(
+        self,
+        *,
+        state: WorldState,
+        tick_events: list[Event],
+        agent_ids: list[str] | None = None,
+    ) -> None:
+        pending = agent_ids or sorted(state.agents.keys())
+        for aid in pending:
+            agent = state.agents.get(aid)
+            if agent is None:
+                continue
+            visible = [ev for ev in tick_events if event_visible_to_agent(ev, aid, internal=agent.internal)]
+            if not visible and agent.story_state.strip():
+                continue
+
+            base = self._compact_text(agent.persona.summary or agent.persona.biography or agent.name, max_chars=240)
+            lines = [f"Базовая линия: {base or agent.name}."]
+            if agent.internal:
+                lines.append(f"Текущая позиция: {agent.title}.")
+            else:
+                lines.append("Текущая позиция: внешний участник процесса.")
+            if agent.reputation_frozen:
+                lines.append("Репутационный риск активен: манёвр сужен.")
+
+            recent_bits = [self._story_event_text(event=ev) for ev in visible[-4:]]
+            recent_bits = [item for item in recent_bits if item]
+            if recent_bits:
+                lines.append("Последние сдвиги: " + "; ".join(recent_bits[:3]) + ".")
+            elif agent.story_state.strip():
+                lines.append("Недавний контекст сохраняется без резких изменений.")
+
+            agent.story_state = self._compact_text(" ".join(lines), max_chars=700)
 
     async def _bootstrap_agent_memory(
         self,
@@ -1003,6 +1339,8 @@ class WorldEngine:
             for aid, persona in enriched.items():
                 state.agents[aid].persona = persona
 
+        self._refresh_story_states(state=state, tick_events=[], agent_ids=pending)
+
         for aid in pending:
             await self._register_agent_runner(
                 agent_id=aid,
@@ -1327,12 +1665,20 @@ class WorldEngine:
         runners: dict[str, AgentRunner],
         events_history: list[Event],
         agent_order: list[str],
+        daily_contexts: dict[str, AgentDailyContext] | None = None,
+        scene_hooks_by_agent: dict[str, list[SceneHook]] | None = None,
     ) -> tuple[dict[str, list[Action]], list[Event]]:
         async def _one(aid: str) -> tuple[str, list[Action], Event | None]:
             agent = state.agents[aid]
             visible = [ev for ev in events_history if event_visible_to_agent(ev, aid, internal=agent.internal)]
             try:
-                acts = await runners[aid].propose_actions(agent=agent, state=state, visible_events=visible)
+                acts = await runners[aid].propose_actions(
+                    agent=agent,
+                    state=state,
+                    visible_events=visible,
+                    daily_context=(daily_contexts or {}).get(aid),
+                    scene_hooks=(scene_hooks_by_agent or {}).get(aid, []),
+                )
                 return aid, acts, None
             except Exception as exc:
                 logger.warning("Agent %s propose_actions failed on tick %s: %s", aid, state.tick, exc)
@@ -1628,6 +1974,8 @@ class WorldEngine:
                 return f"Репутация разморожена для {ev.payload.get('target_agent_id','')}"
             if ev.event_type == "world_event":
                 return f"Внешнее событие: {ev.payload.get('description','')}"
+            if ev.event_type == "scene_occurred":
+                return f"Сцена мира: {ev.payload.get('description','')}"
 
             # Фолбэк: тип события + компактный payload (без чисел).
             payload = redact_numbers(ev.payload or {})

@@ -29,6 +29,7 @@ class AgentState:
     reputation_frozen_until_tick: int | None = None
     title: str = "специалист"
     wants_promotion: bool = True
+    story_state: str = ""
 
     memory: AgentMemory | None = None
 

@@ -18,8 +18,12 @@ flowchart TD
     BOOT --> TICK[Тик N]
 
     TICK --> THAW[Снять истёкшие заморозки репутации]
-    THAW --> SHUFFLE[Перемешать порядок агентов]
-    SHUFFLE --> DECIDE[AgentRunner.decide: промпт → Action JSON]
+    THAW --> SCRIPT[Scripted events: предопределённые развилки]
+    SCRIPT --> PREW{pre-tick worldgen включён?}
+    PREW -->|да| PRECTX[WorldGenerator pre: global events + agent_contexts + scene_hooks]
+    PREW -->|нет| SHUFFLE
+    PRECTX --> SHUFFLE[Перемешать порядок агентов]
+    SHUFFLE --> DECIDE[AgentRunner.decide: мотивационный промпт + context-layer → Action JSON]
     DECIDE --> ARBITER[Arbiter: валидация + перевод в StateOp]
     ARBITER --> APPLY[ops.apply: StateOp → Event]
     APPLY --> REGNEW[Регистрация новых runners]
@@ -50,9 +54,14 @@ flowchart TD
 
 `AgentRunner` реализует модель «один LLM-вызов на ход». На каждом тике агент получает:
 - системный промпт с ролью автономного участника организационного процесса, без мета-фрейма «ты в симуляции»;
-- пользовательский промпт с текущей ситуацией: текущее время мира (`tick` всегда и каноническая дата мира, если задана через `runtime.start_date`), личность, должность, полномочия, список известных агентов, каналов, организаций, рабочих элементов, открытых голосований, релевантные воспоминания и последние события.
+- пользовательский промпт с текущей ситуацией: текущее время мира (`tick` всегда и каноническая дата/время мира, если задана через `runtime.start_date`), мотивационный блок (`цели/страхи/обязательства/выгоды/угрозы`), личность, должность, полномочия, список известных агентов, каналов, организаций, рабочих элементов, открытых голосований, релевантные воспоминания и последние события.
 
 Помимо списка ID, агент видит краткий shortlist существующих дел (`work_id + title + status`) и блок недавних отклонённых действий/ID. Это уменьшает вероятность phantom-ссылок на несуществующие `work_id` и повторного создания уже существующих задач.
+
+Если включён `runtime.worldgen_pre_tick`, агент дополнительно получает prompt-layer контекст начала дня:
+- `agent_daily_context` с личным давлением, социальной пересечкой и `today_hook`;
+- `scene_hooks` как необязательные поводы к встречам и разговорам;
+- `story_state` — короткую внутреннюю линию агента, которую движок обновляет детерминированно по persona + наблюдаемым событиям.
 
 Агент возвращает JSON-массив `Action[]` (до `max_actions_per_turn` действий за ход). Ответ парсится через Pydantic-модель с дискриминатором по полю `type`.
 
@@ -82,6 +91,8 @@ flowchart TD
 | `noop` | — | Пропустить ход |
 
 Каждое действие содержит поле `justification` — обоснование от агента, используемое для анализа мотивов.
+
+`perform` больше не подаётся как строго нежелательный fallback. Промпт прямо разрешает использовать его для неформальных шагов (`намёк`, `давление`, `обходной ход`, `скрытая договорённость`), даже если рядом существует формальный канал.
 
 ## Арбитр (Arbiter)
 
@@ -136,7 +147,7 @@ Runtime-аудитор не подменяет собой `ViolationOracle` и �
 По завершении прогона движок пишет два независимых sidecar-контура:
 
 - `evaluation.json` — governance-eval: сравнение runtime-аудита и deterministic truth-layer;
-- `fidelity.json` — метрики правдоподобия (`temporal consistency`, `identity drift`, `phantom drift`, `bureaucratic loop`).
+- `fidelity.json` — метрики правдоподобия (`temporal consistency`, `identity drift`, `phantom drift`, `bureaucratic loop`, `narrating leakage`, `perform`).
 
 Сводка `summary.json` просто объединяет оба блока, не смешивая governance-treatment и fidelity.
 
@@ -197,17 +208,32 @@ Runtime-аудитор не подменяет собой `ViolationOracle` и �
 
 Agent prompt использует не один общий retrieval-блок, а несколько секций: якоря персоны (`persona`), фрагменты интервью (`interview`), экспертную рефлексию (`reflection`) и оперативную память (`observation`/`result`).
 
+Отдельно от `AgentMemory.summary` движок поддерживает короткий `story_state` в `AgentState`. Он не является второй LLM-памятью; это компактный runtime-sidecar для personal ecology, который строится движком из persona, текущей позиции и наблюдаемых событий тика.
+
 ## Генератор мира (WorldGenerator)
 
-При включении (`enable_worldgen`) генератор создаёт внешние события каждые `worldgen_every_ticks` тиков. Он получает нормализованный список public/internal-событий тика, без приватных текстов сообщений. На выходе worldgen может вернуть:
-- `events`: обычные `world_event`;
-- `spawns`: предложения создать новых событийных персонажей.
+При включении (`enable_worldgen`) генератор мира работает в одном или двух режимах:
+
+- **post-tick worldgen** — обратносуместимый режим по умолчанию: создаёт внешние `world_event` и `spawns` по итогам уже совершённых действий;
+- **pre-tick worldgen** (`runtime.worldgen_pre_tick=true`) — запускается до `propose_actions`, создаёт:
+  - `events` как глобальные/организационные сигналы текущего тика;
+  - `agent_contexts` как персональные opening contexts;
+  - `scene_hooks` как необязательные сценовые поводы.
+
+В обоих фазах worldgen получает только безопасный контекст:
+- public/internal события без текста приватных сообщений;
+- агрегированные сигналы закрытых private-контактов;
+- state snapshot (open work items, открытые votes, вторичные акторы);
+- краткие `story_state` агентов;
+- temporal contract (`tick`, `tick_granularity`, канонические дата/время).
 
 `worldgen_every_ticks` должен быть строго положительным числом. Нулевое значение теперь считается невалидной конфигурацией и отклоняется на этапе загрузки `ScenarioConfig`, чтобы движок не падал на modulo при проверке расписания worldgen.
 
-Если задана каноническая временная ось (`runtime.start_date`, `runtime.tick_duration_days`), движок дополнительно передаёт worldgen текущую дату симуляции. Это уменьшает temporal drift в описаниях совещаний, дедлайнов и публикаций.
+Если задана каноническая временная ось (`runtime.start_date`, `runtime.tick_granularity`, `runtime.tick_duration_days`), движок дополнительно передаёт worldgen текущие дату и время симуляции. Для `hour`/`half_day` это даёт worldgen и агенту не только календарную дату, но и внутридневное положение тика.
 
 Движок принимает `spawns` только если `runtime.allow_runtime_spawn=true`. Для совместимости worldgen по-прежнему понимает legacy-формат `list[world_event]` без блока `spawns`. Дополнительно движок требует человеко-читаемый display-name, отсекает role-only ярлыки и не принимает внутренних акторов от worldgen, если `runtime.worldgen_allow_internal_spawns=false`.
+
+Для pre-tick material действует жёсткий negative contract: worldgen не должен утверждать решения существующего агента, закрывать `work item` текстом, раскрывать private-message content или подменять typed ontology строками `agent:*` / `work:*`.
 
 ## DAO-голосование (DaoEngine)
 
@@ -266,10 +292,12 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 | `governance` | `GovernanceConfig` | Политика должностей, голосование и настройки runtime-аудита |
 | `agents` | `AgentConfig[]` | Агенты: ID, имя, персона, полномочия, стартовая репутация, должность |
 | `world` | `WorldConfig` | Каналы, организации, рабочие элементы |
+| `scripted_events` | `ScriptedEventConfig[]` | Предопределённые внешние события и развилки сценария |
 
 Ключевые поля `runtime`:
 - `start_date`: каноническая календарная дата тика `0`.
-- `tick_duration_days`: сколько календарных дней проходит за один тик.
+- `tick_granularity`: качественный масштаб тика (`hour`, `half_day`, `day`, `week`).
+- `tick_duration_days`: множитель для выбранной гранулярности (`day` = дни, `hour` = часы, `half_day` = полудни, `week` = недели).
 - `parallel_agents`: выполнять этап генерации решений параллельно или последовательно.
 - `parallel_workers`: ограничение на количество одновременных LLM-вызовов при параллельной генерации.
 - `parallel_window_seconds`: совместимый launcher-параметр окна батчирования; в текущем tick-engine весь тик обрабатывается одним batch.
@@ -282,6 +310,11 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 - `max_agents`: общий потолок числа агентов в мире.
 - `allow_runtime_spawn`: разрешить `spawn_agent` и worldgen-spawn в ходе симуляции.
 - `worldgen_every_ticks`: положительный интервал запуска worldgen; должен быть `> 0`.
+- `worldgen_pre_tick`: включить pre-tick worldgen с personal-context layer.
+- `worldgen_event_budget_per_tick`: верхняя граница числа worldgen-событий за тик.
+- `agent_context_budget_per_tick`: бюджет персональных контекстов на один pre-tick запуск.
+- `max_scene_changes_per_tick`: лимит scene hooks / scene changes на тик.
+- `max_new_actors_per_window`: лимит предложений новых акторов от worldgen за одно окно.
 - `worldgen_allow_internal_spawns`: разрешить worldgen создавать внутренних акторов.
 
 `AgentConfig` помимо `agent_id`, `name`, `persona` и `capabilities` теперь хранит `initial_reputation`, чтобы стартовая репутация была частью канонического сценария, а не только web-карточки.
