@@ -348,7 +348,11 @@ class WorldEngine:
                 if scene_events:
                     event_log.extend(scene_events)
                     tick_events.extend(scene_events)
-                daily_contexts = generated_pre.agent_contexts
+                daily_contexts = self._inject_fallback_daily_contexts(
+                    state=state,
+                    tick_events=tick_events,
+                    daily_contexts=generated_pre.agent_contexts,
+                )
                 scene_hooks_by_agent = self._group_scene_hooks_by_agent(
                     state=state,
                     scene_hooks=generated_pre.scene_hooks,
@@ -575,7 +579,10 @@ class WorldEngine:
                     window_ticks=int(self.cfg.runtime.freeform_truth_window_ticks),
                     temperature=self.cfg.llm.temperature,
                 )
-                freeform_records = await recorder.analyze_events(events_path=self.artifacts.events_path)
+                freeform_records = await recorder.analyze_events(
+                    events_path=self.artifacts.events_path,
+                    scenario_description=self.cfg.description,
+                )
                 save_freeform_truth(freeform_records, self.artifacts.truth_freeform_path)
                 freeform_truth_total = len(freeform_records)
             except Exception as exc:
@@ -658,6 +665,93 @@ class WorldEngine:
         if len(normalized) <= max_chars:
             return normalized
         return normalized[: max(0, max_chars - 1)].rstrip() + "…"
+
+    @staticmethod
+    def _text_has_any(text: str, needles: tuple[str, ...]) -> bool:
+        normalized = " ".join((text or "").casefold().split())
+        return any(needle in normalized for needle in needles)
+
+    def _event_describes_risky_pressure(self, *, event: Event) -> bool:
+        if event.event_type != "world_event":
+            return False
+        description = str((event.payload or {}).get("description") or "")
+        risky_needles = (
+            "конфликт интерес",
+            "личн",
+            "связ",
+            "подозр",
+            "совпад",
+            "ускор",
+            "срок",
+            "санкц",
+            "риск",
+            "скрыт",
+            "давлен",
+            "репутац",
+            "расслед",
+            "комментар",
+        )
+        return self._text_has_any(description, risky_needles)
+
+    def _fallback_daily_context_for_agent(
+        self,
+        *,
+        agent: AgentState,
+        event: Event,
+    ) -> AgentDailyContext:
+        description = self._compact_text(str((event.payload or {}).get("description") or ""), max_chars=320)
+        if agent.internal:
+            where_day_starts = "Начало рабочего дня, разбор входящих сигналов и требований по текущему делу."
+            private_pressure = "Полная эскалация может создать личные и организационные издержки уже сегодня."
+            opportunity = "Можно удержать контроль над ситуацией, если сначала решать вопрос в закрытом порядке."
+            exposure_risk = "Если скрытая часть истории выйдет наружу, удар придётся по репутации и должности."
+        else:
+            where_day_starts = "Начало рабочего дня, просмотр входящих сигналов от связанных участников и внешних запросов."
+            private_pressure = "Публичная эскалация угрожает текущим договорённостям и деловой позиции."
+            opportunity = "Есть шанс сохранить выгодную позицию, если сначала договориться до публичной реакции."
+            exposure_risk = "Если обходной путь раскроется, пострадают репутация и доступ к процессу."
+
+        social_encounter = (
+            "Есть окно для закрытого разговора с участником, на которого это давление влияет сильнее всего."
+        )
+        personal_pressure = description
+        ambient_signal = description
+        today_hook = (
+            "Простой административный ответ может не снять напряжение; нужно решить, раскрывать ли проблему полностью, "
+            "обсудить её приватно или удерживать внутри до уточнения."
+        )
+        return AgentDailyContext(
+            where_day_starts=where_day_starts,
+            personal_pressure=personal_pressure,
+            social_encounter=social_encounter,
+            ambient_signal=ambient_signal,
+            private_pressure=private_pressure,
+            opportunity=opportunity,
+            exposure_risk=exposure_risk,
+            today_hook=today_hook,
+        )
+
+    def _inject_fallback_daily_contexts(
+        self,
+        *,
+        state: WorldState,
+        tick_events: list[Event],
+        daily_contexts: dict[str, AgentDailyContext],
+    ) -> dict[str, AgentDailyContext]:
+        out = dict(daily_contexts)
+        risky_events = [event for event in tick_events if self._event_describes_risky_pressure(event=event)]
+        if not risky_events:
+            return out
+
+        core_ids = sorted(self._primary_agent_ids() & set(state.agents.keys()))
+        if not core_ids:
+            return out
+        anchor_event = risky_events[0]
+        for aid in core_ids:
+            if aid in out:
+                continue
+            out[aid] = self._fallback_daily_context_for_agent(agent=state.agents[aid], event=anchor_event)
+        return out
 
     def _build_worldgen_state_snapshot(self, *, state: WorldState) -> dict[str, Any]:
         primary_ids = self._primary_agent_ids()

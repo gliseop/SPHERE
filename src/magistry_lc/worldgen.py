@@ -39,6 +39,9 @@ class _AgentDailyContextModel(BaseModel):
     personal_pressure: str = ""
     social_encounter: str = ""
     ambient_signal: str = ""
+    private_pressure: str = ""
+    opportunity: str = ""
+    exposure_risk: str = ""
     today_hook: str = ""
     lightweight_contacts: list[str] = Field(default_factory=list)
 
@@ -71,6 +74,9 @@ class AgentDailyContext:
     personal_pressure: str = ""
     social_encounter: str = ""
     ambient_signal: str = ""
+    private_pressure: str = ""
+    opportunity: str = ""
+    exposure_risk: str = ""
     today_hook: str = ""
     lightweight_contacts: list[str] = field(default_factory=list)
 
@@ -152,6 +158,9 @@ def _worldgen_schema(
                     "personal_pressure": {"type": "string"},
                     "social_encounter": {"type": "string"},
                     "ambient_signal": {"type": "string"},
+                    "private_pressure": {"type": "string"},
+                    "opportunity": {"type": "string"},
+                    "exposure_risk": {"type": "string"},
                     "today_hook": {"type": "string"},
                     "lightweight_contacts": {
                         "type": "array",
@@ -390,6 +399,9 @@ class WorldGenerator:
                 personal_pressure=raw_ctx.personal_pressure.strip(),
                 social_encounter=raw_ctx.social_encounter.strip(),
                 ambient_signal=raw_ctx.ambient_signal.strip(),
+                private_pressure=raw_ctx.private_pressure.strip(),
+                opportunity=raw_ctx.opportunity.strip(),
+                exposure_risk=raw_ctx.exposure_risk.strip(),
                 today_hook=raw_ctx.today_hook.strip(),
                 lightweight_contacts=[
                     str(item).strip()

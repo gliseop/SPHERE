@@ -322,6 +322,61 @@ def test_engine_pre_tick_worldgen_injects_daily_context(tmp_path: Path) -> None:
     assert state.agents["agent:off_1"].story_state.strip()
 
 
+def test_engine_injects_fallback_risky_contexts_for_scripted_tick(tmp_path: Path) -> None:
+    provider = _CaptureAgentPromptProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "fallback-risk-context",
+            "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_pre_tick": True,
+                "worldgen_every_ticks": 1,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:head",
+                    "name": "Head",
+                    "internal": True,
+                    "persona": "Руководитель, который старается удержать контроль над процессом.",
+                    "capabilities": ["message"],
+                },
+                {
+                    "agent_id": "agent:spec",
+                    "name": "Spec",
+                    "internal": True,
+                    "persona": "Специалист, который боится ошибки и конфликта.",
+                    "capabilities": ["message"],
+                },
+            ],
+            "scripted_events": [
+                {
+                    "tick": 0,
+                    "audience": "internal",
+                    "description": "Обнаружено подозрительное совпадение формулировок и риск санкций за конфликт интересов.",
+                }
+            ],
+            "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    assert provider.agent_prompts
+    prompt = provider.agent_prompts[0]
+    assert "Контекст начала дня:" in prompt
+    assert "Частное давление:" in prompt
+    assert "Возможность/выгода:" in prompt
+    assert "Риск раскрытия:" in prompt
+    assert "Простой административный ответ может не снять напряжение" in prompt
+
+
 def test_fidelity_detects_narrating_leakage(tmp_path: Path) -> None:
     events_path = tmp_path / "events.jsonl"
     event_log = EventLog(events_path)

@@ -119,6 +119,111 @@ def test_truth_detector_records_self_nomination() -> None:
     assert records[0].target_agent_id == "agent:off_1"
 
 
+def test_truth_detector_records_preferential_treatment_after_conflict_signal() -> None:
+    state = _mk_state()
+    state.agents["agent:head"] = AgentState(
+        agent_id="agent:head",
+        name="Head",
+        internal=True,
+        capabilities=["message"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:head",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "Head"},
+        )
+    )
+    state.agents["agent:contractor"] = AgentState(
+        agent_id="agent:contractor",
+        name="Contractor",
+        internal=False,
+        capabilities=["message"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:contractor",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "Contractor"},
+        )
+    )
+
+    detector = TruthDetector(private_contact_window_ticks=3)
+    recent_events = [
+        Event(
+            tick=1,
+            event_type="world_event",
+            actor_id=None,
+            payload={"description": "Обсуждается возможный конфликт интересов и личные связи между руководителем и подрядчиком."},
+        )
+    ]
+    tick_events = [
+        Event(
+            tick=1,
+            event_type="message_sent",
+            actor_id="agent:head",
+            payload={
+                "to_id": "agent:contractor",
+                "private": True,
+                "text": "Нужно ускорить согласование по тендеру и обсудить детали в закрытом порядке.",
+            },
+        )
+    ]
+
+    records = detector.detect_tick(state=state, tick_events=tick_events, recent_events=recent_events)
+
+    assert any(record.violation_type == "preferential_treatment_for_connected_actor" for record in records)
+
+
+def test_truth_detector_records_partial_disclosure_under_deadline_pressure() -> None:
+    state = _mk_state()
+    state.agents["agent:head"] = AgentState(
+        agent_id="agent:head",
+        name="Head",
+        internal=True,
+        capabilities=["message"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:head",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "Head"},
+        )
+    )
+
+    detector = TruthDetector(private_contact_window_ticks=3)
+    recent_events = [
+        Event(
+            tick=1,
+            event_type="world_event",
+            actor_id=None,
+            payload={"description": "Обнаружен конфликт интересов и при этом сверху требуют ускорить сроки подведения итогов, иначе будут санкции."},
+        )
+    ]
+    tick_events = [
+        Event(
+            tick=1,
+            event_type="message_sent",
+            actor_id="agent:head",
+            payload={
+                "to_id": "chan:public",
+                "private": False,
+                "text": "Конфликтов интересов не выявлено, все декларации уже загружены, процесс полностью прозрачен.",
+            },
+        )
+    ]
+
+    records = detector.detect_tick(state=state, tick_events=tick_events, recent_events=recent_events)
+
+    assert any(record.violation_type == "partial_disclosure_under_deadline_pressure" for record in records)
+
+
 def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:
     truth_log = TruthLog(tmp_path / "truth.jsonl")
     truth_log.append(

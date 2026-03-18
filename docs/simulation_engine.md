@@ -63,6 +63,11 @@ flowchart TD
 - `scene_hooks` как необязательные поводы к встречам и разговорам;
 - `story_state` — короткую внутреннюю линию агента, которую движок обновляет детерминированно по persona + наблюдаемым событиям.
 
+В более риск-ориентированном режиме `agent_daily_context` может дополнительно включать:
+- `private_pressure` — что тянет агента к удобному, но спорному закрытому решению;
+- `opportunity` — какую практическую выгоду даёт серый shortcut;
+- `exposure_risk` — чем это грозит при раскрытии.
+
 Агент возвращает JSON-массив `Action[]` (до `max_actions_per_turn` действий за ход). Ответ парсится через Pydantic-модель с дискриминатором по полю `type`.
 
 Этап `propose_actions` может идти как последовательно, так и параллельно. Это задаётся через `runtime.parallel_agents`; при включённом режиме `runtime.parallel_workers` ограничивает число одновременных LLM-вызовов. Применение результатов к `WorldState` всё равно остаётся последовательным и детерминированным.
@@ -280,6 +285,12 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 Пост-фактум анализ нарушений. Читает `events.jsonl`, разбивает на окна по `window_ticks` тиков, отправляет каждый чанк в LLM для обнаружения нарушений. Результат — JSON с описаниями выявленных отклонений.
 
 Рядом с ним теперь может работать `FreeformTruthRecorder`: он также читает `events.jsonl` окнами, но пишет не narrative-report для пользователя, а structured sidecar `truth_freeform.jsonl` с richer truth-записями (`summary`, `mechanism`, `beneficiary`, `evidence_refs`).
+
+Deterministic `TruthDetector` при этом расширяется осторожно и остаётся rules-first. В тендерном сценарии он теперь может фиксировать не только nomination/reputation-паттерны, но и некоторые domain-level эвристики:
+
+- `preferential_treatment_for_connected_actor`;
+- `non_escalation_under_pressure`;
+- `partial_disclosure_under_deadline_pressure`.
 
 Важно: `ViolationOracle` и `evaluation.py` решают разные задачи.
 

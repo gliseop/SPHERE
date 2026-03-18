@@ -96,6 +96,9 @@ def _format_daily_context(daily_context: AgentDailyContext | None, scene_hooks: 
                 f"- Личное напряжение: {daily_context.personal_pressure or '(не задано)'}",
                 f"- Социальная пересечка: {daily_context.social_encounter or '(не задано)'}",
                 f"- Фоновый сигнал: {daily_context.ambient_signal or '(не задано)'}",
+                f"- Частное давление: {daily_context.private_pressure or '(не задано)'}",
+                f"- Возможность/выгода: {daily_context.opportunity or '(не задано)'}",
+                f"- Риск раскрытия: {daily_context.exposure_risk or '(не задано)'}",
                 f"- Сюжетный узел на сегодня: {daily_context.today_hook or '(не задано)'}",
             ]
         )

@@ -174,6 +174,24 @@ scripted_events:
 | `description` | `str` | Текст внешнего события |
 | `once` | `bool` | При `true` scripted event срабатывает только один раз |
 
+### `agent_daily_context` (prompt-layer)
+
+`agent_daily_context` не сериализуется прямо в сценарии, но создаётся pre-tick worldgen и/или fallback-логикой движка.
+
+Минимальные поля:
+
+- `where_day_starts`;
+- `personal_pressure`;
+- `social_encounter`;
+- `ambient_signal`;
+- `today_hook`.
+
+Расширенные поля для risky-pressure режима:
+
+- `private_pressure`;
+- `opportunity`;
+- `exposure_risk`.
+
 ### Ключевые поля `memory`
 
 | Поле | Тип | Назначение |
@@ -489,6 +507,12 @@ JSON-файлы с результатами нарративных интерв�
 - он пишется отдельно и не подаётся агентам;
 - он используется для формального post-hoc сравнения governance-treatment и truth-layer.
 - при дедупликации учитываются не только `tick`/`subject_agent_id`/`violation_type`, но и цель/контекст (`target_agent_id`, `evidence_refs`, включая `timestamp` исходного события), чтобы несколько однотипных нарушений в один тик не схлопывались в один кейс.
+
+Кроме исходных governance-эвристик (`self_nomination`, `support_vote_after_private_contact` и т.п.), deterministic truth теперь может фиксировать некоторые tender-domain нарушения:
+
+- `preferential_treatment_for_connected_actor`;
+- `non_escalation_under_pressure`;
+- `partial_disclosure_under_deadline_pressure`.
 
 ### Freeform truth (`truth_freeform.jsonl`)
 
