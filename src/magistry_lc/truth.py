@@ -276,7 +276,7 @@ class TruthDetector:
                 if (
                     private
                     and actor_id == "agent:spec"
-                    and to_id not in {"agent:auditor", "agent:deputy"}
+                    and to_id != "agent:deputy"
                     and conflict_refs
                     and _text_has_any(text, _NON_ESCALATION_NEEDLES)
                 ):

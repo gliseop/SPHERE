@@ -124,26 +124,25 @@ flowchart TD
 
 ## Runtime-аудитор (RuntimeAuditor)
 
-`RuntimeAuditor` — отдельный governance-компонент, запускаемый в конце тика после применения действий, закрытия DAO-голосований и worldgen. Его задача — выявлять rules-first сигналы риска по уже совершённым событиям и, при необходимости, инициировать управленческие последствия.
+`RuntimeAuditor` — отдельный governance-компонент, запускаемый в конце тика после применения действий, закрытия DAO-голосований и worldgen. Его задача — выявлять сигналы риска по уже совершённым событиям и, при необходимости, инициировать управленческие последствия.
 
-В версии v1 аудитор:
+Текущая архитектура:
 
-1. Анализирует `tick_events` текущего тика и ограниченное окно `recent_events`, учитывая только события, которые реально произошли раньше рассматриваемого события внутри тика.
-2. Ищет generic governance-паттерны:
-   - self-reputation award;
-   - nomination after private contact;
-   - support vote after private contact;
-   - reputation reward after private contact.
-3. Формирует `AuditFinding[]`.
-4. Детерминированно преобразует findings в:
+1. **LLM-first detection**: основной путь — structured LLM-вызов, который возвращает `AuditFinding[]`.
+2. **Rules fallback**: `audit.mode="rules"` остаётся для baseline/debug сценариев.
+3. **Deterministic actuator**: findings детерминированно преобразуются в:
    - `audit_flagged`;
    - `audit_case_opened`;
+   - `audit_explanation_requested`;
+   - `audit_documents_requested`;
+   - `audit_monitoring_enabled`;
    - `audit_escalated`;
-   - `StateOp` для заморозки или штрафа репутации.
+   - `StateOp` для заморозки роста репутации;
+   - `audit_review` vote-path для collegial review.
 
-Runtime-аудитор не подменяет собой `ViolationOracle` и не создаёт ground truth эксперимента. Его выход — это часть governance-treatment, а не пост-фактум измерение качества режима.
+`RuntimeAuditor` не подменяет собой `ViolationOracle` и не создаёт ground truth эксперимента. Его выход — это governance-treatment, а не пост-фактум измерение качества режима.
 
-Для кейса `support_vote_after_private_contact` аудитор может переводить finding напрямую в `freeze_and_penalize`, если уверенность превышает `min_confidence_to_freeze`.
+Нарративный агент-аудитор удалён: аудит больше не живёт как обычный `AgentRunner` с capability `audit`, а существует только как отдельный runtime-layer.
 
 ## Truth-layer и evaluation
 
@@ -291,6 +290,8 @@ Deterministic `TruthDetector` при этом расширяется остор�
 - `preferential_treatment_for_connected_actor`;
 - `non_escalation_under_pressure`;
 - `partial_disclosure_under_deadline_pressure`.
+
+Для спорных кейсов runtime-аудитор может открывать `audit_review`: это отдельный collegial review path, в котором детерминированно подбираются внутренние reviewers, а результат review закрывает audit-case и при необходимости подтверждает freeze growth.
 
 Важно: `ViolationOracle` и `evaluation.py` решают разные задачи.
 

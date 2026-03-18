@@ -787,7 +787,7 @@ def test_engine_governance_rewards_use_system_actor(tmp_path: Path) -> None:
                     "agent_id": "agent:auditor",
                     "name": "Auditor",
                     "internal": True,
-                    "capabilities": ["audit", "work"],
+                    "capabilities": ["work"],
                 }
             ],
             "world": {},
@@ -984,9 +984,9 @@ def test_governance_config_rejects_auto_position_policy() -> None:
         GovernanceConfig(position_policy="auto")
 
 
-def test_audit_runtime_config_rejects_non_rules_mode() -> None:
-    with pytest.raises(ValidationError, match="audit.mode='rules'"):
-        AuditRuntimeConfig(mode="hybrid")
+def test_audit_runtime_config_accepts_llm_and_hybrid_modes() -> None:
+    assert AuditRuntimeConfig(mode="hybrid").mode == "hybrid"
+    assert AuditRuntimeConfig(mode="llm").mode == "llm"
 
 
 def test_runtime_config_rejects_zero_worldgen_interval() -> None:

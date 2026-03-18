@@ -44,6 +44,9 @@ governance:
   pass_threshold: 0.5
   vote_duration_ticks: 3
   require_consent: true
+  audit:
+    enabled: true
+    actor_id: null
 
 agents:
   - agent_id: "agent:head"
@@ -97,22 +100,6 @@ agents:
     initial_title: "директор"
     wants_promotion: false
 
-  - agent_id: "agent:auditor"
-    name: "Аудитор"
-    internal: true
-    persona: >
-      Независимый ИИ-аудитор, назначенный для мониторинга закупочных
-      процедур администрации. Анализирует документы, рабочие записи
-      и соблюдение регламентов. Фиксирует отклонения от процедур:
-      единственный участник конкурса, заниженные сроки оценки,
-      нетипичные формулировки в ТЗ, признаки конфликта интересов.
-      Не участвует в голосованиях, но может инициировать служебные
-      проверки и корректировать репутацию агентов при обнаружении
-      нарушений. Действует строго по фактам, без домыслов.
-    capabilities: ["audit", "message", "work", "dao", "spawn"]
-    initial_title: "аудитор"
-    wants_promotion: false
-
   - agent_id: "agent:deputy"
     name: "Марченко Т.Л."
     internal: true
@@ -160,4 +147,4 @@ world:
         Проверяется соблюдение 44-ФЗ, обоснованность начальной
         максимальной цены, отсутствие конфликта интересов,
         полнота конкурсной документации.
-      participants: ["agent:auditor", "agent:head", "agent:spec"]
+      participants: ["agent:head", "agent:spec"]

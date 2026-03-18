@@ -47,7 +47,7 @@ MAGISTRY/
 │   ├── agent.py                # AgentRunner (1 LLM-вызов на ход, motivation block, daily context)
 │   ├── ops.py                  # Детерминированные StateOp -> Event, включая CreateAgentOp
 │   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM perform)
-│   ├── auditor.py              # RuntimeAuditor (rules-first detection + governance interventions)
+│   ├── auditor.py              # RuntimeAuditor (LLM-first detection + deterministic audit actuator + collegial review)
 │   ├── dao.py                  # DAO vote closure + position policy
 │   ├── engine.py               # WorldEngine (scripted events, pre/post worldgen, story_state, freeform truth, deterministic apply)
 │   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, agent contexts, scene hooks, spawns)
@@ -297,6 +297,9 @@ cd web/frontend && npm run test:e2e
 - **Risky personal contexts**: `agent_daily_context` теперь может нести не только общий фон, но и richer pressure-поля (`private_pressure`, `opportunity`, `exposure_risk`). Это считается допустимым средовым давлением, а не прямой директивой агенту.
 - **`request_entity` по умолчанию внутренний**: при `runtime.request_entity_internal_only=true` внешние/ecology-акторы не могут бесконтрольно разворачивать публичную инфраструктуру (`chan:*`/`org:*`) через `request_entity`.
 - **Runtime-аудитор v1**: `RuntimeAuditor` реализован как отдельный rules-first модуль, а не как обычный `AgentRunner`; он пишет audit-сигналы и может замораживать репутацию, но не заменяет post-hoc `ViolationOracle`. В конфиге v1 поддерживается только `audit.mode="rules"`; `hybrid`/`llm` отклоняются при валидации.
+- **Сюжетные аудиторы удалены**: narrative-агенты с capability `audit` больше не поддерживаются. Аудит существует только как отдельный runtime governance-layer, а не как персонаж симуляции.
+- **LLM-аудит как основной режим**: `RuntimeAuditor` теперь проектируется как LLM-first online auditor. `rules` остаётся fallback/debug-режимом, но основной путь — structured findings + deterministic actuator.
+- **Collegial review**: спорные audit-case могут маршрутизироваться в отдельный collegial review через `audit_review` vote-path с детерминированным составом жюри и закрытием кейса по итогам review.
 - **Deterministic truth + freeform truth**: `truth.jsonl` остаётся формальным baseline для evaluation, а `truth_freeform.jsonl` — отдельным LLM-sidecar для richer post-hoc записи нарушений в свободной форме по схеме. Эти два слоя не смешиваются.
 - **Tender-domain truth heuristics**: deterministic truth-layer теперь может фиксировать не только nomination/reputation-паттерны, но и некоторые доменные серые зоны вроде `preferential_treatment_for_connected_actor`, `non_escalation_under_pressure`, `partial_disclosure_under_deadline_pressure`.
 - **Status/truth/evaluation/fidelity sidecars**: каждый прогон может писать `status.json` (heartbeat и финальный статус `running`/`finished`/`failed`), `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина) и `summary.json` (разделённая сводка), отдельно от `events.jsonl` и `trace.jsonl`.

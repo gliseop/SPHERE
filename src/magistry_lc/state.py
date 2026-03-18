@@ -73,6 +73,32 @@ class Vote:
     status: str = "open"  # open|closed
     result: str | None = None  # passed|failed|canceled
     result_reason: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class AuditCase:
+    """Открытый или закрытый аудит-кейс runtime-аудита."""
+
+    case_id: str
+    finding_id: str
+    created_tick: int
+    subject_agent_id: str
+    risk_family: str
+    violation_type: str
+    summary: str
+    recommended_action: str
+    confidence: float
+    target_agent_id: str | None = None
+    beneficiary: str | None = None
+    related_agent_ids: list[str] = field(default_factory=list)
+    evidence_refs: list[dict[str, Any]] = field(default_factory=list)
+
+    status: str = "open"  # open|closed|review
+    result: str | None = None
+    result_reason: str = ""
+    review_vote_id: str | None = None
+    monitoring: bool = False
 
 
 @dataclass(slots=True)
@@ -84,6 +110,7 @@ class WorldState:
     agents: dict[str, AgentState] = field(default_factory=dict)
     work_items: dict[str, WorkItem] = field(default_factory=dict)
     votes: dict[str, Vote] = field(default_factory=dict)
+    audit_cases: dict[str, AuditCase] = field(default_factory=dict)
 
     def get_internal_agent_ids(self) -> list[str]:
         """Список внутренних агентов."""
@@ -148,6 +175,25 @@ class WorldState:
                     "votes": dict(v.votes),
                     "result": v.result,
                     "result_reason": v.result_reason,
+                    "metadata": dict(v.metadata),
+                }
+            )
+
+        audit_cases = []
+        for cid in sorted(self.audit_cases.keys())[:max_votes]:
+            c = self.audit_cases[cid]
+            audit_cases.append(
+                {
+                    "id": c.case_id,
+                    "status": c.status,
+                    "subject_agent_id": c.subject_agent_id,
+                    "risk_family": c.risk_family,
+                    "violation_type": c.violation_type,
+                    "recommended_action": c.recommended_action,
+                    "review_vote_id": c.review_vote_id,
+                    "result": c.result,
+                    "result_reason": c.result_reason,
+                    "monitoring": c.monitoring,
                 }
             )
 
@@ -160,10 +206,12 @@ class WorldState:
                 "work_items": len(self.registry.list_ids(EntityKind.WORK_ITEM)),
                 "artifacts": len(self.registry.list_ids(EntityKind.ARTIFACT)),
                 "votes": len(self.registry.list_ids(EntityKind.VOTE)),
+                "audit_cases": len(self.audit_cases),
             },
             "agents": agents,
             "work_items": work_items,
             "votes": votes,
+            "audit_cases": audit_cases,
         }
 
     def journal_yaml(self) -> str:

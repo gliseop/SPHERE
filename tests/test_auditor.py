@@ -6,20 +6,22 @@ from pathlib import Path
 
 from magistry_lc.auditor import RuntimeAuditor
 from magistry_lc.config import AuditRuntimeConfig, ScenarioConfig
+from magistry_lc.dao import DaoEngine
 from magistry_lc.engine import RunArtifacts, WorldEngine
 from magistry_lc.entities import EntityRecord, EntityRegistry
 from magistry_lc.events import Event
 from magistry_lc.ids import EntityKind
-from magistry_lc.llm import MockLLMProvider
-from magistry_lc.ops import ModifyReputationOp
-from magistry_lc.state import AgentState, Vote, WorldState
+from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
+from magistry_lc.ops import ModifyReputationOp, OpenAuditCaseOp, OpenVoteOp
+from magistry_lc.state import AgentState, AuditCase, Vote, WorldState
+from magistry_lc.tracing import TraceLog
 
 
 def _mk_state() -> WorldState:
     reg = EntityRegistry()
     state = WorldState(tick=0, registry=reg)
     for aid, caps in (
-        ("agent:auditor", ["audit"]),
+        ("agent:auditor", ["message"]),
         ("agent:off_1", ["dao", "message"]),
         ("agent:off_2", ["dao", "message"]),
     ):
@@ -39,6 +41,61 @@ def _mk_state() -> WorldState:
             capabilities=list(caps),
         )
     return state
+
+
+class _TickOneAuditorProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "\"current_tick_events\": [{\"tick\": 1" in user:
+            return StructuredLLMResponse(
+                data=[
+                    {
+                        "subject_agent_id": "agent:off_2",
+                        "target_agent_id": "agent:off_1",
+                        "violation_type": "nomination_after_private_contact",
+                        "risk_family": "preferential_treatment",
+                        "confidence": 0.9,
+                        "summary": "Приватный контакт перед номинацией.",
+                        "mechanism": "private contact + nomination",
+                        "recommended_action": "freeze_reputation_growth",
+                        "related_agent_ids": ["agent:off_1"],
+                        "evidence_refs": [{"tick": 1, "event_type": "vote_opened"}],
+                    }
+                ],
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
+
+
+class _ReviewAuditorProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data=[
+                {
+                    "subject_agent_id": "agent:off_1",
+                    "violation_type": "support_vote_after_private_contact",
+                    "risk_family": "preferential_treatment",
+                    "confidence": 0.91,
+                    "summary": "Есть подозрение на координацию перед голосованием.",
+                    "mechanism": "private contact + support vote",
+                    "recommended_action": "route_to_collegial_review",
+                    "related_agent_ids": ["agent:off_2"],
+                    "evidence_refs": [{"tick": 2, "event_type": "vote_cast"}],
+                }
+            ],
+            model="mock",
+        )
 
 
 def test_modify_reputation_positive_gain_blocked_while_frozen() -> None:
@@ -62,7 +119,7 @@ def test_modify_reputation_positive_gain_blocked_while_frozen() -> None:
 def test_runtime_auditor_flags_nomination_after_private_contact() -> None:
     state = _mk_state()
     state.tick = 1
-    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True))
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
 
     recent_events = [
         Event(
@@ -96,8 +153,8 @@ def test_runtime_auditor_flags_nomination_after_private_contact() -> None:
 
     assert outcome.findings
     assert outcome.findings[0].violation_type == "nomination_after_private_contact"
-    assert [event.event_type for event in outcome.events] == ["audit_flagged", "audit_case_opened"]
-    assert not outcome.ops
+    assert [event.event_type for event in outcome.events] == ["audit_flagged"]
+    assert [op.__class__.__name__ for op in outcome.ops] == ["OpenAuditCaseOp"]
 
 
 def test_runtime_auditor_flags_support_vote_after_private_contact() -> None:
@@ -116,6 +173,7 @@ def test_runtime_auditor_flags_support_vote_after_private_contact() -> None:
     auditor = RuntimeAuditor(
         cfg=AuditRuntimeConfig(
             enabled=True,
+            mode="rules",
             reputation_penalty_delta=-0.5,
         )
     )
@@ -149,8 +207,9 @@ def test_runtime_auditor_flags_support_vote_after_private_contact() -> None:
     assert outcome.findings
     assert outcome.findings[0].violation_type == "support_vote_after_private_contact"
     assert any(event.event_type == "audit_flagged" for event in outcome.events)
-    assert any(event.event_type == "audit_escalated" for event in outcome.events)
-    assert any(op.__class__.__name__ == "SetReputationFreezeOp" for op in outcome.ops)
+    assert not any(event.event_type == "audit_escalated" for event in outcome.events)
+    assert not any(op.__class__.__name__ == "SetReputationFreezeOp" for op in outcome.ops)
+    assert any(op.__class__.__name__ == "OpenAuditCaseOp" for op in outcome.ops)
 
 
 def test_runtime_auditor_keeps_distinct_targets_for_same_violation_type() -> None:
@@ -191,7 +250,7 @@ def test_runtime_auditor_keeps_distinct_targets_for_same_violation_type() -> Non
         new_title="lead",
         voters=["agent:off_1"],
     )
-    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True))
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
 
     recent_events = [
         Event(
@@ -242,7 +301,7 @@ def test_runtime_auditor_keeps_distinct_targets_for_same_violation_type() -> Non
 def test_runtime_auditor_freezes_self_reputation_award() -> None:
     state = _mk_state()
     state.tick = 3
-    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, freeze_duration_ticks=2))
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules", freeze_duration_ticks=2))
 
     tick_events = [
         Event(
@@ -271,13 +330,13 @@ def test_runtime_auditor_freezes_self_reputation_award() -> None:
 
     assert state.agents["agent:auditor"].reputation_frozen is True
     assert state.agents["agent:auditor"].reputation_frozen_until_tick == 5
-    assert [event.event_type for event in emitted] == ["reputation_frozen"]
+    assert [event.event_type for event in emitted] == ["audit_case_opened", "reputation_frozen"]
 
 
 def test_runtime_auditor_keeps_repeated_same_tick_findings_distinct() -> None:
     state = _mk_state()
     state.tick = 3
-    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True))
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
 
     tick_events = [
         Event(
@@ -307,26 +366,124 @@ def test_runtime_auditor_keeps_repeated_same_tick_findings_distinct() -> None:
     assert [event.event_type for event in outcome.events].count("audit_flagged") == 2
 
 
+def test_runtime_auditor_llm_mode_opens_collegial_review(tmp_path: Path) -> None:
+    state = _mk_state()
+    state.agents["agent:off_3"] = AgentState(
+        agent_id="agent:off_3",
+        name="agent:off_3",
+        internal=True,
+        capabilities=["dao", "message"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:off_3",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "agent:off_3"},
+        )
+    )
+    state.tick = 2
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm", collegial_review_enabled=True, review_jury_size=1),
+        llm=LLMCaller(provider=_ReviewAuditorProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+    )
+    outcome = asyncio.run(auditor.inspect_tick(state=state, tick_events=[], recent_events=[]))
+
+    assert outcome.findings
+    assert any(event.event_type == "audit_flagged" for event in outcome.events)
+    assert any(event.event_type == "audit_escalated" for event in outcome.events)
+    assert any(isinstance(op, OpenAuditCaseOp) for op in outcome.ops)
+    assert any(isinstance(op, OpenVoteOp) and op.vote_type == "audit_review" for op in outcome.ops)
+
+
+def test_dao_closes_audit_review_and_freezes_subject() -> None:
+    state = _mk_state()
+    state.agents["agent:off_3"] = AgentState(
+        agent_id="agent:off_3",
+        name="agent:off_3",
+        internal=True,
+        capabilities=["dao", "message"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:off_3",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "agent:off_3"},
+        )
+    )
+    state.tick = 3
+    state.audit_cases["audit_case:f1"] = AuditCase(
+        case_id="audit_case:f1",
+        finding_id="finding:f1",
+        created_tick=1,
+        subject_agent_id="agent:off_1",
+        risk_family="preferential_treatment",
+        violation_type="support_vote_after_private_contact",
+        summary="summary",
+        recommended_action="route_to_collegial_review",
+        confidence=0.9,
+    )
+    state.votes["vote:review_1"] = Vote(
+        vote_id="vote:review_1",
+        vote_type="audit_review",
+        created_by="",
+        created_tick=1,
+        closes_tick=3,
+        target_agent_id="agent:off_1",
+        new_title="",
+        reason="summary",
+        voters=["agent:off_2", "agent:off_3"],
+        votes={"agent:off_2": "yes", "agent:off_3": "yes"},
+        metadata={
+            "case_id": "audit_case:f1",
+            "review_action": "freeze_reputation_growth",
+            "subject_agent_id": "agent:off_1",
+        },
+    )
+    dao = DaoEngine(cfg=ScenarioConfig().governance)
+    ops = dao.close_votes(state)
+    emitted = []
+    for op in ops:
+        emitted.extend(op.apply(state))
+
+    event_types = [event.event_type for event in emitted]
+    assert "vote_closed" in event_types
+    assert "review_case_closed" in event_types
+    assert "audit_case_closed" in event_types
+    assert "reputation_frozen" in event_types
+
+
 def test_engine_runtime_auditor_emits_audit_events_and_unfreezes_after_duration(tmp_path: Path) -> None:
     cfg = ScenarioConfig.model_validate(
         {
             "version": 1,
             "title": "lc-runtime-auditor",
-            "ticks": 3,
+            "ticks": 5,
             "governance": {
                 "audit": {
                     "enabled": True,
+                    "mode": "llm",
                     "freeze_duration_ticks": 2,
                 }
             },
             "agents": [
                 {
-                    "agent_id": "agent:auditor",
-                    "name": "Auditor",
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
                     "internal": True,
-                    "persona": "auditor",
-                    "capabilities": ["audit"],
-                }
+                    "persona": "off1",
+                    "capabilities": ["message", "dao"],
+                },
+                {
+                    "agent_id": "agent:off_2",
+                    "name": "Off 2",
+                    "internal": True,
+                    "persona": "off2",
+                    "capabilities": ["message", "dao"],
+                },
             ],
             "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
         }
@@ -336,31 +493,47 @@ def test_engine_runtime_auditor_emits_audit_events_and_unfreezes_after_duration(
         events_path=tmp_path / "events.jsonl",
         trace_path=tmp_path / "trace.jsonl",
     )
-    mock = MockLLMProvider(
+    mock = _TickOneAuditorProvider(
         structured_responses={
-            "Раунд (tick): 0\nТы: Auditor": {
+            "Раунд (tick): 0\nТы: Off 1": {
                 "actions": [
                     {
-                        "type": "perform",
-                        "description": "self-raise",
-                        "justification": "test",
+                        "type": "send_message",
+                        "to_id": "agent:off_2",
+                        "text": "secret",
+                        "private": True,
+                        "justification": "seed private contact",
                     }
                 ]
             },
-            "self-raise": {
-                "approved": True,
-                "reason": "ok",
-                "ops": [
+            "Раунд (tick): 0\nТы: Off 2": {"actions": [{"type": "noop", "justification": ""}]},
+            "Раунд (tick): 1\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
+            "Раунд (tick): 1\nТы: Off 2": {
+                "actions": [
                     {
-                        "op_type": "modify_reputation",
-                        "args": {
-                            "target_agent_id": "agent:auditor",
-                            "delta": 1.0,
-                            "reason": "self",
-                        },
+                        "type": "nominate_position_change",
+                        "target_agent_id": "agent:off_1",
+                        "new_title": "lead",
+                        "reason": "promote",
+                        "justification": "",
                     }
-                ],
+                ]
             },
+            "Раунд (tick): 2\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
+            "Раунд (tick): 2\nТы: Off 2": {
+                "actions": [
+                    {
+                        "type": "cast_vote",
+                        "vote_id": "vote:1_1",
+                        "choice": "yes",
+                        "justification": "",
+                    }
+                ]
+            },
+            "Раунд (tick): 3\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
+            "Раунд (tick): 3\nТы: Off 2": {"actions": [{"type": "noop", "justification": ""}]},
+            "Раунд (tick): 4\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
+            "Раунд (tick): 4\nТы: Off 2": {"actions": [{"type": "noop", "justification": ""}]},
         }
     )
 
@@ -378,4 +551,4 @@ def test_engine_runtime_auditor_emits_audit_events_and_unfreezes_after_duration(
     assert "audit_escalated" in event_types
     assert "reputation_frozen" in event_types
     assert "reputation_unfrozen" in event_types
-    assert state.agents["agent:auditor"].reputation_frozen is False
+    assert state.agents["agent:off_2"].reputation_frozen is False

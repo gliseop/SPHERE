@@ -202,6 +202,15 @@ class AgentRunner:
         org_ids = ", ".join(state.registry.list_ids(EntityKind.ORG)) or "(нет)"
         open_votes = [vid for vid, v in state.votes.items() if v.status == "open"]
         vote_ids = ", ".join(sorted(open_votes)) or "(нет)"
+        vote_summaries = []
+        for vid in sorted(open_votes)[:8]:
+            vote = state.votes[vid]
+            if vote.vote_type == "audit_review":
+                summary = str(vote.metadata.get("summary") or vote.reason or "").strip()
+                vote_summaries.append(f"- {vid}: audit_review для {vote.target_agent_id} | {summary or '(без summary)'}")
+            else:
+                vote_summaries.append(f"- {vid}: {vote.vote_type} для {vote.target_agent_id} -> {vote.new_title}")
+        vote_summaries_text = "\n".join(vote_summaries) if vote_summaries else "- (нет)"
         work_summaries = []
         for wid in sorted(state.work_items.keys())[:12]:
             work = state.work_items[wid]
@@ -250,8 +259,6 @@ class AgentRunner:
             action_types.append("nominate_position_change (target_agent_id, new_title, reason) — номинировать на должность")
             action_types.append("cast_vote (vote_id, choice: yes/no/abstain) — проголосовать")
         action_types.append("respond_nomination (vote_id, accept: true/false) — принять/отклонить номинацию")
-        if "audit" in agent.capabilities:
-            action_types.append("add_work_note (work_id, text) — добавить аудиторскую заметку")
         if "spawn" in agent.capabilities:
             action_types.append(
                 "spawn_agent (slug, name, internal, persona_hint, capabilities) — ввести нового участника с базовой персоной"
@@ -279,6 +286,8 @@ class AgentRunner:
             f"- Channels: {channel_ids}\n"
             f"- Orgs: {org_ids}\n"
             f"{votes_line}\n"
+            "Открытые голосования / review:\n"
+            f"{vote_summaries_text}\n\n"
             "Открытые/известные дела (кратко):\n"
             f"{work_summaries_text}\n\n"
             "Наблюдения (последние события, доступные тебе):\n"

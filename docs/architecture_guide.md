@@ -117,7 +117,7 @@ graph TB
 | Как агент принимает решение | `agent.py` → `AgentRunner`, `memory.py` → гибридный retrieval |
 | Какие действия доступны агенту | `actions.py` → structured actions, `spawn_agent`, `perform` |
 | Как арбитр проверяет действия | `arbiter.py` → полномочия + антифантомы + LLM-perform |
-| Как runtime-аудитор выявляет сигналы риска | `auditor.py` → rules-first detection + audit events + freeze/penalty ops |
+| Как runtime-аудитор выявляет сигналы риска | `auditor.py` → LLM-first detection + deterministic actuator + collegial review |
 | Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра |
 | Как устроено DAO-голосование | `dao.py` → кворум, порог, закрытие голосования |
 | Типизированные ID и антифантомы | `ids.py` + `entities.py` → `EntityRegistry` |

@@ -19,7 +19,7 @@ def _mk_state() -> WorldState:
     reg = EntityRegistry()
     state = WorldState(tick=1, registry=reg)
     for aid, caps in (
-        ("agent:auditor", ["audit"]),
+        ("agent:auditor", ["message"]),
         ("agent:off_1", ["dao", "message"]),
     ):
         reg.register(
@@ -472,19 +472,27 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
         {
             "version": 1,
             "title": "lc-truth-evaluation",
-            "ticks": 1,
+            "ticks": 3,
             "governance": {
                 "audit": {
                     "enabled": True,
+                    "mode": "rules",
                 }
             },
             "agents": [
                 {
-                    "agent_id": "agent:auditor",
-                    "name": "Auditor",
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
                     "internal": True,
-                    "persona": "auditor",
-                    "capabilities": ["audit"],
+                    "persona": "off1",
+                    "capabilities": ["message", "dao"],
+                },
+                {
+                    "agent_id": "agent:off_2",
+                    "name": "Off 2",
+                    "internal": True,
+                    "persona": "off2",
+                    "capabilities": ["message", "dao"],
                 }
             ],
             "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
@@ -497,28 +505,40 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     )
     mock = MockLLMProvider(
         structured_responses={
-            "Раунд (tick): 0\nТы: Auditor": {
+            "Раунд (tick): 0\nТы: Off 1": {
                 "actions": [
                     {
-                        "type": "perform",
-                        "description": "self-raise",
-                        "justification": "test",
+                        "type": "send_message",
+                        "to_id": "agent:off_2",
+                        "text": "secret",
+                        "private": True,
+                        "justification": "seed private contact",
                     }
                 ]
             },
-            "self-raise": {
-                "approved": True,
-                "reason": "ok",
-                "ops": [
+            "Раунд (tick): 0\nТы: Off 2": {"actions": [{"type": "noop", "justification": ""}]},
+            "Раунд (tick): 1\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
+            "Раунд (tick): 1\nТы: Off 2": {
+                "actions": [
                     {
-                        "op_type": "modify_reputation",
-                        "args": {
-                            "target_agent_id": "agent:auditor",
-                            "delta": 1.0,
-                            "reason": "self",
-                        },
+                        "type": "nominate_position_change",
+                        "target_agent_id": "agent:off_1",
+                        "new_title": "lead",
+                        "reason": "promote",
+                        "justification": "",
                     }
-                ],
+                ]
+            },
+            "Раунд (tick): 2\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
+            "Раунд (tick): 2\nТы: Off 2": {
+                "actions": [
+                    {
+                        "type": "cast_vote",
+                        "vote_id": "vote:1_1",
+                        "choice": "yes",
+                        "justification": "",
+                    }
+                ]
             },
         }
     )
@@ -552,5 +572,5 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert combined["governance"]["truth_total"] >= 1
     assert "fidelity" in combined
     assert scenario["title"] == "lc-truth-evaluation"
-    assert names == {"agent:auditor": "Auditor"}
+    assert names == {"agent:off_1": "Off 1", "agent:off_2": "Off 2"}
     assert status["state"] == "finished"

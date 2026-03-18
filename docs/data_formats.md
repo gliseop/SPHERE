@@ -67,7 +67,7 @@ governance:
   allow_target_self_vote: false
   audit:
     enabled: true
-    actor_id: "agent:auditor"
+    actor_id: null
     mode: "rules"
     lookback_events: 120
     private_contact_window_ticks: 3
@@ -87,14 +87,6 @@ agents:
     initial_title: "специалист"
     wants_promotion: true
 
-  - agent_id: "agent:auditor"
-    name: "Аудитор"
-    internal: true
-    persona: "Независимый аудитор."
-    capabilities: ["audit", "dao"]
-    initial_title: "специалист"
-    wants_promotion: false
-
 world:
   channels:
     - channel_id: "chan:public"
@@ -105,7 +97,7 @@ world:
       work_type: "hiring_process"
       title: "Найм в отдел"
       description: "Конкурс на вакансию."
-      participants: ["agent:off_1", "agent:auditor"]
+      participants: ["agent:off_1"]
 
 scripted_events:
   - event_id: "fork_deadline"
@@ -219,12 +211,13 @@ scripted_events:
 | `message` | `send_message`, `publish` |
 | `work` | `create_work_item`, `add_work_note`, `submit_work_proposal` |
 | `dao` | `nominate_position_change`, `cast_vote` |
-| `audit` | Право на audit-related действия (`modify_reputation` через `perform`) и роль видимого аудитора в событиях |
 | `spawn` | `spawn_agent` — создать нового участника в рантайме |
 
-Вторичные и runtime-спавненные агенты проходят фильтрацию capability-набора: движок оставляет только безопасный поднабор `message`/`work`, чтобы новые агенты не получали `audit` или право порождать следующих агентов.
+Нарративные агенты с capability `audit` больше не поддерживаются. Аудит выполняется отдельным runtime-layer (`RuntimeAuditor`), а не обычным `AgentRunner`.
 
-Важно: capability `audit` и `RuntimeAuditor` — не одно и то же. В версии v1 runtime-аудит реализован отдельным rules-first модулем `auditor.py`, который может использовать `actor_id` аудитора из конфигурации, но не сводится к обычному `AgentRunner`.
+Вторичные и runtime-спавненные агенты проходят фильтрацию capability-набора: движок оставляет только безопасный поднабор `message`/`work`, чтобы новые агенты не получали специальных governance-полномочий или право порождать следующих агентов.
+
+Runtime-аудит реализован отдельным модулем `auditor.py` и не сводится к обычному `AgentRunner`. `governance.audit.actor_id` может быть `null` или служебным `agent:*`-ID для маркировки audit-событий, но такой ID не обязан соответствовать сюжетному агенту.
 
 Для `spawn_agent`, secondary-spawn и worldgen-spawn действует дополнительное правило: новый агент должен иметь человеко-читаемое имя, а не `agent:*`, slug или абстрактную должность. Role-alias ссылки либо переиспользуют уже существующего актора, либо отклоняются.
 
@@ -245,16 +238,21 @@ scripted_events:
 | Поле | Тип | Назначение |
 |---|---|---|
 | `enabled` | `bool` | Включить runtime-аудитор |
-| `actor_id` | `agent:* \| null` | Какой agent ID использовать как `actor_id` в audit-событиях |
-| `mode` | `rules` | Режим detection; в `RuntimeAuditor` v1 поддерживается только rules-first режим |
+| `actor_id` | `agent:* \| null` | Какой служебный agent ID использовать как `actor_id` в audit-событиях; не обязан соответствовать narrative-агенту |
+| `mode` | `llm` / `hybrid` / `rules` | Режим detection; `llm` — основной путь, `rules` — fallback/debug |
 | `lookback_events` | `int` | Глубина окна recent events |
 | `private_contact_window_ticks` | `int` | Окно приватных контактов для conflict-like правил |
 | `max_findings_per_tick` | `int` | Лимит findings на тик |
+| `access_policy` | `metadata_only` / `internal` / `full_internal` | Какой объём private/internal данных раскрывается LLM-аудитору |
 | `min_confidence_to_flag` | `float` | Порог эмиссии `audit_flagged` |
+| `min_confidence_to_open_case` | `float` | Порог открытия audit-case |
 | `min_confidence_to_freeze` | `float` | Порог заморозки репутации |
+| `min_confidence_to_review` | `float` | Порог маршрутизации в collegial review |
 | `freeze_duration_ticks` | `int` | Длительность заморозки репутации в тиках |
 | `reputation_freeze_enabled` | `bool` | Разрешить `SetReputationFreezeOp` |
 | `reputation_penalty_delta` | `float \| null` | Опциональный отрицательный штраф к репутации |
+| `collegial_review_enabled` | `bool` | Разрешить route в `audit_review` |
+| `review_jury_size` | `int` | Размер review-jury для collegial review |
 
 ### Персона агента
 
@@ -393,8 +391,8 @@ JSON-файлы с результатами нарративных интерв�
 ```json
 {"tick": 1, "round": 1, "event_type": "entity_created", "actor_id": null, "agent_id": "", "payload": {"entity_id": "agent:off_1", "kind": "agent", "meta": {"name": "Козлов И.М.", "internal": true, "capabilities": ["message", "work", "dao"]}}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
 {"tick": 1, "round": 1, "event_type": "reputation_snapshot", "actor_id": null, "agent_id": "agent:off_1", "payload": {"target_agent_id": "agent:off_1", "score": 0.0, "internal": true, "frozen": false, "title": "специалист"}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
-{"tick": 2, "round": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"to_id": "agent:auditor", "text": "..."}, "audience": ["agent:off_1", "agent:auditor"], "timestamp": "..."}
-{"tick": 2, "round": 2, "event_type": "audit_flagged", "actor_id": "agent:auditor", "agent_id": "agent:auditor", "payload": {"finding_id": "finding:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_1", "related_target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact"}, "audience": ["aud:internal"], "timestamp": "..."}
+{"tick": 2, "round": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"to_id": "agent:off_2", "text": "..."}, "audience": ["agent:off_1", "agent:off_2"], "timestamp": "..."}
+{"tick": 2, "round": 2, "event_type": "audit_flagged", "actor_id": null, "agent_id": "", "payload": {"finding_id": "finding:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_1", "related_target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact"}, "audience": ["aud:internal"], "timestamp": "..."}
 {"tick": 2, "round": 2, "event_type": "arbiter_approved", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"action_type": "send_message"}, "audience": ["aud:internal"], "timestamp": "..."}
 ```
 
@@ -422,7 +420,12 @@ JSON-файлы с результатами нарративных интерв�
 | `audit_flagged` | Runtime-аудитор зафиксировал finding |
 | `audit_case_opened` | По finding открыт audit-case |
 | `audit_escalated` | Кейc эскалирован в санкционный/процедурный слой |
+| `audit_explanation_requested` | Аудит запросил объяснение по открытому кейсу |
+| `audit_documents_requested` | Аудит запросил документы/артефакты по кейсу |
+| `audit_monitoring_enabled` | Для кейса включено усиленное наблюдение |
 | `audit_case_closed` | Audit-case закрыт |
+| `review_case_opened` | Открыто collegial review по audit-case |
+| `review_case_closed` | Collegial review закрыто |
 | `audit_runtime_error` | Ошибка runtime-аудитора на тике |
 | `arbiter_approved` | Арбитр одобрил действие |
 | `arbiter_rejected` | Арбитр отклонил действие |
@@ -465,8 +468,7 @@ JSON-файлы с результатами нарративных интерв�
 ```json
 // names.json
 {
-  "agent:off_1": "Козлов И.М.",
-  "agent:auditor": "Аудитор"
+  "agent:off_1": "Козлов И.М."
 }
 ```
 
@@ -490,12 +492,12 @@ JSON-файлы с результатами нарративных интерв�
 ```json
 {
   "tick": 2,
-  "subject_agent_id": "agent:auditor",
+  "subject_agent_id": "agent:off_1",
   "violation_type": "self_reputation_award",
   "status": "committed",
   "severity": "high",
   "confidence": 1.0,
-  "target_agent_id": "agent:auditor",
+  "target_agent_id": "agent:off_1",
   "evidence_refs": [{"tick": 2, "event_type": "reputation_modified", "timestamp": "2026-03-05T10:31:12.345678+00:00"}],
   "rationale": "Агент повысил собственную репутацию."
 }

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .entities import EntityRecord
@@ -20,7 +20,7 @@ from .ids import (
     parse_typed_id,
 )
 from .persona import PersonaArtifact
-from .state import AgentState, Vote, WorkItem, WorldState
+from .state import AgentState, AuditCase, Vote, WorkItem, WorldState
 from .utils import normalize_agent_display_name
 
 
@@ -382,6 +382,96 @@ class SetReputationFreezeOp:
 
 
 @dataclass(frozen=True, slots=True)
+class OpenAuditCaseOp:
+    """Открыть audit-case в состоянии мира."""
+
+    actor_id: str | None
+    case_id: str
+    finding_id: str
+    subject_agent_id: str
+    risk_family: str
+    violation_type: str
+    summary: str
+    recommended_action: str
+    confidence: float
+    target_agent_id: str | None = None
+    beneficiary: str | None = None
+    related_agent_ids: list[str] | None = None
+    evidence_refs: list[dict[str, Any]] | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        if self.case_id in state.audit_cases:
+            raise ValueError(f"Audit case already exists: {self.case_id!r}")
+        state.audit_cases[self.case_id] = AuditCase(
+            case_id=self.case_id,
+            finding_id=self.finding_id,
+            created_tick=state.tick,
+            subject_agent_id=self.subject_agent_id,
+            target_agent_id=self.target_agent_id,
+            risk_family=self.risk_family,
+            violation_type=self.violation_type,
+            summary=self.summary,
+            recommended_action=self.recommended_action,
+            confidence=float(self.confidence),
+            beneficiary=self.beneficiary,
+            related_agent_ids=list(self.related_agent_ids or []),
+            evidence_refs=list(self.evidence_refs or []),
+        )
+        return [
+            Event(
+                tick=state.tick,
+                event_type="audit_case_opened",
+                actor_id=self.actor_id,
+                payload={
+                    "case_id": self.case_id,
+                    "finding_id": self.finding_id,
+                    "subject_agent_id": self.subject_agent_id,
+                    "target_agent_id": self.subject_agent_id,
+                    "related_target_agent_id": self.target_agent_id,
+                    "risk_family": self.risk_family,
+                    "violation_type": self.violation_type,
+                    "summary": self.summary,
+                    "recommended_action": self.recommended_action,
+                    "confidence": self.confidence,
+                    "beneficiary": self.beneficiary,
+                    "related_agent_ids": list(self.related_agent_ids or []),
+                    "evidence_refs": list(self.evidence_refs or []),
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class CloseAuditCaseOp:
+    """Закрыть audit-case."""
+
+    actor_id: str | None
+    case_id: str
+    result: str
+    reason: str = ""
+
+    def apply(self, state: WorldState) -> list[Event]:
+        case = state.audit_cases.get(self.case_id)
+        if case is None:
+            raise ValueError(f"Audit case not found: {self.case_id!r}")
+        if case.status == "closed":
+            raise ValueError(f"Audit case already closed: {self.case_id!r}")
+        case.status = "closed"
+        case.result = self.result
+        case.result_reason = self.reason
+        return [
+            Event(
+                tick=state.tick,
+                event_type="audit_case_closed",
+                actor_id=self.actor_id,
+                payload={"case_id": self.case_id, "result": self.result, "reason": self.reason},
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
 class OpenVoteOp:
     """Открыть DAO-голосование."""
 
@@ -393,6 +483,9 @@ class OpenVoteOp:
     new_title: str
     reason: str
     voters: list[str]
+    vote_type: str = "position_change"
+    summary: str = ""
+    metadata: dict[str, Any] | None = None
 
     def apply(self, state: WorldState) -> list[Event]:
         ensure_kind(self.vote_id, EntityKind.VOTE)
@@ -411,12 +504,12 @@ class OpenVoteOp:
                 kind=EntityKind.VOTE,
                 created_by=self.created_by,
                 created_tick=self.created_tick,
-                meta={"vote_type": "position_change"},
+                meta={"vote_type": self.vote_type},
             )
         )
         state.votes[self.vote_id] = Vote(
             vote_id=self.vote_id,
-            vote_type="position_change",
+            vote_type=self.vote_type,
             created_by=self.created_by,
             created_tick=self.created_tick,
             closes_tick=self.closes_tick,
@@ -424,24 +517,40 @@ class OpenVoteOp:
             new_title=self.new_title,
             reason=self.reason,
             voters=list(self.voters),
+            metadata=dict(self.metadata or {}),
         )
-        return [
+        payload = {
+            "vote_id": self.vote_id,
+            "vote_type": self.vote_type,
+            "target_agent_id": self.target_agent_id,
+            "new_title": self.new_title,
+            "reason": self.reason,
+            "summary": self.summary,
+            "voters": list(self.voters),
+            "closes_tick": self.closes_tick,
+        }
+        if self.metadata:
+            payload["metadata"] = dict(self.metadata)
+        events = [
             Event(
                 tick=state.tick,
                 event_type="vote_opened",
                 actor_id=self.created_by,
-                payload={
-                    "vote_id": self.vote_id,
-                    "vote_type": "position_change",
-                    "target_agent_id": self.target_agent_id,
-                    "new_title": self.new_title,
-                    "reason": self.reason,
-                    "voters": list(self.voters),
-                    "closes_tick": self.closes_tick,
-                },
+                payload=payload,
                 audience=[INTERNAL_AUDIENCE],
             )
         ]
+        if self.vote_type == "audit_review":
+            events.append(
+                Event(
+                    tick=state.tick,
+                    event_type="review_case_opened",
+                    actor_id=self.created_by,
+                    payload=payload,
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            )
+        return events
 
 
 @dataclass(frozen=True, slots=True)
@@ -517,15 +626,29 @@ class CloseVoteOp:
         vote.status = "closed"
         vote.result = self.result
         vote.result_reason = self.reason
-        return [
+        payload = {"vote_id": self.vote_id, "result": self.result, "reason": self.reason, "vote_type": vote.vote_type}
+        if vote.metadata:
+            payload["metadata"] = dict(vote.metadata)
+        events = [
             Event(
                 tick=state.tick,
                 event_type="vote_closed",
                 actor_id=None,
-                payload={"vote_id": self.vote_id, "result": self.result, "reason": self.reason},
+                payload=payload,
                 audience=[INTERNAL_AUDIENCE],
             )
         ]
+        if vote.vote_type == "audit_review":
+            events.append(
+                Event(
+                    tick=state.tick,
+                    event_type="review_case_closed",
+                    actor_id=None,
+                    payload=payload,
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            )
+        return events
 
 
 @dataclass(frozen=True, slots=True)

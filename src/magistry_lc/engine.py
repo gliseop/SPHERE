@@ -207,7 +207,11 @@ class WorldEngine:
             runtime=self.cfg.runtime,
             temperature=self.cfg.llm.temperature,
         )
-        auditor = RuntimeAuditor(cfg=self.cfg.governance.audit)
+        auditor = RuntimeAuditor(
+            cfg=self.cfg.governance.audit,
+            llm=llm,
+            temperature=self.cfg.llm.temperature,
+        )
         worldgen = WorldGenerator(llm=llm, temperature=self.cfg.llm.temperature)
 
         runners: dict[str, AgentRunner] = {}
@@ -2144,6 +2148,16 @@ class WorldEngine:
                 return f"Открыт аудит-кейс {ev.payload.get('case_id','')} для {ev.payload.get('target_agent_id','')}"
             if ev.event_type == "audit_escalated":
                 return f"Аудит эскалировал кейс {ev.payload.get('case_id','')} route={ev.payload.get('route','')}"
+            if ev.event_type == "audit_explanation_requested":
+                return f"Аудит запросил объяснение по кейсу {ev.payload.get('case_id','')}"
+            if ev.event_type == "audit_documents_requested":
+                return f"Аудит запросил документы по кейсу {ev.payload.get('case_id','')}"
+            if ev.event_type == "audit_monitoring_enabled":
+                return f"Аудит включил усиленное наблюдение по кейсу {ev.payload.get('case_id','')}"
+            if ev.event_type == "review_case_opened":
+                return f"Открыто коллегиальное review по кейсу {ev.payload.get('metadata',{}).get('case_id','')}"
+            if ev.event_type == "review_case_closed":
+                return f"Коллегиальное review закрыто {ev.payload.get('metadata',{}).get('case_id','')}"
             if ev.event_type == "reputation_modified":
                 return (
                     f"Репутация изменена для {ev.payload.get('target_agent_id','')}: "

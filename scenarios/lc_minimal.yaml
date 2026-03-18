@@ -23,11 +23,14 @@ runtime:
 
 governance:
   position_policy: "dao"
-  dao_voters: ["agent:off_1"]   # Только off_1 голосует; аудитор может инициировать, но не голосовать.
+  dao_voters: ["agent:off_1"]
   quorum: 0.5
   pass_threshold: 0.5
   vote_duration_ticks: 2
   require_consent: true
+  audit:
+    enabled: true
+    actor_id: null
 
 agents:
   - agent_id: "agent:off_1"
@@ -37,14 +40,6 @@ agents:
     capabilities: ["message", "work", "dao"]
     initial_title: "специалист"
     wants_promotion: true
-
-  - agent_id: "agent:auditor"
-    name: "Аудитор"
-    internal: true
-    persona: "Независимый ИИ-аудитор. Концентрируется на прозрачности и соблюдении процедур."
-    capabilities: ["audit", "message", "work", "dao"]
-    initial_title: "аудитор"
-    wants_promotion: false
 
 world:
   channels:
@@ -56,5 +51,5 @@ world:
       work_type: "hiring_process"
       title: "Найм в отдел"
       description: "Идёт конкурс на вакансию. Есть риск кумовства."
-      participants: ["agent:off_1", "agent:auditor"]
+      participants: ["agent:off_1"]
 

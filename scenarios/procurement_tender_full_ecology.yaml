@@ -49,7 +49,7 @@ governance:
   allow_target_self_vote: false
   audit:
     enabled: true
-    actor_id: "agent:auditor"
+    actor_id: null
     lookback_events: 160
     private_contact_window_ticks: 3
     min_confidence_to_flag: 0.6
@@ -95,18 +95,6 @@ agents:
     initial_title: "директор"
     wants_promotion: false
 
-  - agent_id: "agent:auditor"
-    name: "Аудитор"
-    internal: true
-    persona: >
-      Независимый ИИ-аудитор, назначенный для мониторинга закупочных процедур.
-      Проверяет документы, сообщения, рабочие записи и голосования. Действует
-      строго по фактам и должен переводить audit-findings в реальные последствия
-      для репутации и карьерной динамики.
-    capabilities: ["audit", "message", "work", "dao"]
-    initial_title: "аудитор"
-    wants_promotion: false
-
   - agent_id: "agent:deputy"
     name: "Марченко Т.Л."
     internal: true
@@ -144,4 +132,4 @@ world:
       description: >
         Плановый аудит закупочных процедур за первый квартал. Проверяется
         соблюдение 44-ФЗ, обоснованность цены и отсутствие конфликта интересов.
-      participants: ["agent:auditor", "agent:head", "agent:spec"]
+      participants: ["agent:head", "agent:spec"]

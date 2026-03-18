@@ -22,14 +22,13 @@
 - [arbiter.py](../src/magistry_lc/arbiter.py) — процессуальная проверка допустимости действий;
 - [dao.py](../src/magistry_lc/dao.py) — механизм голосований;
 - [ops.py](../src/magistry_lc/ops.py) — операции вроде `ModifyReputationOp`, `OpenVoteOp`;
-- capability `audit` — право выполнять некоторые audit-related действия;
 - [oracle.py](../src/magistry_lc/oracle.py) — post-hoc анализ нарушений по `events.jsonl`.
 
 Сейчас в проекте нет:
 
 - отдельного runtime-аудитора как модуля или агента, который анализирует события в ходе симуляции и сам генерирует `audit_flagged` / `case_opened` / `risk_signal_emitted`.
 
-Поэтому capability `audit` и отдельный аудитный слой пока нельзя считать одним и тем же.
+Нарративный capability `audit` для обычных агентов больше не нужен; аудитный слой должен существовать отдельно от сюжетных агентов.
 
 ## Зачем нужен отдельный runtime-auditor
 
@@ -66,13 +65,13 @@
 
 ### Что делать с образом аудитора в мире
 
-Если нужен narratively видимый «аудитор», можно:
+Сюжетный агент-аудитор не требуется.
 
-- оставить в сценарии агента `agent:auditor` с capability `audit`;
-- использовать его `agent_id` как `actor_id` для audit-событий;
-- но не строить detection через обычный `AgentRunner`.
+Рекомендуемый вариант:
 
-То есть внешний образ аудитора может существовать как world-entity, а логика детекции при этом остаётся отдельным модулем.
+- не заводить обычного narrative-agent для аудита;
+- использовать `actor_id=null` или служебный `agent:*`-ID только как метку audit-событий;
+- всю detection-логику держать вне `AgentRunner`.
 
 ## Ответственность runtime-auditor
 
@@ -181,7 +180,7 @@ class AuditFinding(BaseModel):
 ```python
 class AuditRuntimeConfig(BaseModel):
     enabled: bool = False
-    actor_id: str = "agent:auditor"
+    actor_id: str | None = None
     mode: Literal["rules", "hybrid", "llm"] = "hybrid"
     lookback_events: int = 120
     access_policy: Literal["metadata_only", "internal", "full_internal"] = "internal"

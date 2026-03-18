@@ -65,7 +65,7 @@ def _compose_schema() -> dict[str, Any]:
                         "wants_promotion": {"type": "boolean"},
                         "capabilities": {
                             "type": "array",
-                            "items": {"type": "string", "enum": ["message", "work", "dao", "audit", "spawn"]},
+                            "items": {"type": "string", "enum": ["message", "work", "dao", "spawn"]},
                         },
                     },
                     "required": ["agent_id", "name", "internal"],
@@ -195,7 +195,7 @@ class WorldComposer:
             "Ты — генератор сценариев для симуляции организационных процессов (MAGISTRY-LC).\n"
             "Сгенерируй состав мира и агентов из описания.\n"
             "Жёсткие требования:\n"
-            "- Используй осмысленные типизированные ID на ЛАТИНИЦЕ: agent:kozlov, agent:auditor, org:admin, chan:public, work:tender и т.п.\n"
+            "- Используй осмысленные типизированные ID на ЛАТИНИЦЕ: agent:kozlov, agent:controller, org:admin, chan:public, work:tender и т.п.\n"
             "- НЕ используй числовые ID (agent:1, chan:2) и кириллицу в ID. Только латинские буквы, цифры, дефисы, подчёркивания.\n"
             "- Вторичные агенты должны появляться по ситуации (не фиксированным числом).\n"
             "- Не используй числовые параметры личности (greed/fear/honesty/etc). Только текст.\n"
@@ -204,9 +204,8 @@ class WorldComposer:
             "  * message — отправка сообщений и публикация в каналах\n"
             "  * work — создание дел, заметок, предложений\n"
             "  * dao — номинации, голосования, управление должностями\n"
-            "  * audit — аудиторские проверки, изменение репутации\n"
             "  * spawn — право вводить нового участника через structured action spawn_agent\n"
-            "  Большинству агентов нужны как минимум message и work. Аудиторам добавь audit.\n"
+            "  Большинству агентов нужны как минимум message и work.\n"
             f"- Пиши на языке: {language!r}.\n"
             "Ответ: строго JSON по схеме.\n"
         )

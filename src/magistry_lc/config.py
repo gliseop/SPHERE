@@ -318,15 +318,20 @@ class AuditRuntimeConfig(BaseModel):
 
     enabled: bool = False
     actor_id: str | None = None
-    mode: Literal["rules", "hybrid", "llm"] = "rules"
+    mode: Literal["rules", "hybrid", "llm"] = "llm"
     lookback_events: int = 120
     private_contact_window_ticks: int = 3
     max_findings_per_tick: int = 8
+    access_policy: Literal["metadata_only", "internal", "full_internal"] = "internal"
     min_confidence_to_flag: float = 0.6
+    min_confidence_to_open_case: float = 0.6
     min_confidence_to_freeze: float = 0.85
+    min_confidence_to_review: float = 0.72
     freeze_duration_ticks: int = 3
     reputation_freeze_enabled: bool = True
     reputation_penalty_delta: float | None = None
+    collegial_review_enabled: bool = True
+    review_jury_size: int = 3
 
     @field_validator("actor_id")
     @classmethod
@@ -336,21 +341,25 @@ class AuditRuntimeConfig(BaseModel):
         ensure_kind(v, EntityKind.AGENT)
         return v
 
-    @field_validator("mode")
-    @classmethod
-    def _validate_mode_supported(cls, v: Literal["rules", "hybrid", "llm"]) -> Literal["rules", "hybrid", "llm"]:
-        if v != "rules":
-            raise ValueError("RuntimeAuditor v1 supports only audit.mode='rules'")
-        return v
-
-    @field_validator("lookback_events", "private_contact_window_ticks", "max_findings_per_tick", "freeze_duration_ticks")
+    @field_validator(
+        "lookback_events",
+        "private_contact_window_ticks",
+        "max_findings_per_tick",
+        "freeze_duration_ticks",
+        "review_jury_size",
+    )
     @classmethod
     def _validate_non_negative_int(cls, v: int) -> int:
         if v < 0:
             raise ValueError("value must be >= 0")
         return v
 
-    @field_validator("min_confidence_to_flag", "min_confidence_to_freeze")
+    @field_validator(
+        "min_confidence_to_flag",
+        "min_confidence_to_open_case",
+        "min_confidence_to_freeze",
+        "min_confidence_to_review",
+    )
     @classmethod
     def _validate_confidence(cls, v: float) -> float:
         if not (0.0 <= v <= 1.0):
@@ -440,6 +449,23 @@ class AgentConfig(BaseModel):
         if v < 0.0:
             raise ValueError("initial_reputation must be >= 0")
         return float(v)
+
+    @field_validator("capabilities")
+    @classmethod
+    def _validate_capabilities(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for raw in v or []:
+            cap = str(raw or "").strip()
+            if not cap or cap in seen:
+                continue
+            if cap == "audit":
+                raise ValueError(
+                    "narrative agents with capability 'audit' are not supported; use governance.audit runtime layer instead"
+                )
+            seen.add(cap)
+            out.append(cap)
+        return out
 
 
 class ChannelConfig(BaseModel):

@@ -1,12 +1,13 @@
 {
   "version": 1,
   "title": "Кумовство при найме",
-  "description": "Найм сотрудника с давлением со стороны внутренних связей. Репутационный аудит в G2 может замораживать доверие к участникам процесса.",
+  "description": "Найм сотрудника с давлением со стороны внутренних связей. Runtime-аудит в G2 может замораживать траекторию доверия к участникам процесса.",
   "seed": 99,
   "ticks": 25,
   "governance": {
     "audit": {
       "enabled": true,
+      "actor_id": null,
       "reputation_freeze_enabled": true,
       "reputation_penalty_delta": null
     }
@@ -59,18 +60,6 @@
       "initial_reputation": 8.5,
       "initial_title": "кандидат",
       "wants_promotion": false
-    },
-    {
-      "agent_id": "agent:auditor",
-      "name": "Аудитор",
-      "internal": true,
-      "persona": {
-        "summary": "Репутационный аудитор, отслеживающий признаки кумовства и конфликтов интересов."
-      },
-      "capabilities": ["audit", "message", "work", "dao"],
-      "initial_reputation": 9.0,
-      "initial_title": "независимый аудитор",
-      "wants_promotion": false
     }
   ],
   "world": {
@@ -87,7 +76,7 @@
         "work_type": "hiring_process",
         "title": "Найм инженера в отдел",
         "description": "Вакансия инженера с конкурирующими кандидатами и риском кумовства.",
-        "participants": ["agent:off_1", "agent:off_2", "agent:cand_1", "agent:cand_2", "agent:auditor"]
+        "participants": ["agent:off_1", "agent:off_2", "agent:cand_1", "agent:cand_2"]
       }
     ]
   }
