@@ -56,6 +56,7 @@ class AuditFinding(BaseModel):
     summary: str
     mechanism: str = ""
     beneficiary: str | None = None
+    risk_tags: list[str] = Field(default_factory=list)
     recommended_action: Literal[
         "none",
         "signal_only",
@@ -70,6 +71,7 @@ class AuditFinding(BaseModel):
     target_agent_id: str | None = None
     related_agent_ids: list[str] = Field(default_factory=list)
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    notes: str = ""
 
 
 class AuditOutcome(BaseModel):
@@ -93,6 +95,7 @@ class _RawAuditFindingModel(BaseModel):
     summary: str
     mechanism: str = ""
     beneficiary: str | None = None
+    risk_tags: list[str] = Field(default_factory=list)
     recommended_action: Literal[
         "none",
         "signal_only",
@@ -106,6 +109,7 @@ class _RawAuditFindingModel(BaseModel):
     ] = "signal_only"
     related_agent_ids: list[str] = Field(default_factory=list)
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    notes: str = ""
 
 
 def _audit_schema(*, max_findings: int) -> dict[str, Any]:
@@ -126,9 +130,11 @@ def _audit_schema(*, max_findings: int) -> dict[str, Any]:
                 "summary": {"type": "string"},
                 "mechanism": {"type": "string"},
                 "beneficiary": {"type": ["string", "null"]},
+                "risk_tags": {"type": "array", "items": {"type": "string"}},
                 "recommended_action": {"type": "string", "enum": sorted(_RECOMMENDED_ACTIONS)},
                 "related_agent_ids": {"type": "array", "items": {"type": "string"}},
                 "evidence_refs": {"type": "array", "items": {"type": "object"}},
+                "notes": {"type": "string"},
             },
             "required": [
                 "subject_agent_id",
@@ -274,9 +280,11 @@ class RuntimeAuditor:
                     summary=raw.summary.strip(),
                     mechanism=(raw.mechanism or "").strip(),
                     beneficiary=raw.beneficiary,
+                    risk_tags=[str(tag).strip() for tag in raw.risk_tags if str(tag).strip()],
                     recommended_action=raw.recommended_action,
                     related_agent_ids=[aid for aid in raw.related_agent_ids if aid in state.agents],
                     evidence_refs=list(raw.evidence_refs),
+                    notes=(raw.notes or "").strip(),
                 )
             )
         return findings
@@ -633,6 +641,7 @@ class RuntimeAuditor:
                         confidence=0.99,
                         summary="Агент повысил собственную репутацию.",
                         mechanism="self reputation modification",
+                        risk_tags=["governance_abuse", "self_reward"],
                         recommended_action="freeze_reputation_growth",
                         evidence_refs=[_event_ref(event)],
                     )
@@ -652,6 +661,7 @@ class RuntimeAuditor:
                             confidence=confidence,
                             summary="Агент изменил репутацию после недавних приватных контактов с адресатом.",
                             mechanism="positive reputation change after private contact",
+                            risk_tags=["governance_abuse", "private_coordination"],
                             recommended_action="freeze_reputation_growth" if confidence >= self.cfg.min_confidence_to_freeze else "open_case",
                             related_agent_ids=[target_id],
                             evidence_refs=[_event_ref(event)],
@@ -673,6 +683,7 @@ class RuntimeAuditor:
                         confidence=0.72,
                         summary="Агент инициировал голосование о собственном повышении.",
                         mechanism="self nomination",
+                        risk_tags=["governance_abuse", "self_nomination"],
                         recommended_action="open_case",
                         evidence_refs=[_event_ref(event)],
                     )
@@ -692,6 +703,7 @@ class RuntimeAuditor:
                             confidence=confidence,
                             summary="Агент открыл голосование после недавних приватных контактов с целью номинации.",
                             mechanism="nomination after private contact",
+                            risk_tags=["preferential_treatment", "private_coordination"],
                             recommended_action="route_to_collegial_review" if confidence >= self.cfg.min_confidence_to_review else "open_case",
                             related_agent_ids=[target_id],
                             evidence_refs=[_event_ref(event)],
@@ -719,6 +731,7 @@ class RuntimeAuditor:
                             confidence=confidence,
                             summary="Агент поддержал голосование после недавних приватных контактов с целью голосования.",
                             mechanism="support vote after private contact",
+                            risk_tags=["preferential_treatment", "private_coordination"],
                             recommended_action="route_to_collegial_review" if confidence >= self.cfg.min_confidence_to_review else "open_case",
                             related_agent_ids=[target_id],
                             evidence_refs=[_event_ref(event)],
@@ -765,9 +778,11 @@ class RuntimeAuditor:
             "summary": finding.summary,
             "mechanism": finding.mechanism,
             "beneficiary": finding.beneficiary,
+            "risk_tags": list(finding.risk_tags),
             "recommended_action": finding.recommended_action,
             "related_agent_ids": list(finding.related_agent_ids),
             "evidence_refs": list(finding.evidence_refs),
+            "notes": finding.notes,
         }
 
     def _make_finding(
@@ -795,8 +810,10 @@ class RuntimeAuditor:
         target_agent_id: str | None = None,
         violation_type_freeform: str = "",
         beneficiary: str | None = None,
+        risk_tags: list[str] | None = None,
         related_agent_ids: list[str] | None = None,
         evidence_refs: list[dict[str, Any]] | None = None,
+        notes: str = "",
     ) -> AuditFinding:
         normalized_family = risk_family if risk_family in _RISK_FAMILIES else "other"
         key = {
@@ -821,9 +838,11 @@ class RuntimeAuditor:
             summary=summary,
             mechanism=mechanism,
             beneficiary=beneficiary,
+            risk_tags=list(risk_tags or []),
             recommended_action=recommended_action,
             related_agent_ids=list(related_agent_ids or []),
             evidence_refs=list(evidence_refs or []),
+            notes=notes,
         )
 
     @staticmethod

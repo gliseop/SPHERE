@@ -148,7 +148,7 @@ flowchart TD
 
 После формирования фактических `tick_events`, но до эмиссии audit-интервенций, движок прогоняет deterministic `TruthDetector`. Он пишет sidecar `truth.jsonl` с каноническими `TruthRecord`, которые не зависят от того, сработал ли runtime-аудитор.
 
-Опционально (`runtime.freeform_truth_enabled=true`) движок дополнительно пишет `truth_freeform.jsonl` через `FreeformTruthRecorder`. Это LLM-based post-hoc слой, который записывает нарушения в свободной форме по схеме (`summary`, `mechanism`, `beneficiary`, `evidence_refs`), не подменяя собой deterministic `truth.jsonl`.
+Опционально (`runtime.freeform_truth_enabled=true`) движок дополнительно пишет `truth_freeform.jsonl` через `FreeformTruthRecorder`. Это LLM-based post-hoc слой, который записывает нарушения в свободной форме по unified finding schema (`summary`, `mechanism`, `beneficiary`, `risk_tags`, `evidence_refs`), не подменяя собой deterministic `truth.jsonl`.
 
 В ходе исполнения движок также поддерживает `status.json`: sidecar с heartbeat-обновлением на каждом тике и финальным состоянием `finished` или `failed`. Web backend использует его для более надёжного обнаружения живых CLI-прогонов.
 
@@ -174,7 +174,11 @@ flowchart TD
 - `precision`;
 - `recall`;
 - `f1`;
+- `semantic_true_positive` / `semantic_false_positive` / `semantic_false_negative`;
+- `semantic_precision` / `semantic_recall` / `semantic_f1`;
 - сводку `by_violation_type`.
+
+Строгая часть (`true_positive`, `precision`, `recall`) по-прежнему опирается на exact-match baseline. Semantic-часть использует finding matcher: subject/target/evidence overlap + `risk_tags` + similarity `summary/mechanism`.
 
 ## Операции состояния (StateOp → Event)
 

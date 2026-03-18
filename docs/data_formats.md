@@ -516,6 +516,14 @@ JSON-файлы с результатами нарративных интерв�
 - `non_escalation_under_pressure`;
 - `partial_disclosure_under_deadline_pressure`.
 
+`truth.jsonl` постепенно смещается в сторону unified finding contract:
+
+- `summary`;
+- `mechanism`;
+- `beneficiary`;
+- `risk_tags`;
+- `evidence_refs`.
+
 ### Freeform truth (`truth_freeform.jsonl`)
 
 Опциональный LLM-sidecar, который пишет richer truth в свободной форме по схеме.
@@ -533,6 +541,8 @@ JSON-файлы с результатами нарративных интерв�
   "summary": "Руководитель давит на специалиста, чтобы та не эскалировала подозрительное совпадение в документах.",
   "mechanism": "private_pressure",
   "beneficiary": "agent:head",
+  "risk_tags": ["pressure_not_to_escalate", "non_disclosure"],
+  "severity": "medium",
   "confidence": 0.74,
   "evidence_refs": [{"tick": 7, "event_type": "message_sent"}],
   "notes": "Контекст указывает на страх карьерных последствий."
@@ -561,13 +571,26 @@ JSON-файлы с результатами нарративных интерв�
   "precision": 0.5,
   "recall": 0.6667,
   "f1": 0.5714,
+  "semantic_true_positive": 3,
+  "semantic_false_positive": 1,
+  "semantic_false_negative": 0,
+  "semantic_precision": 0.75,
+  "semantic_recall": 1.0,
+  "semantic_f1": 0.8571,
   "by_violation_type": {
     "self_reputation_award": {"truth": 1, "signals": 1, "tp": 1, "fp": 0, "fn": 0}
   }
 }
 ```
 
-При сопоставлении runtime-сигналов с truth-layer учитываются `related_target_agent_id` и `evidence_refs` из `audit_flagged`, поэтому два однотипных finding'а одного субъекта в один и тот же тик считаются двумя отдельными случаями, если у них разный контекст или разное исходное событие (например, разные `vote_id` или разные `timestamp` в `evidence_refs`).
+При сопоставлении runtime-сигналов с truth-layer сохраняется strict baseline (exact match), но дополнительно считается semantic matching:
+
+- совпадение subject;
+- temporal proximity;
+- overlap по `target_agent_id` / `beneficiary`;
+- overlap по `evidence_refs`;
+- overlap по `risk_tags`;
+- similarity `summary + mechanism`.
 
 ### Fidelity sidecar (`fidelity.json`)
 

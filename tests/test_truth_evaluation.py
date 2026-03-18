@@ -467,6 +467,52 @@ def test_evaluate_run_counts_multiple_same_type_violations_same_tick(tmp_path: P
     assert summary.false_negative == 0
 
 
+def test_evaluate_run_semantic_match_works_when_labels_differ(tmp_path: Path) -> None:
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.append(
+        TruthRecord(
+            tick=7,
+            subject_agent_id="agent:head",
+            target_agent_id="agent:contractor",
+            violation_type="partial_disclosure_under_deadline_pressure",
+            summary="Под давлением срока агент публично уверяет, что всё полностью раскрыто.",
+            mechanism="public reassurance under deadline pressure with unresolved conflict signal",
+            beneficiary="agent:head",
+            risk_tags=["partial_disclosure", "deadline_pressure", "narrative_management"],
+            evidence_refs=[{"tick": 7, "event_type": "message_sent", "actor_id": "agent:head"}],
+        )
+    )
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "tick": 7,
+                "event_type": "audit_flagged",
+                "actor_id": None,
+                "payload": {
+                    "subject_agent_id": "agent:head",
+                    "related_target_agent_id": "agent:contractor",
+                    "violation_type": "non_disclosure_under_deadline_pressure",
+                    "summary": "Сдвиг сроков и публичные заверения скрывают неполное раскрытие.",
+                    "mechanism": "public reassurance under deadline pressure with unresolved conflict signal",
+                    "beneficiary": "agent:head",
+                    "risk_tags": ["partial_disclosure", "deadline_pressure", "narrative_management"],
+                    "evidence_refs": [{"tick": 7, "event_type": "message_sent", "actor_id": "agent:head"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(events_path=tmp_path / "events.jsonl", truth_path=tmp_path / "truth.jsonl")
+
+    assert summary.true_positive == 0
+    assert summary.semantic_true_positive == 1
+    assert summary.semantic_false_positive == 0
+    assert summary.semantic_false_negative == 0
+
+
 def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     cfg = ScenarioConfig.model_validate(
         {

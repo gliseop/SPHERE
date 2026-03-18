@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,6 +37,8 @@ class FreeformTruthRecord(BaseModel):
     summary: str
     mechanism: str = ""
     beneficiary: str | None = None
+    risk_tags: list[str] = Field(default_factory=list)
+    severity: Literal["low", "medium", "high"] = "medium"
     confidence: float = 0.0
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
     notes: str = ""
@@ -75,6 +77,8 @@ def _freeform_truth_schema() -> dict[str, Any]:
                 "summary": {"type": "string"},
                 "mechanism": {"type": "string"},
                 "beneficiary": {"type": ["string", "null"]},
+                "risk_tags": {"type": "array", "items": {"type": "string"}},
+                "severity": {"type": "string", "enum": ["low", "medium", "high"]},
                 "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                 "evidence_refs": {"type": "array", "items": {"type": "object"}},
                 "notes": {"type": "string"},
