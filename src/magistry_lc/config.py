@@ -507,6 +507,134 @@ class OrgConfig(BaseModel):
         return v
 
 
+class InstitutionRegimeConfig(BaseModel):
+    """Начальный операционный режим организации как части среды."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    org_id: str
+    operating_mode: str = "normal"
+    transparency_mode: str = "routine"
+    access_mode: str = "internal"
+    security_mode: str = "routine"
+    capture_risk: str = ""
+    linked_zone_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("org_id")
+    @classmethod
+    def _validate_org_id(cls, v: str) -> str:
+        ensure_kind(v, EntityKind.ORG)
+        return v
+
+    @field_validator("linked_zone_ids")
+    @classmethod
+    def _validate_linked_zone_ids(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for item in v or []:
+            value = str(item or "").strip()
+            if not value:
+                continue
+            ensure_kind(value, EntityKind.ZONE)
+            out.append(value)
+        return out
+
+
+class ZoneConfig(BaseModel):
+    """Зона/территория как часть стартовой среды."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    zone_id: str
+    title: str
+    zone_type: str = "office"
+    primary_org_id: str | None = None
+    access_mode: str = "controlled"
+    transparency_mode: str = "internal"
+    security_level: str = "routine"
+
+    @field_validator("zone_id")
+    @classmethod
+    def _validate_zone_id(cls, v: str) -> str:
+        ensure_kind(v, EntityKind.ZONE)
+        return v
+
+    @field_validator("primary_org_id")
+    @classmethod
+    def _validate_primary_org_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.ORG)
+        return v
+
+
+class ResourcePoolConfig(BaseModel):
+    """Ресурсный контур стартовой среды."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    title: str
+    owner_org_id: str | None = None
+    quantity: float = 0.0
+    unit: str = ""
+    status: str = "stable"
+    pressure: str = ""
+
+    @field_validator("resource_id")
+    @classmethod
+    def _validate_resource_id(cls, v: str) -> str:
+        ensure_kind(v, EntityKind.RESOURCE)
+        return v
+
+    @field_validator("owner_org_id")
+    @classmethod
+    def _validate_owner_org_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.ORG)
+        return v
+
+    @field_validator("quantity")
+    @classmethod
+    def _validate_quantity(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("resource quantity must be >= 0")
+        return float(v)
+
+
+class InformationClimateConfig(BaseModel):
+    """Начальный информационный фон среды."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    public_mood: str = ""
+    oversight_attention: str = ""
+    media_pressure: str = ""
+    narrative_temperature: str = ""
+    active_signals: list[str] = Field(default_factory=list)
+
+    @field_validator("active_signals")
+    @classmethod
+    def _normalize_active_signals(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for item in v or []:
+            value = str(item or "").strip()
+            if value:
+                out.append(value)
+        return out
+
+
+class EnvironmentConfig(BaseModel):
+    """Стартовый слой среды поверх агентов и оргструктуры."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    institution_modes: list[InstitutionRegimeConfig] = Field(default_factory=list)
+    zones: list[ZoneConfig] = Field(default_factory=list)
+    resource_pools: list[ResourcePoolConfig] = Field(default_factory=list)
+    information_climate: InformationClimateConfig = Field(default_factory=InformationClimateConfig)
+
+
 class WorkItemConfig(BaseModel):
     """Начальный work item (дело/проект/задача)."""
 
@@ -542,6 +670,7 @@ class WorldConfig(BaseModel):
     channels: list[ChannelConfig] = Field(default_factory=list)
     orgs: list[OrgConfig] = Field(default_factory=list)
     work_items: list[WorkItemConfig] = Field(default_factory=list)
+    environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
 
 
 class ScriptedEventConfig(BaseModel):

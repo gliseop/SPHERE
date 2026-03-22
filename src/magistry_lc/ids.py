@@ -24,6 +24,8 @@ class EntityKind(StrEnum):
     WORK_ITEM = "work"
     ARTIFACT = "art"
     VOTE = "vote"
+    ZONE = "zone"
+    RESOURCE = "res"
 
 
 _ID_RE = re.compile(r"^(?P<kind>[a-z]+):(?P<slug>[A-Za-z0-9][A-Za-z0-9_-]{0,127})$")

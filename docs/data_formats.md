@@ -91,13 +91,46 @@ world:
   channels:
     - channel_id: "chan:public"
       title: "Публичный канал"
-  orgs: []
+  orgs:
+    - org_id: "org:admin"
+      title: "Администрация района"
   work_items:
     - work_id: "work:D-001"
       work_type: "hiring_process"
       title: "Найм в отдел"
       description: "Конкурс на вакансию."
       participants: ["agent:off_1"]
+  environment:
+    institution_modes:
+      - org_id: "org:admin"
+        operating_mode: "strained"
+        transparency_mode: "limited"
+        access_mode: "restricted"
+        security_mode: "heightened"
+        capture_risk: "medium"
+        linked_zone_ids: ["zone:main_office"]
+    zones:
+      - zone_id: "zone:main_office"
+        title: "Главный корпус администрации"
+        zone_type: "office"
+        primary_org_id: "org:admin"
+        access_mode: "controlled"
+        transparency_mode: "internal"
+        security_level: "heightened"
+    resource_pools:
+      - resource_id: "res:roads_budget"
+        title: "Бюджет дорожного ремонта"
+        owner_org_id: "org:admin"
+        quantity: 1250
+        unit: "тыс. руб."
+        status: "strained"
+        pressure: "Сроки поджимают."
+    information_climate:
+      public_mood: "Раздражение из-за задержек."
+      oversight_attention: "Повышенное."
+      media_pressure: "Локальные медиа ищут тему."
+      narrative_temperature: "Напряжённая повестка."
+      active_signals: ["жалобы на ремонт"]
 
 scripted_events:
   - event_id: "fork_deadline"
@@ -116,7 +149,7 @@ scripted_events:
 | `governance` | Политика должностей, кворум, порог, голосование и runtime-аудит |
 | `memory` | Рабочий буфер, долгосрочный индекс, веса retrieval, эмбеддинги |
 | `agents` | Список агентов с ID, именем, персоной, полномочиями |
-| `world` | Каналы, организации, рабочие элементы |
+| `world` | Каналы, организации, рабочие элементы и стартовый `environment`-слой |
 | `scripted_events` | Предопределённые внешние события / развилки сценария |
 
 Поле `agents[].initial_reputation` задаёт стартовую репутацию внутреннего агента. Движок применяет её при инициализации `WorldState`, а первый `reputation_snapshot` в `events.jsonl` отражает именно это значение.
@@ -203,6 +236,28 @@ scripted_events:
 | Организация | `org:` | `org:admin` |
 | Рабочий элемент | `work:` | `work:D-001` |
 | Голосование | `vote:` | `vote:1` |
+| Зона | `zone:` | `zone:main_office` |
+| Ресурсный пул | `res:` | `res:roads_budget` |
+
+### `world.environment`
+
+`WorldConfig.environment` задаёт стартовый stateful environment layer поверх обычной оргструктуры.
+
+Поддерживаются четыре блока:
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `institution_modes` | `InstitutionRegimeConfig[]` | Операционные режимы организаций (`org:*`) |
+| `zones` | `ZoneConfig[]` | Зоны/территории среды с собственными режимами доступа и прозрачности |
+| `resource_pools` | `ResourcePoolConfig[]` | Ресурсные контуры с количеством, владельцем и текущим давлением |
+| `information_climate` | `InformationClimateConfig` | Глобальный информационный фон мира |
+
+Этот слой на текущем этапе:
+
+- инициализируется в `WorldState.environment`;
+- отражается в YAML-журнале мира;
+- попадает в `state_snapshot`, который видит worldgen;
+- не заменяет собой `orgs`/`work_items`, а существует параллельно им.
 
 ### Полномочия агентов
 

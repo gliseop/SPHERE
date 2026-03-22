@@ -22,6 +22,8 @@ _KIND_TO_COUNT_KEY: dict[str, str] = {
     EntityKind.WORK_ITEM.value: "work_items",
     EntityKind.ARTIFACT.value: "artifacts",
     EntityKind.VOTE.value: "votes",
+    EntityKind.ZONE.value: "zones",
+    EntityKind.RESOURCE.value: "resource_pools",
 }
 
 
@@ -52,6 +54,7 @@ class WorldJournal:
     vote_order: list[str] = field(default_factory=list)
     votes: dict[str, dict[str, Any]] = field(default_factory=dict)
 
+    environment: dict[str, Any] = field(default_factory=dict)
     history: list[dict[str, Any]] = field(default_factory=list)
 
     _dirty: bool = True
@@ -83,6 +86,8 @@ class WorldJournal:
             "work_items": len(state.registry.list_ids(EntityKind.WORK_ITEM)),
             "artifacts": len(state.registry.list_ids(EntityKind.ARTIFACT)),
             "votes": len(state.registry.list_ids(EntityKind.VOTE)),
+            "zones": len(state.registry.list_ids(EntityKind.ZONE)),
+            "resource_pools": len(state.registry.list_ids(EntityKind.RESOURCE)),
         }
 
         j.agent_ids = sorted(state.agents.keys())
@@ -97,6 +102,7 @@ class WorldJournal:
         for vid in j.vote_order:
             j.votes[vid] = j._vote_entry(state, vid)
 
+        j.environment = state.environment.snapshot_dict()
         j._enforce_caps()
         j._dirty = True
         return j
@@ -214,8 +220,11 @@ class WorldJournal:
                 "work_items": int(self.entity_counts.get("work_items", 0)),
                 "artifacts": int(self.entity_counts.get("artifacts", 0)),
                 "votes": int(self.entity_counts.get("votes", 0)),
+                "zones": int(self.entity_counts.get("zones", 0)),
+                "resource_pools": int(self.entity_counts.get("resource_pools", 0)),
             },
             "agents": [self.agents[aid] for aid in self.agent_ids],
+            "environment": dict(self.environment),
             "work_items": [
                 self.work_items[wid]
                 for wid in self.work_item_order[: self.max_work_items]

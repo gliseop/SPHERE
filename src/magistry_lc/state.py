@@ -12,6 +12,125 @@ from .persona import PersonaArtifact
 
 
 @dataclass(slots=True)
+class InstitutionRegimeState:
+    """Операционный режим организации как части среды."""
+
+    org_id: str
+    operating_mode: str = "normal"
+    transparency_mode: str = "routine"
+    access_mode: str = "internal"
+    security_mode: str = "routine"
+    capture_risk: str = ""
+    linked_zone_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ZoneState:
+    """Состояние зоны/территории в среде."""
+
+    zone_id: str
+    title: str
+    zone_type: str = "office"
+    primary_org_id: str | None = None
+    access_mode: str = "controlled"
+    transparency_mode: str = "internal"
+    security_level: str = "routine"
+
+
+@dataclass(slots=True)
+class ResourcePoolState:
+    """Состояние ресурсного контура среды."""
+
+    resource_id: str
+    title: str
+    owner_org_id: str | None = None
+    quantity: float = 0.0
+    unit: str = ""
+    status: str = "stable"
+    pressure: str = ""
+
+
+@dataclass(slots=True)
+class InformationClimateState:
+    """Глобальный информационный фон мира."""
+
+    public_mood: str = ""
+    oversight_attention: str = ""
+    media_pressure: str = ""
+    narrative_temperature: str = ""
+    active_signals: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class EnvironmentState:
+    """Самостоятельный слой состояния среды."""
+
+    institutions: dict[str, InstitutionRegimeState] = field(default_factory=dict)
+    zones: dict[str, ZoneState] = field(default_factory=dict)
+    resource_pools: dict[str, ResourcePoolState] = field(default_factory=dict)
+    information_climate: InformationClimateState = field(default_factory=InformationClimateState)
+
+    def snapshot_dict(
+        self,
+        *,
+        max_institutions: int = 12,
+        max_zones: int = 12,
+        max_resource_pools: int = 12,
+    ) -> dict[str, Any]:
+        """Вернуть компактный срез среды для журналов и worldgen."""
+        return {
+            "counts": {
+                "institutions": len(self.institutions),
+                "zones": len(self.zones),
+                "resource_pools": len(self.resource_pools),
+            },
+            "institutions": [
+                {
+                    "org_id": item.org_id,
+                    "operating_mode": item.operating_mode,
+                    "transparency_mode": item.transparency_mode,
+                    "access_mode": item.access_mode,
+                    "security_mode": item.security_mode,
+                    "capture_risk": item.capture_risk,
+                    "linked_zone_ids": list(item.linked_zone_ids),
+                }
+                for _, item in sorted(self.institutions.items())[:max_institutions]
+            ],
+            "zones": [
+                {
+                    "zone_id": item.zone_id,
+                    "title": item.title,
+                    "zone_type": item.zone_type,
+                    "primary_org_id": item.primary_org_id,
+                    "access_mode": item.access_mode,
+                    "transparency_mode": item.transparency_mode,
+                    "security_level": item.security_level,
+                }
+                for _, item in sorted(self.zones.items())[:max_zones]
+            ],
+            "resource_pools": [
+                {
+                    "resource_id": item.resource_id,
+                    "title": item.title,
+                    "owner_org_id": item.owner_org_id,
+                    "quantity": round(float(item.quantity), 3),
+                    "unit": item.unit,
+                    "status": item.status,
+                    "pressure": item.pressure,
+                }
+                for _, item in sorted(self.resource_pools.items())[:max_resource_pools]
+            ],
+            "information_climate": {
+                "public_mood": self.information_climate.public_mood,
+                "oversight_attention": self.information_climate.oversight_attention,
+                "media_pressure": self.information_climate.media_pressure,
+                "narrative_temperature": self.information_climate.narrative_temperature,
+                "active_signals": list(self.information_climate.active_signals),
+            },
+        }
+
+
+@dataclass(slots=True)
 class AgentState:
     """Состояние агента (внутреннее для движка).
 
@@ -113,6 +232,7 @@ class WorldState:
 
     tick: int = 0
     registry: EntityRegistry = field(default_factory=EntityRegistry)
+    environment: EnvironmentState = field(default_factory=EnvironmentState)
     agents: dict[str, AgentState] = field(default_factory=dict)
     work_items: dict[str, WorkItem] = field(default_factory=dict)
     votes: dict[str, Vote] = field(default_factory=dict)
@@ -218,8 +338,11 @@ class WorldState:
                 "work_items": len(self.registry.list_ids(EntityKind.WORK_ITEM)),
                 "artifacts": len(self.registry.list_ids(EntityKind.ARTIFACT)),
                 "votes": len(self.registry.list_ids(EntityKind.VOTE)),
+                "zones": len(self.registry.list_ids(EntityKind.ZONE)),
+                "resource_pools": len(self.registry.list_ids(EntityKind.RESOURCE)),
                 "audit_cases": len(self.audit_cases),
             },
+            "environment": self.environment.snapshot_dict(),
             "agents": agents,
             "work_items": work_items,
             "votes": votes,

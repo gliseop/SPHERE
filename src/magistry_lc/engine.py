@@ -55,6 +55,13 @@ from .persona import (
     social_link_name_key,
 )
 from .state import AgentState, WorkItem, WorldState
+from .state import (
+    EnvironmentState,
+    InformationClimateState,
+    InstitutionRegimeState,
+    ResourcePoolState,
+    ZoneState,
+)
 from .tracing import TraceLog
 from .truth import TruthDetector, TruthLog
 from .utils import (
@@ -796,6 +803,11 @@ class WorldEngine:
             )
         return {
             "tick": state.tick,
+            "environment": state.environment.snapshot_dict(
+                max_institutions=10,
+                max_zones=10,
+                max_resource_pools=10,
+            ),
             "open_work_items": work_items,
             "open_votes": votes,
             "secondary_agents": secondary_agents[:20],
@@ -1726,7 +1738,7 @@ class WorldEngine:
             logger.warning("Failed to write personas cache: %s", exc)
 
     def _init_state(self, *, event_log: EventLog) -> WorldState:
-        state = WorldState(tick=0, registry=EntityRegistry())
+        state = WorldState(tick=0, registry=EntityRegistry(), environment=EnvironmentState())
 
         # Channels: first from scenario, then default public if missing.
         for ch in self.cfg.world.channels:
@@ -1763,6 +1775,83 @@ class WorldEngine:
                 meta={"title": org.title},
             )
             event_log.extend(op.apply(state))
+
+        for zone in self.cfg.world.environment.zones:
+            if zone.primary_org_id is not None and not state.registry.exists(zone.primary_org_id):
+                raise ValueError(f"Unknown primary_org_id for zone {zone.zone_id!r}: {zone.primary_org_id!r}")
+            if state.registry.exists(zone.zone_id):
+                continue
+            op = CreateEntityOp(
+                entity_id=zone.zone_id,
+                kind=EntityKind.ZONE,
+                created_by=None,
+                created_tick=0,
+                meta={
+                    "title": zone.title,
+                    "zone_type": zone.zone_type,
+                    "primary_org_id": zone.primary_org_id,
+                },
+            )
+            event_log.extend(op.apply(state))
+            state.environment.zones[zone.zone_id] = ZoneState(
+                zone_id=zone.zone_id,
+                title=zone.title,
+                zone_type=zone.zone_type,
+                primary_org_id=zone.primary_org_id,
+                access_mode=zone.access_mode,
+                transparency_mode=zone.transparency_mode,
+                security_level=zone.security_level,
+            )
+
+        for org in self.cfg.world.orgs:
+            state.environment.institutions[org.org_id] = InstitutionRegimeState(org_id=org.org_id)
+        for mode in self.cfg.world.environment.institution_modes:
+            if not state.registry.exists(mode.org_id):
+                raise ValueError(f"Unknown org_id in institution_modes: {mode.org_id!r}")
+            for zone_id in mode.linked_zone_ids:
+                if zone_id not in state.environment.zones:
+                    raise ValueError(f"Unknown linked zone for institution {mode.org_id!r}: {zone_id!r}")
+            state.environment.institutions[mode.org_id] = InstitutionRegimeState(
+                org_id=mode.org_id,
+                operating_mode=mode.operating_mode,
+                transparency_mode=mode.transparency_mode,
+                access_mode=mode.access_mode,
+                security_mode=mode.security_mode,
+                capture_risk=mode.capture_risk,
+                linked_zone_ids=list(mode.linked_zone_ids),
+            )
+
+        for pool in self.cfg.world.environment.resource_pools:
+            if pool.owner_org_id is not None and not state.registry.exists(pool.owner_org_id):
+                raise ValueError(f"Unknown owner_org_id for resource pool {pool.resource_id!r}: {pool.owner_org_id!r}")
+            if state.registry.exists(pool.resource_id):
+                continue
+            op = CreateEntityOp(
+                entity_id=pool.resource_id,
+                kind=EntityKind.RESOURCE,
+                created_by=None,
+                created_tick=0,
+                meta={"title": pool.title, "owner_org_id": pool.owner_org_id, "unit": pool.unit},
+            )
+            event_log.extend(op.apply(state))
+            state.environment.resource_pools[pool.resource_id] = ResourcePoolState(
+                resource_id=pool.resource_id,
+                title=pool.title,
+                owner_org_id=pool.owner_org_id,
+                quantity=float(pool.quantity),
+                unit=pool.unit,
+                status=pool.status,
+                pressure=pool.pressure,
+            )
+
+        info = self.cfg.world.environment.information_climate
+        state.environment.information_climate = InformationClimateState(
+            public_mood=info.public_mood,
+            oversight_attention=info.oversight_attention,
+            media_pressure=info.media_pressure,
+            narrative_temperature=info.narrative_temperature,
+            active_signals=list(info.active_signals),
+        )
 
         for a in self.cfg.agents:
             agent_meta = {

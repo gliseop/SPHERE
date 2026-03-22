@@ -10,6 +10,8 @@ from magistry_lc.engine import RunArtifacts, WorldEngine
 from magistry_lc.entities import EntityRegistry
 from magistry_lc.events import Event, EventLog
 from magistry_lc.fidelity import evaluate_fidelity
+from magistry_lc.ids import EntityKind
+from magistry_lc.journal import WorldJournal
 from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
 from magistry_lc.persona import PersonaArtifact
 from magistry_lc.state import AgentState, WorldState
@@ -277,6 +279,96 @@ def test_engine_emits_scripted_events_before_agent_turn(tmp_path: Path) -> None:
     scripted = [event for event in events if event.get("event_type") == "world_event"]
     assert scripted
     assert scripted[0]["payload"]["source"] == "scripted"
+
+
+def test_environment_layer_is_initialized_and_exposed_to_worldgen_snapshot(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "environment-layer",
+            "ticks": 1,
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "Чиновник",
+                    "capabilities": ["message"],
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+                "environment": {
+                    "institution_modes": [
+                        {
+                            "org_id": "org:city_hall",
+                            "operating_mode": "strained",
+                            "transparency_mode": "limited",
+                            "access_mode": "restricted",
+                            "security_mode": "heightened",
+                            "capture_risk": "medium",
+                            "linked_zone_ids": ["zone:city_hall"],
+                        }
+                    ],
+                    "zones": [
+                        {
+                            "zone_id": "zone:city_hall",
+                            "title": "Здание мэрии",
+                            "zone_type": "office",
+                            "primary_org_id": "org:city_hall",
+                            "access_mode": "controlled",
+                            "transparency_mode": "internal",
+                            "security_level": "heightened",
+                        }
+                    ],
+                    "resource_pools": [
+                        {
+                            "resource_id": "res:roads_budget",
+                            "title": "Бюджет дорожного ремонта",
+                            "owner_org_id": "org:city_hall",
+                            "quantity": 1250,
+                            "unit": "тыс. руб.",
+                            "status": "strained",
+                            "pressure": "Сроки поджимают, подрядчики нервничают.",
+                        }
+                    ],
+                    "information_climate": {
+                        "public_mood": "Недоверие к обещаниям администрации.",
+                        "oversight_attention": "Высокое внимание контрольного управления.",
+                        "media_pressure": "Локальные медиа ищут повод для сюжета.",
+                        "narrative_temperature": "Напряжённая повестка перед сессией совета.",
+                        "active_signals": ["жалобы на задержки ремонта", "слухи о фаворитизме"],
+                    },
+                },
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider())
+    state = engine._init_state(event_log=EventLog(artifacts.events_path))
+
+    assert state.registry.list_ids(EntityKind.ZONE) == ["zone:city_hall"]
+    assert state.registry.list_ids(EntityKind.RESOURCE) == ["res:roads_budget"]
+    assert state.environment.institutions["org:city_hall"].security_mode == "heightened"
+
+    snapshot = engine._build_worldgen_state_snapshot(state=state)
+    assert snapshot["environment"]["counts"] == {
+        "institutions": 1,
+        "zones": 1,
+        "resource_pools": 1,
+    }
+    assert snapshot["environment"]["resource_pools"][0]["resource_id"] == "res:roads_budget"
+    assert snapshot["environment"]["information_climate"]["public_mood"] == "Недоверие к обещаниям администрации."
+
+    journal = WorldJournal.from_state(state=state)
+    journal_dict = journal.to_dict()
+    assert journal_dict["entities"]["zones"] == 1
+    assert journal_dict["entities"]["resource_pools"] == 1
+    assert journal_dict["environment"]["institutions"][0]["org_id"] == "org:city_hall"
 
 
 def test_engine_pre_tick_worldgen_injects_daily_context(tmp_path: Path) -> None:

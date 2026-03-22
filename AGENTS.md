@@ -35,12 +35,12 @@ MAGISTRY/
 ├── src/magistry_lc/            # Движок симуляции (LangChain/LangGraph)
 │   ├── __init__.py             # Пакет
 │   ├── cli.py                  # CLI `magistry-lc`
-│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + scripted events + ecology/freeform truth
+│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + world.environment + scripted events
 │   ├── scenario.py             # Load/save YAML/JSON сценариев
 │   ├── ids.py                  # Типизированные ID и аудитории (aud:*)
 │   ├── entities.py             # EntityRegistry + EntityRecord (антифантомы)
 │   ├── id_alloc.py             # Детерминированное выделение новых ID
-│   ├── state.py                # WorldState (agents/work_items/votes) + AgentState.story_state
+│   ├── state.py                # WorldState (agents/work_items/votes + environment-layer) + AgentState.story_state
 │   ├── persona.py              # PersonaArtifact/Library/Generator + SocialGraphExtractor
 │   ├── memory.py               # Память агента (buffer + hybrid retrieval)
 │   ├── actions.py              # Action[] (structured + spawn_agent + perform)
@@ -49,8 +49,8 @@ MAGISTRY/
 │   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM perform)
 │   ├── auditor.py              # RuntimeAuditor (LLM-first detection + deterministic audit actuator + collegial review)
 │   ├── dao.py                  # DAO vote closure + position policy
-│   ├── engine.py               # WorldEngine (scripted events, pre/post worldgen, story_state, freeform truth, deterministic apply)
-│   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, agent contexts, scene hooks, spawns)
+│   ├── engine.py               # WorldEngine (environment init/snapshot, scripted events, pre/post worldgen, deterministic apply)
+│   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, agent contexts, scene hooks, spawns, safe environment snapshot)
 │   ├── composer.py             # WorldComposer (LLM -> ScenarioConfig + persona enrichment)
 │   ├── oracle.py               # ViolationOracle + FreeformTruthRecorder (LLM post-hoc analysis)
 │   ├── truth.py                # TruthDetector + TruthLog (deterministic truth-layer sidecar)
@@ -184,6 +184,8 @@ MAGISTRY/
 
 6. **Детерминированный apply.** Агенты ходят параллельно, но результаты применяются к состоянию мира последовательно и детерминированно.
 
+7. **Приоритет полноценной агентности среды.** Если вычислительный бюджет позволяет, среду следует насыщать множеством реальных мелких агентов, а не заменять их жёстко зашитыми когортами, суррогатными агрегатами или псевдо-акторами. Агрегация допустима как вынужденный технический компромисс, но не как вариант по умолчанию.
+
 ## Стек и зависимости
 
 - Python 3.12+, Pydantic 2.0+, NetworkX 3.0+, OpenAI 1.0+, Rich 13.7+, python-dotenv 1.0+
@@ -270,6 +272,7 @@ cd web/frontend && npm run test:e2e
 | Изменить runtime-аудит | `auditor.py`, `engine.py`, `ops.py`, `config.py` |
 | Изменить truth/evaluation/fidelity | `truth.py`, `evaluation.py`, `fidelity.py`, `engine.py`, `docs/data_formats.md` |
 | Изменить агентский цикл | `agent.py`, `memory.py`, `engine.py`, `actions.py` |
+| Изменить слой среды / temporal runtime | `config.py`, `state.py`, `engine.py`, `worldgen.py`, `journal.py`, `docs/data_formats.md` |
 | Изменить социальный граф / динамический спавн | `persona.py`, `engine.py`, `actions.py`, `ops.py`, `worldgen.py` |
 | Добавить LLM-провайдера | `llm/providers.py`, `llm/__init__.py`, `llm/caller.py` |
 | Изменить генерацию мира | `worldgen.py`, `engine.py`, `config.py`, `composer.py` |
@@ -286,6 +289,7 @@ cd web/frontend && npm run test:e2e
 
 - **Зависимость от OpenAI-совместимого API**: для запуска симуляции и LLM-генерации через работающие AI-эндпоинты (`generate-personality`, `generate-agent-type`) требуется `OPENAI_API_KEY` или совместимый эндпоинт. Тесты используют `MockLLMProvider` и не требуют ключа.
 - **Стоимость LLM-вызовов**: в текущем исследовательском контуре стоимость считается приемлемой. При проектировании worldgen, вторичных агентов, enrichment и других когнитивных контуров не нужно по умолчанию поднимать вопрос цены или упрощать архитектуру ради экономии токенов; первичный критерий — исследовательская ценность и правдоподобие среды.
+- **Дешёвые модели и плотная ecology**: наличие очень дешёвых моделей делает допустимым большое количество мелких параллельных агентов. Неприемлемо не само масштабирование агентности, а замена потенциально полноценных акторов жёстко зашитыми суррогатами только ради упрощения рантайма.
 - **Эмбеддинги**: в обычных прогонах по умолчанию используются реальные embeddings через OpenAI-совместимый API; при отсутствии ключа движок деградирует в BM25-only retrieval. `MockEmbeddingProvider` и `embeddings_mock=true` оставлены для тестов и дешёвых smoke-прогонов.
 - **Агентские промпты**: `AgentRunner` сообщает агенту текущее время мира (`tick` и каноническую дату, если она задана), но не говорит агенту, что он находится в симуляции.
 - **Объём prompt-контекста**: не сжимать агентские и worldgen-промпты вручную только ради уменьшения токенов. Для ведения большого контекста полагаться на штатные механизмы памяти, суммаризации, compaction (компакции) и другие встроенные алгоритмы управления контекстом; большой объём сам по себе не считается дефектом.
@@ -294,6 +298,7 @@ cd web/frontend && npm run test:e2e
 - **Ecology activation**: при `runtime.ecology_activation_window_ticks > 0` не-core акторы ходят не каждый тик, а только когда недавно были затронуты событиями, hook-ами или собственным созданием. Это сохраняет богатую ecology без захвата сюжета внешними акторами.
 - **Имена новых агентов**: secondary-spawn, runtime-spawn и worldgen-spawn принимают только человеко-читаемые имена; role-alias и machine-like display-name отклоняются или маппятся на уже существующего актора.
 - **Scripted events + pre-tick worldgen**: сценарий может задавать `scripted_events`, а `runtime.worldgen_pre_tick=true` включает personal-ecology слой до хода агентов: `agent_daily_context`, `scene_hooks`, глобальные сигналы и `story_state` агента. Эти prompt-layer данные не подменяют детерминированный apply.
+- **Stateful environment layer**: `WorldState` теперь содержит отдельный `environment`-слой (`world.environment` в сценарии): режимы организаций, зоны, ресурсные пулы и информационный климат. На текущем этапе он инициализируется из конфига, отражается в YAML-журнале и safe `state_snapshot` для worldgen, но ещё не имеет самостоятельного богатого runtime-update контура.
 - **Risky personal contexts**: `agent_daily_context` теперь может нести не только общий фон, но и richer pressure-поля (`private_pressure`, `opportunity`, `exposure_risk`). Это считается допустимым средовым давлением, а не прямой директивой агенту.
 - **`request_entity` по умолчанию внутренний**: при `runtime.request_entity_internal_only=true` внешние/ecology-акторы не могут бесконтрольно разворачивать публичную инфраструктуру (`chan:*`/`org:*`) через `request_entity`.
 - **Runtime-аудитор**: `RuntimeAuditor` существует только как отдельный runtime governance-layer, а не как narrative-agent. Он сочетает deterministic baseline rules с LLM-findings, нормализует `violation_type`, детерминированно привязывает `evidence_refs`, агрегирует повторяющиеся finding’и в стабильные `audit_case:*`, умеет ставить response-deadline на объяснения/документы и эскалировать просроченные кейсы в monitoring / collegial review.
@@ -322,6 +327,7 @@ cd web/frontend && npm run test:e2e
 |----------|---------|
 | Runtime latency в full-ecology прогонах | Реальные 20-50k-token prompts на `openai/gpt-oss-120b` через OpenRouter дают long-tail latency. Дополнительные факторы: `provider_order=["Groq"]` без latency-aware routing, отсутствие коротких per-role timeout/fallback, не трассируемые embeddings и последовательная `memory`-суммаризация. |
 | Strict audit evaluation | Даже после выравнивания payload/evidence strict exact-match в `evaluation.json` остаётся слишком хрупким на живых прогонах; semantic matching уже даёт сигнал, но exact всё ещё часто уходит в `0 TP`. Нужна дальнейшая нормализация target/evidence или case-level matching. |
+| Слишком синхронный temporal runtime | Даже при параллельном `decide` мир живёт крупными глобальными тиками. Для richer full-ecology среды нужен менее жёсткий, более живой temporal/runtime-контур с большим количеством мелких параллельных акторов и локальных реакций без обязательной синхронизации всего мира на каждом шаге. |
 
 ### Завершённые миграции
 

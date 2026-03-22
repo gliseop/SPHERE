@@ -48,7 +48,7 @@ flowchart TD
     EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + status.json + evaluation.json + fidelity.json + summary.json]
 ```
 
-Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry` и запускает цикл тиков.
+Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы, стартовый `environment`-слой и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry`, материализует `world.environment` как отдельный слой состояния среды и запускает цикл тиков.
 
 ## Агент (AgentRunner)
 
@@ -239,7 +239,7 @@ Agent prompt использует не один общий retrieval-блок, �
 В обоих фазах worldgen получает только безопасный контекст:
 - public/internal события без текста приватных сообщений;
 - агрегированные сигналы закрытых private-контактов;
-- state snapshot (open work items, открытые votes, вторичные акторы);
+- state snapshot (open work items, открытые votes, вторичные акторы и компактный срез `environment`-слоя: режимы организаций, зоны, ресурсные пулы, информационный климат);
 - краткие `story_state` агентов;
 - temporal contract (`tick`, `tick_granularity`, канонические дата/время).
 
@@ -317,7 +317,7 @@ Deterministic `TruthDetector` при этом расширяется остор�
 | `runtime` | `RuntimeConfig` | Язык, лимит действий, история тиков, LangGraph |
 | `governance` | `GovernanceConfig` | Политика должностей, голосование и настройки runtime-аудита |
 | `agents` | `AgentConfig[]` | Агенты: ID, имя, персона, полномочия, стартовая репутация, должность |
-| `world` | `WorldConfig` | Каналы, организации, рабочие элементы |
+| `world` | `WorldConfig` | Каналы, организации, рабочие элементы и стартовый stateful environment layer |
 | `scripted_events` | `ScriptedEventConfig[]` | Предопределённые внешние события и развилки сценария |
 
 Ключевые поля `runtime`:
