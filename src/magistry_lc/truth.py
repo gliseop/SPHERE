@@ -413,13 +413,18 @@ class TruthDetector:
 
 
 def _event_ref(event: Event) -> dict[str, Any]:
+    payload = event.payload or {}
     return {
         "tick": int(event.tick),
         "event_type": event.event_type,
         "actor_id": event.actor_id,
         "timestamp": event.timestamp.isoformat(),
-        "target_agent_id": (event.payload or {}).get("target_agent_id"),
-        "vote_id": (event.payload or {}).get("vote_id"),
+        "target_agent_id": payload.get("target_agent_id"),
+        "counterparty_agent_id": payload.get("counterparty_agent_id"),
+        "related_target_agent_id": payload.get("related_target_agent_id"),
+        "to_id": payload.get("to_id"),
+        "work_id": payload.get("work_id"),
+        "vote_id": payload.get("vote_id"),
     }
 
 

@@ -242,6 +242,8 @@ Runtime-аудит реализован отдельным модулем `audit
 | `mode` | `llm` / `hybrid` / `rules` | Режим detection; `llm` — основной путь, `rules` — fallback/debug |
 | `lookback_events` | `int` | Глубина окна recent events |
 | `private_contact_window_ticks` | `int` | Окно приватных контактов для conflict-like правил |
+| `obligation_window_ticks` | `int` | Окно pressure/obligation-эвристик для omission-like нарушений |
+| `response_window_ticks` | `int` | Сколько тиков даётся на объяснение/документы до follow-up escalation |
 | `max_findings_per_tick` | `int` | Лимит findings на тик |
 | `access_policy` | `metadata_only` / `internal` / `full_internal` | Какой объём private/internal данных раскрывается LLM-аудитору |
 | `min_confidence_to_flag` | `float` | Порог эмиссии `audit_flagged` |
@@ -249,6 +251,8 @@ Runtime-аудит реализован отдельным модулем `audit
 | `min_confidence_to_freeze` | `float` | Порог заморозки репутации |
 | `min_confidence_to_review` | `float` | Порог маршрутизации в collegial review |
 | `freeze_duration_ticks` | `int` | Длительность заморозки репутации в тиках |
+| `case_repeat_escalation_threshold` | `int` | После скольких эпизодов повторяющийся кейс автоматически уходит в review/monitoring |
+| `external_subject_confidence_cap` | `float` | Верхняя граница confidence для внешних субъектов finding’ов |
 | `reputation_freeze_enabled` | `bool` | Разрешить `SetReputationFreezeOp` |
 | `reputation_penalty_delta` | `float \| null` | Опциональный отрицательный штраф к репутации |
 | `collegial_review_enabled` | `bool` | Разрешить route в `audit_review` |
@@ -392,7 +396,8 @@ JSON-файлы с результатами нарративных интерв�
 {"tick": 1, "round": 1, "event_type": "entity_created", "actor_id": null, "agent_id": "", "payload": {"entity_id": "agent:off_1", "kind": "agent", "meta": {"name": "Козлов И.М.", "internal": true, "capabilities": ["message", "work", "dao"]}}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
 {"tick": 1, "round": 1, "event_type": "reputation_snapshot", "actor_id": null, "agent_id": "agent:off_1", "payload": {"target_agent_id": "agent:off_1", "score": 0.0, "internal": true, "frozen": false, "title": "специалист"}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
 {"tick": 2, "round": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"to_id": "agent:off_2", "text": "..."}, "audience": ["agent:off_1", "agent:off_2"], "timestamp": "..."}
-{"tick": 2, "round": 2, "event_type": "audit_flagged", "actor_id": null, "agent_id": "", "payload": {"finding_id": "finding:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_1", "related_target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact"}, "audience": ["aud:internal"], "timestamp": "..."}
+{"tick": 2, "round": 2, "event_type": "audit_flagged", "actor_id": null, "agent_id": "", "payload": {"finding_id": "finding:abc", "case_id": "audit_case:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_2", "counterparty_agent_id": "agent:off_2", "related_target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact", "evidence_refs": [{"tick": 2, "event_type": "vote_cast", "target_agent_id": "agent:off_2"}]}, "audience": ["aud:internal"], "timestamp": "..."}
+{"tick": 2, "round": 2, "event_type": "audit_case_updated", "actor_id": null, "agent_id": "", "payload": {"case_id": "audit_case:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact", "episode_count": 2, "response_due_tick": 4, "monitoring": true}, "audience": ["aud:internal"], "timestamp": "..."}
 {"tick": 2, "round": 2, "event_type": "arbiter_approved", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"action_type": "send_message"}, "audience": ["aud:internal"], "timestamp": "..."}
 ```
 
@@ -419,6 +424,7 @@ JSON-файлы с результатами нарративных интерв�
 | `position_changed` | Смена должности |
 | `audit_flagged` | Runtime-аудитор зафиксировал finding |
 | `audit_case_opened` | По finding открыт audit-case |
+| `audit_case_updated` | Повторный эпизод или policy-state обновили существующий audit-case |
 | `audit_escalated` | Кейc эскалирован в санкционный/процедурный слой |
 | `audit_explanation_requested` | Аудит запросил объяснение по открытому кейсу |
 | `audit_documents_requested` | Аудит запросил документы/артефакты по кейсу |

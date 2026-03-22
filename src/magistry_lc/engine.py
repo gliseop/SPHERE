@@ -2143,9 +2143,14 @@ class WorldEngine:
             if ev.event_type == "position_changed":
                 return f"Должность изменена: {ev.payload.get('target_agent_id','')} -> {ev.payload.get('new_title','')}"
             if ev.event_type == "audit_flagged":
-                return f"Аудит пометил агента {ev.payload.get('target_agent_id','')}: {ev.payload.get('violation_type','')}"
+                subject_id = ev.payload.get("subject_agent_id", "") or ev.payload.get("target_agent_id", "")
+                target_id = ev.payload.get("target_agent_id", "") or ev.payload.get("counterparty_agent_id", "")
+                return f"Аудит пометил агента {subject_id}: {ev.payload.get('violation_type','')} -> {target_id}".rstrip(" -> ")
             if ev.event_type == "audit_case_opened":
-                return f"Открыт аудит-кейс {ev.payload.get('case_id','')} для {ev.payload.get('target_agent_id','')}"
+                subject_id = ev.payload.get("subject_agent_id", "") or ev.payload.get("target_agent_id", "")
+                return f"Открыт аудит-кейс {ev.payload.get('case_id','')} для {subject_id}"
+            if ev.event_type == "audit_case_updated":
+                return f"Аудит обновил кейс {ev.payload.get('case_id','')} episode_count={ev.payload.get('episode_count','')}"
             if ev.event_type == "audit_escalated":
                 return f"Аудит эскалировал кейс {ev.payload.get('case_id','')} route={ev.payload.get('route','')}"
             if ev.event_type == "audit_explanation_requested":

@@ -10,6 +10,20 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+_CANONICAL_TYPE_EQUIVALENTS: dict[str, set[str]] = {
+    "partial_disclosure_under_deadline_pressure": {
+        "partial_disclosure_under_deadline_pressure",
+        "non_disclosure_under_deadline_pressure",
+        "narrative_manipulation",
+    },
+    "non_escalation_under_pressure": {
+        "non_escalation_under_pressure",
+        "process_manipulation",
+        "narrative_manipulation",
+    },
+}
+
+
 class EvaluationSummary(BaseModel):
     """Итог сравнения runtime-сигналов и truth-layer."""
 
@@ -131,7 +145,7 @@ def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
 def _truth_key(item: dict[str, Any]) -> tuple[int, str, str, str | None, str] | None:
     tick = int(item.get("tick", 0))
     subject = str(item.get("subject_agent_id") or "")
-    violation_type = str(item.get("violation_type") or "")
+    violation_type = _normalize_violation_type(item.get("violation_type"))
     if not subject or not violation_type:
         return None
     target = _normalize_target(item.get("target_agent_id"))
@@ -148,17 +162,28 @@ def _signal_key(item: dict[str, Any]) -> tuple[int, str, str, str | None, str] |
 
     tick = int(item.get("tick", 0))
     subject = str(payload.get("subject_agent_id") or payload.get("target_agent_id") or "")
-    violation_type = str(payload.get("violation_type") or "")
+    violation_type = _normalize_violation_type(payload.get("violation_type"))
     if not subject or not violation_type:
         return None
 
     evidence_refs = _extract_evidence_refs(payload.get("evidence_refs"))
     target = _normalize_target(
-        payload.get("related_target_agent_id")
-        or _first_evidence_target_agent_id(evidence_refs)
+        payload.get("counterparty_agent_id")
+        or payload.get("related_target_agent_id")
         or payload.get("target_agent_id")
+        or _first_evidence_target_agent_id(evidence_refs)
     )
     return (tick, subject, violation_type, target, _evidence_signature(evidence_refs))
+
+
+def _normalize_violation_type(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    for canonical, aliases in _CANONICAL_TYPE_EQUIVALENTS.items():
+        if text in aliases:
+            return canonical
+    return text
 
 
 def _extract_evidence_refs(value: Any) -> list[dict[str, Any]]:
@@ -169,9 +194,10 @@ def _extract_evidence_refs(value: Any) -> list[dict[str, Any]]:
 
 def _first_evidence_target_agent_id(evidence_refs: list[dict[str, Any]]) -> str | None:
     for ref in evidence_refs:
-        target = _normalize_target(ref.get("target_agent_id"))
-        if target:
-            return target
+        for key in ("counterparty_agent_id", "related_target_agent_id", "target_agent_id", "to_id"):
+            target = _normalize_target(ref.get(key))
+            if target and target.startswith("agent:"):
+                return target
     return None
 
 
@@ -203,6 +229,7 @@ def _truth_finding(item: dict[str, Any]) -> dict[str, Any] | None:
         "subject": subject,
         "target": _normalize_target(item.get("target_agent_id")),
         "beneficiary": _normalize_target(item.get("beneficiary")),
+        "violation_type": _normalize_violation_type(item.get("violation_type")),
         "risk_tags": {str(tag).strip().casefold() for tag in list(item.get("risk_tags") or []) if str(tag).strip()},
         "summary": str(item.get("summary") or item.get("rationale") or ""),
         "mechanism": str(item.get("mechanism") or ""),
@@ -220,8 +247,9 @@ def _signal_finding(item: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "tick": int(item.get("tick", 0)),
         "subject": subject,
-        "target": _normalize_target(payload.get("related_target_agent_id") or payload.get("target_agent_id")),
+        "target": _normalize_target(payload.get("counterparty_agent_id") or payload.get("related_target_agent_id") or payload.get("target_agent_id")),
         "beneficiary": _normalize_target(payload.get("beneficiary")),
+        "violation_type": _normalize_violation_type(payload.get("violation_type")),
         "risk_tags": {str(tag).strip().casefold() for tag in list(payload.get("risk_tags") or []) if str(tag).strip()},
         "summary": str(payload.get("summary") or ""),
         "mechanism": str(payload.get("mechanism") or ""),
@@ -253,9 +281,11 @@ def _finding_match_score(*, truth: dict[str, Any], signal: dict[str, Any]) -> fl
     if truth["subject"] != signal["subject"]:
         return 0.0
     tick_gap = abs(int(truth["tick"]) - int(signal["tick"]))
-    if tick_gap > 1:
+    if tick_gap > 2:
         return 0.0
-    score = 0.3 if tick_gap == 0 else 0.2
+    score = 0.3 if tick_gap == 0 else (0.22 if tick_gap == 1 else 0.15)
+    if _violation_type_match(truth.get("violation_type"), signal.get("violation_type")):
+        score += 0.15
     if _compatible_target(truth.get("target"), signal.get("target")):
         score += 0.2
     if _compatible_target(truth.get("beneficiary"), signal.get("beneficiary")):
@@ -288,10 +318,21 @@ def _evidence_ref_signature(item: dict[str, Any]) -> str:
         "event_type": item.get("event_type"),
         "actor_id": item.get("actor_id"),
         "target_agent_id": item.get("target_agent_id"),
+        "counterparty_agent_id": item.get("counterparty_agent_id"),
+        "to_id": item.get("to_id"),
         "vote_id": item.get("vote_id"),
         "work_id": item.get("work_id"),
+        "case_id": item.get("case_id"),
     }
     return json.dumps(keys, ensure_ascii=False, sort_keys=True)
+
+
+def _violation_type_match(left: Any, right: Any) -> bool:
+    left_norm = _normalize_violation_type(left)
+    right_norm = _normalize_violation_type(right)
+    if not left_norm or not right_norm:
+        return False
+    return left_norm == right_norm
 
 
 def _jaccard(left: set[Any], right: set[Any]) -> float:

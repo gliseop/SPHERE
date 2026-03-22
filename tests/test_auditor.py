@@ -12,7 +12,7 @@ from magistry_lc.entities import EntityRecord, EntityRegistry
 from magistry_lc.events import Event
 from magistry_lc.ids import EntityKind
 from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
-from magistry_lc.ops import ModifyReputationOp, OpenAuditCaseOp, OpenVoteOp
+from magistry_lc.ops import ModifyReputationOp, OpenAuditCaseOp, OpenVoteOp, UpdateAuditCaseOp
 from magistry_lc.state import AgentState, AuditCase, Vote, WorldState
 from magistry_lc.tracing import TraceLog
 
@@ -395,6 +395,195 @@ def test_runtime_auditor_llm_mode_opens_collegial_review(tmp_path: Path) -> None
     assert any(event.event_type == "audit_escalated" for event in outcome.events)
     assert any(isinstance(op, OpenAuditCaseOp) for op in outcome.ops)
     assert any(isinstance(op, OpenVoteOp) and op.vote_type == "audit_review" for op in outcome.ops)
+
+
+def test_runtime_auditor_flags_non_escalation_under_pressure() -> None:
+    state = _mk_state()
+    state.agents["agent:head"] = AgentState(
+        agent_id="agent:head",
+        name="Head",
+        internal=True,
+        capabilities=["message", "dao"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:head",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "Head"},
+        )
+    )
+    state.tick = 2
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules", obligation_window_ticks=3))
+
+    recent_events = [
+        Event(
+            tick=1,
+            event_type="world_event",
+            actor_id=None,
+            payload={"description": "Обнаружен возможный конфликт интересов, требуется немедленно передать материалы аудиту и комиссии."},
+            audience=["aud:internal"],
+        )
+    ]
+    tick_events = [
+        Event(
+            tick=2,
+            event_type="message_sent",
+            actor_id="agent:off_1",
+            payload={
+                "to_id": "agent:head",
+                "private": True,
+                "text": "Предлагаю быстро согласовать пакет ответа и комментарий вместо эскалации в комиссию.",
+            },
+            audience=["agent:off_1", "agent:head"],
+        )
+    ]
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=tick_events,
+            recent_events=recent_events,
+        )
+    )
+
+    assert any(finding.violation_type == "non_escalation_under_pressure" for finding in outcome.findings)
+    assert any(finding.evidence_refs for finding in outcome.findings)
+
+
+def test_runtime_auditor_postprocess_normalizes_taxonomy_and_binds_evidence() -> None:
+    state = _mk_state()
+    state.tick = 3
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
+
+    recent_events = [
+        Event(
+            tick=2,
+            event_type="world_event",
+            actor_id=None,
+            payload={"description": "Обнаружен конфликт интересов и сверху требуют ускорить публикацию отчёта, иначе будут санкции."},
+            audience=["aud:internal"],
+        )
+    ]
+    tick_events = [
+        Event(
+            tick=3,
+            event_type="message_sent",
+            actor_id="agent:off_1",
+            payload={
+                "to_id": "chan:public",
+                "private": False,
+                "text": "Конфликтов интересов не выявлено, все документы уже опубликованы, процесс полностью прозрачен.",
+            },
+            audience=["aud:public"],
+        )
+    ]
+    finding = auditor._make_finding(
+        tick=3,
+        subject_agent_id="agent:off_1",
+        target_agent_id="chan:public",
+        violation_type="narrative_manipulation",
+        violation_type_freeform="",
+        risk_family="narrative_manipulation",
+        severity="medium",
+        confidence=0.74,
+        summary="Публичное сообщение о полной прозрачности на фоне дедлайна и конфликта.",
+        mechanism="public reassurance while the deadline pressure is increasing",
+        recommended_action="request_explanation",
+        evidence_refs=[],
+    )
+
+    processed = auditor._postprocess_finding(
+        finding=finding,
+        state=state,
+        tick_events=tick_events,
+        recent_events=recent_events,
+        current_tick=3,
+    )
+
+    assert processed is not None
+    assert processed.violation_type == "partial_disclosure_under_deadline_pressure"
+    assert processed.evidence_refs
+
+
+def test_runtime_auditor_updates_existing_case_instead_of_opening_duplicate() -> None:
+    state = _mk_state()
+    state.tick = 3
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
+    finding = auditor._make_finding(
+        tick=3,
+        subject_agent_id="agent:off_1",
+        target_agent_id="agent:off_2",
+        violation_type="support_vote_after_private_contact",
+        risk_family="preferential_treatment",
+        severity="medium",
+        confidence=0.81,
+        summary="Повторный эпизод координации перед голосованием.",
+        mechanism="repeat support vote after private contact",
+        recommended_action="open_case",
+        evidence_refs=[{"tick": 3, "event_type": "vote_cast", "target_agent_id": "agent:off_2"}],
+    )
+    case_id = auditor._case_id_for_finding(finding)
+    state.audit_cases[case_id] = AuditCase(
+        case_id=case_id,
+        finding_id="finding:existing",
+        created_tick=1,
+        subject_agent_id="agent:off_1",
+        target_agent_id="agent:off_2",
+        risk_family="preferential_treatment",
+        violation_type="support_vote_after_private_contact",
+        summary="Старый эпизод.",
+        recommended_action="open_case",
+        confidence=0.7,
+        evidence_refs=[{"tick": 1, "event_type": "vote_cast", "target_agent_id": "agent:off_2"}],
+        finding_ids=["finding:existing"],
+        episode_count=1,
+        updated_tick=1,
+        last_finding_tick=1,
+    )
+
+    outcome = auditor._apply_policy(state=state, findings=[finding], current_tick=3, recent_events=[])
+
+    assert any(isinstance(op, UpdateAuditCaseOp) and op.case_id == case_id for op in outcome.ops)
+    assert not any(isinstance(op, OpenAuditCaseOp) and op.case_id == case_id for op in outcome.ops)
+
+
+def test_runtime_auditor_escalates_overdue_case_without_response() -> None:
+    state = _mk_state()
+    state.tick = 5
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(
+            enabled=True,
+            mode="rules",
+            collegial_review_enabled=False,
+            response_window_ticks=2,
+            case_repeat_escalation_threshold=2,
+        )
+    )
+    state.audit_cases["audit_case:late"] = AuditCase(
+        case_id="audit_case:late",
+        finding_id="finding:late",
+        created_tick=1,
+        subject_agent_id="agent:off_1",
+        target_agent_id="agent:off_2",
+        risk_family="preferential_treatment",
+        violation_type="support_vote_after_private_contact",
+        summary="Ожидается объяснение по приватной координации.",
+        recommended_action="request_explanation",
+        confidence=0.82,
+        finding_ids=["finding:late"],
+        episode_count=1,
+        updated_tick=2,
+        last_finding_tick=2,
+        response_requested_tick=2,
+        response_due_tick=4,
+    )
+
+    outcome = auditor._apply_policy(state=state, findings=[], current_tick=5, recent_events=[])
+
+    assert any(event.event_type == "audit_escalated" for event in outcome.events)
+    assert any(isinstance(op, UpdateAuditCaseOp) for op in outcome.ops)
 
 
 def test_dao_closes_audit_review_and_freezes_subject() -> None:

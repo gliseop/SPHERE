@@ -128,17 +128,21 @@ flowchart TD
 
 Текущая архитектура:
 
-1. **LLM-first detection**: основной путь — structured LLM-вызов, который возвращает `AuditFinding[]`.
-2. **Rules fallback**: `audit.mode="rules"` остаётся для baseline/debug сценариев.
-3. **Deterministic actuator**: findings детерминированно преобразуются в:
+1. **Deterministic baseline + LLM findings**: аудитор всегда строит baseline-findings по rules-эвристикам (private contact, omission under pressure, partial disclosure under deadline pressure, overdue response on open case), а в режимах `llm`/`hybrid` дополняет их structured LLM-findings.
+2. **Finding normalization**: перед actuator-слоем аудитор нормализует `violation_type`, снижает уверенность для внешних субъектов, детерминированно добирает `evidence_refs` и старается заполнить фактический `target_agent_id`/counterparty.
+3. **Case aggregation**: repeated findings не открывают бесконечную россыпь `audit_case:{finding_id}`, а схлопываются в стабильный `audit_case:*` по subject/type/target/beneficiary. В кейсе накапливаются `episode_count`, `updated_tick`, `response_due_tick`, `review_vote_id`, `monitoring`.
+4. **Deterministic actuator**: findings и case-policy детерминированно преобразуются в:
    - `audit_flagged`;
    - `audit_case_opened`;
+   - `audit_case_updated`;
    - `audit_explanation_requested`;
    - `audit_documents_requested`;
    - `audit_monitoring_enabled`;
    - `audit_escalated`;
    - `StateOp` для заморозки роста репутации;
    - `audit_review` vote-path для collegial review.
+
+Дополнительно у открытых кейсов есть follow-up policy: если по `request_explanation` / `request_documents` истёк `response_due_tick`, аудитор либо поднимает `audit_monitoring_enabled`, либо открывает `audit_review`, либо закрывает кейс при детектированном ответе/пакете документов.
 
 `RuntimeAuditor` не подменяет собой `ViolationOracle` и не создаёт ground truth эксперимента. Его выход — это governance-treatment, а не пост-фактум измерение качества режима.
 
@@ -178,7 +182,7 @@ flowchart TD
 - `semantic_precision` / `semantic_recall` / `semantic_f1`;
 - сводку `by_violation_type`.
 
-Строгая часть (`true_positive`, `precision`, `recall`) по-прежнему опирается на exact-match baseline. Semantic-часть использует finding matcher: subject/target/evidence overlap + `risk_tags` + similarity `summary/mechanism`.
+Строгая часть (`true_positive`, `precision`, `recall`) по-прежнему опирается на exact-match baseline, но exact-match теперь сравнивает уже нормализованный `violation_type` и richer `evidence_refs` / counterparty-поля. Semantic-часть использует finding matcher: subject/target/evidence overlap + `risk_tags` + similarity `summary/mechanism`.
 
 ## Операции состояния (StateOp → Event)
 
@@ -349,12 +353,18 @@ Deterministic `TruthDetector` при этом расширяется остор�
 Ключевые поля `governance.audit`:
 - `enabled`: включить runtime-аудитор.
 - `actor_id`: какой агент-идентификатор использовать как `actor_id` audit-событий.
-- `mode`: `rules` (в `RuntimeAuditor` v1 поддерживается только rules-first режим; другие значения отклоняются при валидации).
+- `mode`: `rules` / `llm` / `hybrid`; в `llm` и `hybrid` structured LLM-findings дополняются deterministic baseline-rules.
 - `lookback_events`: глубина окна истории для audit detection.
 - `private_contact_window_ticks`: окно приватных контактов для conflict-like heuristics.
+- `obligation_window_ticks`: окно pressure/obligation-эвристик для omission-like нарушений.
+- `response_window_ticks`: сколько тиков даётся на объяснение/документы до follow-up escalation.
 - `min_confidence_to_flag`: минимальная уверенность для `audit_flagged`.
+- `min_confidence_to_open_case`: минимальная уверенность для открытия или обновления audit-case.
 - `min_confidence_to_freeze`: минимальная уверенность для `reputation_frozen`.
+- `min_confidence_to_review`: порог маршрутизации в collegial review.
 - `freeze_duration_ticks`: длительность заморозки в тиках.
+- `case_repeat_escalation_threshold`: после скольких эпизодов кейс автоматически уходит в review/monitoring.
+- `external_subject_confidence_cap`: верхняя граница confidence для внешних субъектов finding’ов.
 - `reputation_penalty_delta`: опциональный отрицательный штраф к репутации поверх freeze.
 
 Ключевые поля `governance`:

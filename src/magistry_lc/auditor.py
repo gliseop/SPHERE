@@ -15,7 +15,7 @@ from .config import AuditRuntimeConfig
 from .events import Event
 from .ids import EntityKind, INTERNAL_AUDIENCE, make_id, normalize_slug
 from .llm import LLMCaller
-from .ops import OpenAuditCaseOp, OpenVoteOp, SetReputationFreezeOp, StateOp
+from .ops import CloseAuditCaseOp, OpenAuditCaseOp, OpenVoteOp, SetReputationFreezeOp, StateOp, UpdateAuditCaseOp
 from .state import WorldState
 
 
@@ -28,6 +28,93 @@ _RISK_FAMILIES = {
     "narrative_manipulation",
     "governance_abuse",
     "other",
+}
+_CONFLICT_SIGNAL_NEEDLES = (
+    "конфликт интерес",
+    "личн",
+    "связ",
+    "подозр",
+    "совпад",
+    "аффили",
+)
+_DEADLINE_SIGNAL_NEEDLES = (
+    "ускор",
+    "срок",
+    "до конца месяца",
+    "санкц",
+    "дедлайн",
+    "штраф",
+    "просроч",
+)
+_PROCUREMENT_NEEDLES = (
+    "тендер",
+    "закуп",
+    "подряд",
+    "контракт",
+    "постав",
+    "декларац",
+    "отч",
+)
+_DISCLOSURE_DENIAL_NEEDLES = (
+    "не выявлено конфликт",
+    "отсутствие конфликт",
+    "полная прозрач",
+    "все декларац",
+    "все документы",
+    "полностью открыт",
+)
+_NON_ESCALATION_NEEDLES = (
+    "обсуд",
+    "соглас",
+    "ускор",
+    "подготов",
+    "комментар",
+    "пресс",
+    "ответ",
+    "пакет",
+    "разъясн",
+    "сверить",
+)
+_RESPONSE_NEEDLES = (
+    "объясн",
+    "поясн",
+    "ответ",
+    "документ",
+    "материал",
+    "пакет",
+    "протокол",
+    "справк",
+    "отч",
+)
+_OVERSIGHT_NEEDLES = (
+    "аудит",
+    "совет",
+    "комис",
+    "прокуратур",
+    "контрол",
+    "антикорруп",
+    "надзор",
+)
+_PUBLIC_DISCLOSURE_NEEDLES = (
+    "публич",
+    "пресс",
+    "релиз",
+    "опубли",
+    "соцсет",
+    "форум",
+)
+_CANONICAL_VIOLATION_TYPES = {
+    "preferential_treatment_for_connected_actor",
+    "non_escalation_under_pressure",
+    "partial_disclosure_under_deadline_pressure",
+    "narrative_manipulation",
+    "process_manipulation",
+    "non_disclosure_under_deadline_pressure",
+    "self_reputation_award",
+    "reputation_reward_after_private_contact",
+    "self_nomination",
+    "nomination_after_private_contact",
+    "support_vote_after_private_contact",
 }
 _RECOMMENDED_ACTIONS = {
     "none",
@@ -176,7 +263,12 @@ class RuntimeAuditor:
             return AuditOutcome()
         findings.sort(key=lambda item: (-float(item.confidence), item.risk_family, item.subject_agent_id))
         findings = findings[: self.cfg.max_findings_per_tick]
-        return self._apply_policy(state=state, findings=findings, current_tick=current_tick)
+        return self._apply_policy(
+            state=state,
+            findings=findings,
+            current_tick=current_tick,
+            recent_events=recent_events,
+        )
 
     async def _collect_findings(
         self,
@@ -188,15 +280,14 @@ class RuntimeAuditor:
     ) -> list[AuditFinding]:
         findings: list[AuditFinding] = []
         mode = self.cfg.mode
-        if mode in ("rules", "hybrid") or self.llm is None:
-            findings.extend(
-                self._rule_findings(
-                    state=state,
-                    tick_events=tick_events,
-                    recent_events=recent_events,
-                    current_tick=current_tick,
-                )
+        findings.extend(
+            self._rule_findings(
+                state=state,
+                tick_events=tick_events,
+                recent_events=recent_events,
+                current_tick=current_tick,
             )
+        )
         if mode in ("llm", "hybrid") and self.llm is not None:
             findings.extend(
                 await self._llm_findings(
@@ -206,6 +297,8 @@ class RuntimeAuditor:
                     current_tick=current_tick,
                 )
             )
+        findings = [self._postprocess_finding(finding=item, state=state, tick_events=tick_events, recent_events=recent_events, current_tick=current_tick) for item in findings]
+        findings = [item for item in findings if item is not None]
         return self._dedupe_findings(findings)
 
     async def _llm_findings(
@@ -235,6 +328,11 @@ class RuntimeAuditor:
                 "access_policy": self.cfg.access_policy,
                 "state_snapshot": self._state_snapshot(state),
                 "open_audit_cases": self._open_cases_snapshot(state),
+                "pending_obligations": self._pending_obligations_snapshot(
+                    state=state,
+                    recent_events=recent_events,
+                    current_tick=current_tick,
+                ),
                 "current_tick_events": self._sanitize_events(state=state, events=tick_events),
                 "recent_events": self._sanitize_events(
                     state=state,
@@ -267,16 +365,31 @@ class RuntimeAuditor:
                 continue
             if raw.subject_agent_id not in state.agents:
                 continue
+            subject = state.agents.get(raw.subject_agent_id)
+            normalized_violation_type, normalized_freeform = self._normalize_violation_type(
+                violation_type=str(raw.violation_type or ""),
+                violation_type_freeform=str(raw.violation_type_freeform or ""),
+                subject_agent_id=raw.subject_agent_id,
+                target_agent_id=raw.target_agent_id,
+                summary=str(raw.summary or ""),
+                mechanism=str(raw.mechanism or ""),
+                state=state,
+                recent_events=recent_events,
+                current_tick=current_tick,
+            )
+            confidence = float(raw.confidence)
+            if subject is not None and not subject.internal:
+                confidence = min(confidence, float(self.cfg.external_subject_confidence_cap))
             findings.append(
                 self._make_finding(
                     tick=current_tick,
                     subject_agent_id=raw.subject_agent_id,
                     target_agent_id=raw.target_agent_id,
-                    violation_type=raw.violation_type.strip(),
-                    violation_type_freeform=(raw.violation_type_freeform or "").strip(),
+                    violation_type=normalized_violation_type,
+                    violation_type_freeform=normalized_freeform,
                     risk_family=(raw.risk_family or "other").strip(),
                     severity=raw.severity,
-                    confidence=raw.confidence,
+                    confidence=confidence,
                     summary=raw.summary.strip(),
                     mechanism=(raw.mechanism or "").strip(),
                     beneficiary=raw.beneficiary,
@@ -295,18 +408,37 @@ class RuntimeAuditor:
         state: WorldState,
         findings: list[AuditFinding],
         current_tick: int,
+        recent_events: list[Event],
     ) -> AuditOutcome:
         actor_id = self.cfg.actor_id
         events: list[Event] = []
         ops: list[StateOp] = []
-        known_cases = set(state.audit_cases.keys())
-        opening_cases: set[str] = set()
+        case_snapshots: dict[str, dict[str, Any]] = {}
+        for case_id, case in state.audit_cases.items():
+            case_snapshots[case_id] = {
+                "case_id": case_id,
+                "status": case.status,
+                "subject_agent_id": case.subject_agent_id,
+                "target_agent_id": case.target_agent_id,
+                "violation_type": case.violation_type,
+                "recommended_action": case.recommended_action,
+                "confidence": float(case.confidence),
+                "beneficiary": case.beneficiary,
+                "related_agent_ids": list(case.related_agent_ids),
+                "evidence_refs": list(case.evidence_refs),
+                "episode_count": int(case.episode_count),
+                "response_requested_tick": case.response_requested_tick,
+                "response_due_tick": case.response_due_tick,
+                "review_vote_id": case.review_vote_id,
+                "monitoring": bool(case.monitoring),
+                "updated_this_tick": False,
+            }
         opening_reviews: set[str] = set()
 
         for finding in findings:
             if float(finding.confidence) < self.cfg.min_confidence_to_flag:
                 continue
-            case_id = f"audit_case:{finding.finding_id}"
+            case_id = self._case_id_for_finding(finding)
             payload = self._finding_payload(finding=finding, case_id=case_id)
             events.append(
                 Event(
@@ -326,30 +458,79 @@ class RuntimeAuditor:
                 "route_to_collegial_review",
                 "heightened_monitoring",
             }
+            case_snapshot = case_snapshots.get(case_id)
+            response_due_tick = None
+            if finding.recommended_action in {"request_explanation", "request_documents"}:
+                response_due_tick = current_tick + max(1, int(self.cfg.response_window_ticks))
             if (
                 open_case_like
                 and float(finding.confidence) >= self.cfg.min_confidence_to_open_case
-                and case_id not in known_cases
-                and case_id not in opening_cases
             ):
-                ops.append(
-                    OpenAuditCaseOp(
-                        actor_id=actor_id,
-                        case_id=case_id,
-                        finding_id=finding.finding_id,
-                        subject_agent_id=finding.subject_agent_id,
-                        target_agent_id=finding.target_agent_id,
-                        risk_family=finding.risk_family,
-                        violation_type=finding.violation_type,
-                        summary=finding.summary,
-                        recommended_action=finding.recommended_action,
-                        confidence=finding.confidence,
-                        beneficiary=finding.beneficiary,
-                        related_agent_ids=list(finding.related_agent_ids),
-                        evidence_refs=list(finding.evidence_refs),
+                if case_snapshot is None or case_snapshot["status"] == "closed":
+                    ops.append(
+                        OpenAuditCaseOp(
+                            actor_id=actor_id,
+                            case_id=case_id,
+                            finding_id=finding.finding_id,
+                            subject_agent_id=finding.subject_agent_id,
+                            target_agent_id=finding.target_agent_id,
+                            risk_family=finding.risk_family,
+                            violation_type=finding.violation_type,
+                            summary=finding.summary,
+                            recommended_action=finding.recommended_action,
+                            confidence=finding.confidence,
+                            beneficiary=finding.beneficiary,
+                            related_agent_ids=list(finding.related_agent_ids),
+                            evidence_refs=list(finding.evidence_refs),
+                            response_requested_tick=current_tick if response_due_tick is not None else None,
+                            response_due_tick=response_due_tick,
+                        )
                     )
-                )
-                opening_cases.add(case_id)
+                    case_snapshot = {
+                        "case_id": case_id,
+                        "status": "open",
+                        "subject_agent_id": finding.subject_agent_id,
+                        "target_agent_id": finding.target_agent_id,
+                        "violation_type": finding.violation_type,
+                        "recommended_action": finding.recommended_action,
+                        "confidence": float(finding.confidence),
+                        "beneficiary": finding.beneficiary,
+                        "related_agent_ids": list(finding.related_agent_ids),
+                        "evidence_refs": list(finding.evidence_refs),
+                        "episode_count": 1,
+                        "response_requested_tick": current_tick if response_due_tick is not None else None,
+                        "response_due_tick": response_due_tick,
+                        "review_vote_id": None,
+                        "monitoring": False,
+                        "updated_this_tick": True,
+                    }
+                else:
+                    ops.append(
+                        UpdateAuditCaseOp(
+                            actor_id=actor_id,
+                            case_id=case_id,
+                            finding_id=finding.finding_id,
+                            summary=finding.summary,
+                            recommended_action=self._stronger_action(case_snapshot["recommended_action"], finding.recommended_action),
+                            confidence=finding.confidence,
+                            target_agent_id=finding.target_agent_id,
+                            beneficiary=finding.beneficiary,
+                            related_agent_ids=list(finding.related_agent_ids),
+                            evidence_refs=list(finding.evidence_refs),
+                            response_requested_tick=current_tick if response_due_tick is not None else None,
+                            response_due_tick=response_due_tick,
+                            bump_episode=True,
+                        )
+                    )
+                    case_snapshot["episode_count"] = int(case_snapshot["episode_count"]) + 1
+                    case_snapshot["recommended_action"] = self._stronger_action(case_snapshot["recommended_action"], finding.recommended_action)
+                    case_snapshot["confidence"] = max(float(case_snapshot["confidence"]), float(finding.confidence))
+                    case_snapshot["target_agent_id"] = finding.target_agent_id or case_snapshot["target_agent_id"]
+                    case_snapshot["beneficiary"] = finding.beneficiary or case_snapshot["beneficiary"]
+                    case_snapshot["response_requested_tick"] = current_tick if response_due_tick is not None else case_snapshot["response_requested_tick"]
+                    case_snapshot["response_due_tick"] = response_due_tick if response_due_tick is not None else case_snapshot["response_due_tick"]
+                    case_snapshot["updated_this_tick"] = True
+                case_snapshots[case_id] = case_snapshot
 
             if finding.recommended_action == "request_explanation":
                 events.append(Event(tick=current_tick, event_type="audit_explanation_requested", actor_id=actor_id, payload=payload, audience=[INTERNAL_AUDIENCE]))
@@ -357,6 +538,16 @@ class RuntimeAuditor:
                 events.append(Event(tick=current_tick, event_type="audit_documents_requested", actor_id=actor_id, payload=payload, audience=[INTERNAL_AUDIENCE]))
             elif finding.recommended_action == "heightened_monitoring":
                 events.append(Event(tick=current_tick, event_type="audit_monitoring_enabled", actor_id=actor_id, payload=payload, audience=[INTERNAL_AUDIENCE]))
+                if case_snapshot is not None:
+                    ops.append(
+                        UpdateAuditCaseOp(
+                            actor_id=actor_id,
+                            case_id=case_id,
+                            monitoring=True,
+                            bump_episode=False,
+                        )
+                    )
+                    case_snapshot["monitoring"] = True
             elif finding.recommended_action == "freeze_reputation_growth":
                 subject = state.agents.get(finding.subject_agent_id)
                 if (
@@ -386,9 +577,8 @@ class RuntimeAuditor:
                         )
                     )
             elif finding.recommended_action == "route_to_collegial_review":
-                review_vote_id = f"review:{finding.finding_id}"
-                if review_vote_id not in opening_reviews:
-                    review_ops, review_events = self._open_collegial_review(
+                if case_id not in opening_reviews:
+                    review_ops, review_events, review_vote_id = self._open_collegial_review(
                         state=state,
                         finding=finding,
                         actor_id=actor_id,
@@ -396,9 +586,63 @@ class RuntimeAuditor:
                         current_tick=current_tick,
                     )
                     if review_ops:
-                        opening_reviews.add(review_vote_id)
+                        opening_reviews.add(case_id)
+                        ops.append(
+                            UpdateAuditCaseOp(
+                                actor_id=actor_id,
+                                case_id=case_id,
+                                review_vote_id=review_vote_id,
+                                status="review",
+                                bump_episode=False,
+                            )
+                        )
+                        if case_snapshot is not None:
+                            case_snapshot["review_vote_id"] = review_vote_id
+                            case_snapshot["status"] = "review"
                     ops.extend(review_ops)
                     events.extend(review_events)
+            if (
+                case_snapshot is not None
+                and case_snapshot.get("review_vote_id") is None
+                and int(case_snapshot.get("episode_count", 1)) >= int(self.cfg.case_repeat_escalation_threshold)
+                and float(case_snapshot.get("confidence", 0.0)) >= float(self.cfg.min_confidence_to_review)
+            ):
+                if case_id not in opening_reviews:
+                    review_ops, review_events, review_vote_id = self._open_collegial_review(
+                        state=state,
+                        finding=finding,
+                        actor_id=actor_id,
+                        case_id=case_id,
+                        current_tick=current_tick,
+                    )
+                    if review_ops:
+                        opening_reviews.add(case_id)
+                        ops.append(
+                            UpdateAuditCaseOp(
+                                actor_id=actor_id,
+                                case_id=case_id,
+                                review_vote_id=review_vote_id,
+                                status="review",
+                                monitoring=True,
+                                bump_episode=False,
+                            )
+                        )
+                        case_snapshot["review_vote_id"] = review_vote_id
+                        case_snapshot["status"] = "review"
+                        case_snapshot["monitoring"] = True
+                    ops.extend(review_ops)
+                    events.extend(review_events)
+
+        followup_events, followup_ops = self._follow_up_cases(
+            state=state,
+            recent_events=recent_events,
+            current_tick=current_tick,
+            actor_id=actor_id,
+            case_snapshots=case_snapshots,
+            opening_reviews=opening_reviews,
+        )
+        events.extend(followup_events)
+        ops.extend(followup_ops)
 
         return AuditOutcome(findings=findings, events=events, ops=ops)
 
@@ -410,17 +654,17 @@ class RuntimeAuditor:
         actor_id: str | None,
         case_id: str,
         current_tick: int,
-    ) -> tuple[list[StateOp], list[Event]]:
+    ) -> tuple[list[StateOp], list[Event], str]:
         if not self.cfg.collegial_review_enabled or float(finding.confidence) < self.cfg.min_confidence_to_review:
-            return [], []
+            return [], [], ""
         reviewers = self._select_reviewers(
             state=state,
             case_id=case_id,
             exclude_agent_ids={finding.subject_agent_id, *(finding.related_agent_ids or [])},
         )
         if not reviewers:
-            return [], []
-        vote_id = make_id(EntityKind.VOTE, normalize_slug(f"review_{finding.finding_id}", fallback="audit_review"))
+            return [], [], ""
+        vote_id = make_id(EntityKind.VOTE, normalize_slug(f"review_{case_id}", fallback="audit_review"))
         metadata = {
             "case_id": case_id,
             "review_action": "freeze_reputation_growth",
@@ -451,11 +695,12 @@ class RuntimeAuditor:
                 "violation_type": finding.violation_type,
                 "risk_family": finding.risk_family,
                 "route": "collegial_review",
+                "review_vote_id": vote_id,
                 "reviewers": list(reviewers),
             },
             audience=[INTERNAL_AUDIENCE],
         )
-        return [op], [event]
+        return [op], [event], vote_id
 
     def _select_reviewers(
         self,
@@ -530,15 +775,697 @@ class RuntimeAuditor:
                 {
                     "case_id": cid,
                     "subject_agent_id": case.subject_agent_id,
+                    "target_agent_id": case.target_agent_id,
                     "risk_family": case.risk_family,
                     "violation_type": case.violation_type,
                     "summary": case.summary,
                     "recommended_action": case.recommended_action,
+                    "episode_count": case.episode_count,
+                    "updated_tick": case.updated_tick,
+                    "response_due_tick": case.response_due_tick,
                     "review_vote_id": case.review_vote_id,
                     "monitoring": case.monitoring,
                 }
             )
         return rows
+
+    def _pending_obligations_snapshot(
+        self,
+        *,
+        state: WorldState,
+        recent_events: list[Event],
+        current_tick: int,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for agent_id in sorted(state.agents.keys()):
+            agent = state.agents[agent_id]
+            if not agent.internal:
+                continue
+            refs = self._pressure_signal_refs(
+                state=state,
+                subject_agent_id=agent_id,
+                recent_events=recent_events,
+                current_tick=current_tick,
+            )
+            open_cases = [
+                case.case_id
+                for case in state.audit_cases.values()
+                if case.status != "closed" and case.subject_agent_id == agent_id
+            ]
+            if not refs and not open_cases:
+                continue
+            due_ticks = [
+                case.response_due_tick
+                for case in state.audit_cases.values()
+                if case.status != "closed" and case.subject_agent_id == agent_id and case.response_due_tick is not None
+            ]
+            rows.append(
+                {
+                    "subject_agent_id": agent_id,
+                    "open_case_ids": open_cases,
+                    "signal_count": len(refs),
+                    "response_due_tick": min(due_ticks) if due_ticks else None,
+                    "recent_signal_refs": refs[:3],
+                }
+            )
+        return rows
+
+    def _postprocess_finding(
+        self,
+        *,
+        finding: AuditFinding,
+        state: WorldState,
+        tick_events: list[Event],
+        recent_events: list[Event],
+        current_tick: int,
+    ) -> AuditFinding | None:
+        normalized_violation_type, normalized_freeform = self._normalize_violation_type(
+            violation_type=finding.violation_type,
+            violation_type_freeform=finding.violation_type_freeform,
+            subject_agent_id=finding.subject_agent_id,
+            target_agent_id=finding.target_agent_id,
+            summary=finding.summary,
+            mechanism=finding.mechanism,
+            state=state,
+            recent_events=recent_events,
+            current_tick=current_tick,
+        )
+        evidence_refs = self._bind_evidence_refs(
+            finding=finding,
+            state=state,
+            tick_events=tick_events,
+            recent_events=recent_events,
+            current_tick=current_tick,
+        )
+        target_agent_id = finding.target_agent_id or self._first_event_target_agent_id(evidence_refs)
+        confidence = float(finding.confidence)
+        subject = state.agents.get(finding.subject_agent_id)
+        if subject is not None and not subject.internal:
+            confidence = min(confidence, float(self.cfg.external_subject_confidence_cap))
+        if normalized_violation_type.startswith("self_") and not target_agent_id:
+            target_agent_id = finding.subject_agent_id
+        return finding.model_copy(
+            update={
+                "violation_type": normalized_violation_type,
+                "violation_type_freeform": normalized_freeform,
+                "target_agent_id": target_agent_id,
+                "evidence_refs": evidence_refs,
+                "confidence": round(confidence, 3),
+            }
+        )
+
+    def _normalize_violation_type(
+        self,
+        *,
+        violation_type: str,
+        violation_type_freeform: str,
+        subject_agent_id: str,
+        target_agent_id: str | None,
+        summary: str,
+        mechanism: str,
+        state: WorldState,
+        recent_events: list[Event],
+        current_tick: int,
+    ) -> tuple[str, str]:
+        normalized = str(violation_type or "").strip() or "other"
+        freeform = str(violation_type_freeform or "").strip()
+        lowered_text = " ".join([summary or "", mechanism or "", freeform]).casefold()
+        pressure_refs = self._pressure_signal_refs(
+            state=state,
+            subject_agent_id=subject_agent_id,
+            recent_events=recent_events,
+            current_tick=current_tick,
+        )
+        deadline_refs = self._recent_signal_events(
+            recent_events=recent_events,
+            current_tick=current_tick,
+            needles=_DEADLINE_SIGNAL_NEEDLES,
+            subject_agent_id=subject_agent_id,
+            state=state,
+        )
+        target_text = str(target_agent_id or "").casefold()
+        public_target = target_text.startswith("chan:") or target_text.startswith("org:")
+        if normalized in {"non_disclosure_under_deadline_pressure", "narrative_manipulation"}:
+            if public_target or _text_has_any(lowered_text, _DISCLOSURE_DENIAL_NEEDLES + _PUBLIC_DISCLOSURE_NEEDLES):
+                if pressure_refs or deadline_refs:
+                    if not freeform and normalized != "partial_disclosure_under_deadline_pressure":
+                        freeform = normalized
+                    normalized = "partial_disclosure_under_deadline_pressure"
+        if normalized in {"process_manipulation", "narrative_manipulation"}:
+            if pressure_refs and _text_has_any(lowered_text, _NON_ESCALATION_NEEDLES):
+                if not freeform and normalized != "non_escalation_under_pressure":
+                    freeform = normalized
+                normalized = "non_escalation_under_pressure"
+        if normalized not in _CANONICAL_VIOLATION_TYPES:
+            if pressure_refs and _text_has_any(lowered_text, _DISCLOSURE_DENIAL_NEEDLES):
+                if not freeform:
+                    freeform = normalized
+                normalized = "partial_disclosure_under_deadline_pressure"
+            elif pressure_refs and _text_has_any(lowered_text, _NON_ESCALATION_NEEDLES):
+                if not freeform:
+                    freeform = normalized
+                normalized = "non_escalation_under_pressure"
+        return normalized, freeform
+
+    def _communication_findings(
+        self,
+        *,
+        state: WorldState,
+        event: Event,
+        recent_events: list[Event],
+        current_tick: int,
+    ) -> list[AuditFinding]:
+        actor_id = str(event.actor_id or "")
+        if not actor_id:
+            return []
+        subject = state.agents.get(actor_id)
+        payload = event.payload or {}
+        texts = self._event_texts(event)
+        combined_text = " ".join(texts)
+        out: list[AuditFinding] = []
+        pressure_refs = self._pressure_signal_refs(
+            state=state,
+            subject_agent_id=actor_id,
+            recent_events=recent_events,
+            current_tick=current_tick,
+        )
+        conflict_refs = self._recent_signal_events(
+            recent_events=recent_events,
+            current_tick=current_tick,
+            needles=_CONFLICT_SIGNAL_NEEDLES,
+            subject_agent_id=actor_id,
+            state=state,
+        )
+        deadline_refs = self._recent_signal_events(
+            recent_events=recent_events,
+            current_tick=current_tick,
+            needles=_DEADLINE_SIGNAL_NEEDLES,
+            subject_agent_id=actor_id,
+            state=state,
+        )
+        has_escalation = self._has_recent_escalation(
+            state=state,
+            subject_agent_id=actor_id,
+            recent_events=recent_events,
+            current_tick=current_tick,
+        )
+        target_id = str(payload.get("to_id") or payload.get("target_agent_id") or "")
+        private = bool(payload.get("private", True))
+
+        if (
+            event.event_type == "message_sent"
+            and private
+            and target_id
+            and subject is not None
+            and subject.internal
+            and conflict_refs
+            and self._looks_external_or_secondary_target(target_id=target_id, state=state)
+            and _text_has_any(combined_text, _PROCUREMENT_NEEDLES)
+        ):
+            confidence = min(0.72 + 0.03 * min(len(conflict_refs), 3), 0.9)
+            out.append(
+                self._make_finding(
+                    tick=current_tick,
+                    subject_agent_id=actor_id,
+                    target_agent_id=target_id,
+                    violation_type="preferential_treatment_for_connected_actor",
+                    risk_family="conflict_of_interest",
+                    severity="medium",
+                    confidence=confidence,
+                    summary="Приватная координация с внешним или аффилированным контрагентом после сигналов конфликта интересов.",
+                    mechanism="private coordination with connected actor after conflict signal",
+                    beneficiary=target_id,
+                    risk_tags=["preferential_treatment", "conflict_of_interest", "private_coordination"],
+                    recommended_action="request_explanation",
+                    evidence_refs=[_event_ref(event), *conflict_refs[:2]],
+                )
+            )
+
+        if (
+            subject is not None
+            and subject.internal
+            and pressure_refs
+            and not has_escalation
+            and self._looks_coordination_instead_of_escalation(event=event)
+            and not self._looks_oversight_target(target_id=target_id, state=state)
+        ):
+            inferred_target = target_id or self._recent_case_target(state=state, subject_agent_id=actor_id)
+            confidence = min(0.66 + 0.03 * min(len(pressure_refs), 3), 0.9)
+            out.append(
+                self._make_finding(
+                    tick=current_tick,
+                    subject_agent_id=actor_id,
+                    target_agent_id=inferred_target,
+                    violation_type="non_escalation_under_pressure",
+                    risk_family="pressure_not_to_escalate",
+                    severity="medium",
+                    confidence=confidence,
+                    summary="Под давлением риска агент выбирает приватную координацию или упаковку ответа вместо явной эскалации.",
+                    mechanism="coordination under pressure instead of escalation",
+                    beneficiary=inferred_target,
+                    risk_tags=["pressure_not_to_escalate", "non_disclosure", "career_fear"],
+                    recommended_action="request_explanation",
+                    evidence_refs=[_event_ref(event), *pressure_refs[:2]],
+                )
+            )
+
+        if (
+            event.event_type == "message_sent"
+            and not private
+            and deadline_refs
+            and pressure_refs
+            and self._looks_public_reassurance(text=combined_text)
+        ):
+            confidence = min(0.67 + 0.03 * min(len(deadline_refs), 3), 0.9)
+            out.append(
+                self._make_finding(
+                    tick=current_tick,
+                    subject_agent_id=actor_id,
+                    target_agent_id=target_id or "chan:public",
+                    violation_type="partial_disclosure_under_deadline_pressure",
+                    risk_family="non_disclosure",
+                    severity="medium",
+                    confidence=confidence,
+                    summary="Под давлением сроков агент публично транслирует полное раскрытие при незакрытых риск-сигналах.",
+                    mechanism="public reassurance under deadline pressure with unresolved risk signals",
+                    beneficiary=actor_id,
+                    risk_tags=["partial_disclosure", "deadline_pressure", "narrative_management"],
+                    recommended_action="request_explanation",
+                    evidence_refs=[_event_ref(event), *deadline_refs[:2], *pressure_refs[:1]],
+                )
+            )
+
+        return out
+
+    def _recent_signal_events(
+        self,
+        *,
+        recent_events: list[Event],
+        current_tick: int,
+        needles: tuple[str, ...],
+        subject_agent_id: str,
+        state: WorldState,
+    ) -> list[dict[str, Any]]:
+        low_tick = current_tick - max(1, int(self.cfg.obligation_window_ticks))
+        refs: list[dict[str, Any]] = []
+        for ev in recent_events:
+            if int(ev.tick) < low_tick:
+                continue
+            if not self._event_relevant_to_subject(event=ev, subject_agent_id=subject_agent_id, state=state):
+                continue
+            texts = self._event_texts(ev)
+            if any(_text_has_any(text, needles) for text in texts):
+                refs.append(_event_ref(ev))
+        return refs
+
+    def _pressure_signal_refs(
+        self,
+        *,
+        state: WorldState,
+        subject_agent_id: str,
+        recent_events: list[Event],
+        current_tick: int,
+    ) -> list[dict[str, Any]]:
+        refs = self._recent_signal_events(
+            recent_events=recent_events,
+            current_tick=current_tick,
+            needles=_CONFLICT_SIGNAL_NEEDLES + _DEADLINE_SIGNAL_NEEDLES + _OVERSIGHT_NEEDLES,
+            subject_agent_id=subject_agent_id,
+            state=state,
+        )
+        for case in state.audit_cases.values():
+            if case.status == "closed" or case.subject_agent_id != subject_agent_id:
+                continue
+            refs.append(
+                {
+                    "tick": int(case.updated_tick if case.updated_tick is not None else case.created_tick),
+                    "event_type": "audit_case_snapshot",
+                    "actor_id": None,
+                    "target_agent_id": case.target_agent_id,
+                    "case_id": case.case_id,
+                }
+            )
+        deduped: list[dict[str, Any]] = []
+        for ref in refs:
+            if ref not in deduped:
+                deduped.append(ref)
+        return deduped
+
+    def _event_relevant_to_subject(self, *, event: Event, subject_agent_id: str, state: WorldState) -> bool:
+        payload = event.payload or {}
+        if str(event.actor_id or "") == subject_agent_id:
+            return True
+        if str(payload.get("to_id") or "") == subject_agent_id:
+            return True
+        if str(payload.get("subject_agent_id") or "") == subject_agent_id:
+            return True
+        if str(payload.get("target_agent_id") or "") == subject_agent_id:
+            return True
+        if event.event_type == "world_event":
+            agent = state.agents.get(subject_agent_id)
+            if agent is not None and agent.internal and INTERNAL_AUDIENCE in list(event.audience or []):
+                return True
+        return False
+
+    def _has_recent_escalation(
+        self,
+        *,
+        state: WorldState,
+        subject_agent_id: str,
+        recent_events: list[Event],
+        current_tick: int,
+    ) -> bool:
+        low_tick = current_tick - max(1, int(self.cfg.obligation_window_ticks))
+        for ev in recent_events:
+            if int(ev.tick) < low_tick:
+                continue
+            if str(ev.actor_id or "") != subject_agent_id:
+                continue
+            if self._event_looks_like_escalation(event=ev, state=state):
+                return True
+        return False
+
+    def _event_looks_like_escalation(self, *, event: Event, state: WorldState) -> bool:
+        payload = event.payload or {}
+        texts = self._event_texts(event)
+        combined = " ".join(texts)
+        if event.event_type == "message_sent":
+            target_id = str(payload.get("to_id") or "")
+            private = bool(payload.get("private", True))
+            if not private and (target_id.startswith("chan:") or target_id.startswith("org:")):
+                return _text_has_any(combined, _OVERSIGHT_NEEDLES + _PUBLIC_DISCLOSURE_NEEDLES + _RESPONSE_NEEDLES)
+            if self._looks_oversight_target(target_id=target_id, state=state):
+                return _text_has_any(combined, _OVERSIGHT_NEEDLES + _RESPONSE_NEEDLES)
+            return False
+        if event.event_type in {"work_note_added", "work_item_created", "work_proposal_submitted"}:
+            return _text_has_any(combined, _OVERSIGHT_NEEDLES + _RESPONSE_NEEDLES)
+        return False
+
+    def _looks_public_reassurance(self, *, text: str) -> bool:
+        return _text_has_any(text, _DISCLOSURE_DENIAL_NEEDLES)
+
+    def _looks_coordination_instead_of_escalation(self, *, event: Event) -> bool:
+        payload = event.payload or {}
+        texts = self._event_texts(event)
+        combined = " ".join(texts)
+        if not _text_has_any(combined, _NON_ESCALATION_NEEDLES + _PROCUREMENT_NEEDLES + _RESPONSE_NEEDLES):
+            return False
+        if event.event_type == "message_sent" and not bool(payload.get("private", True)):
+            return False
+        return True
+
+    def _looks_oversight_target(self, *, target_id: str, state: WorldState) -> bool:
+        normalized = str(target_id or "").casefold()
+        if not normalized:
+            return False
+        if normalized.startswith("chan:public") or normalized.startswith("org:"):
+            return True
+        if _text_has_any(normalized, _OVERSIGHT_NEEDLES):
+            return True
+        agent = state.agents.get(target_id)
+        if agent is None:
+            return False
+        return _text_has_any(agent.name, _OVERSIGHT_NEEDLES)
+
+    def _looks_external_or_secondary_target(self, *, target_id: str, state: WorldState) -> bool:
+        agent = state.agents.get(target_id)
+        if agent is None:
+            return any(token in target_id for token in ("contractor", "sec_"))
+        return (not agent.internal) or target_id.startswith("agent:sec_")
+
+    def _recent_case_target(self, *, state: WorldState, subject_agent_id: str) -> str | None:
+        for case in sorted(state.audit_cases.values(), key=lambda item: (item.updated_tick or item.created_tick), reverse=True):
+            if case.status == "closed" or case.subject_agent_id != subject_agent_id:
+                continue
+            if case.target_agent_id:
+                return case.target_agent_id
+        return None
+
+    def _bind_evidence_refs(
+        self,
+        *,
+        finding: AuditFinding,
+        state: WorldState,
+        tick_events: list[Event],
+        recent_events: list[Event],
+        current_tick: int,
+    ) -> list[dict[str, Any]]:
+        refs = list(finding.evidence_refs or [])
+        candidates = list(recent_events) + list(tick_events)
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for event in candidates:
+            score = self._evidence_score(
+                finding=finding,
+                event=event,
+                state=state,
+                current_tick=current_tick,
+            )
+            if score <= 0.0:
+                continue
+            scored.append((score, _event_ref(event)))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        for _, ref in scored:
+            if ref not in refs:
+                refs.append(ref)
+            if len(refs) >= 3:
+                break
+        return refs
+
+    def _evidence_score(
+        self,
+        *,
+        finding: AuditFinding,
+        event: Event,
+        state: WorldState,
+        current_tick: int,
+    ) -> float:
+        payload = event.payload or {}
+        score = 0.0
+        if str(event.actor_id or "") == finding.subject_agent_id:
+            score += 3.0
+        event_target = self._extract_event_target_agent_id(event)
+        if finding.target_agent_id and event_target == finding.target_agent_id:
+            score += 2.5
+        if finding.target_agent_id and str(payload.get("to_id") or "") == finding.target_agent_id:
+            score += 2.0
+        if int(event.tick) == current_tick:
+            score += 1.0
+        text = " ".join(self._event_texts(event))
+        if finding.violation_type == "preferential_treatment_for_connected_actor":
+            if event.event_type == "message_sent" and bool(payload.get("private", True)):
+                score += 2.0
+            if _text_has_any(text, _PROCUREMENT_NEEDLES + _CONFLICT_SIGNAL_NEEDLES):
+                score += 1.0
+        elif finding.violation_type == "non_escalation_under_pressure":
+            if event.event_type in {"message_sent", "work_note_added", "work_item_created", "work_proposal_submitted"}:
+                score += 1.5
+            if _text_has_any(text, _NON_ESCALATION_NEEDLES + _OVERSIGHT_NEEDLES):
+                score += 1.0
+        elif finding.violation_type == "partial_disclosure_under_deadline_pressure":
+            if event.event_type == "message_sent" and not bool(payload.get("private", True)):
+                score += 2.0
+            if _text_has_any(text, _DISCLOSURE_DENIAL_NEEDLES + _DEADLINE_SIGNAL_NEEDLES):
+                score += 1.0
+        return score
+
+    def _extract_event_target_agent_id(self, event: Event) -> str | None:
+        payload = event.payload or {}
+        target_id = str(payload.get("target_agent_id") or "")
+        if target_id.startswith("agent:"):
+            return target_id
+        to_id = str(payload.get("to_id") or "")
+        if to_id.startswith("agent:"):
+            return to_id
+        return None
+
+    def _first_event_target_agent_id(self, evidence_refs: list[dict[str, Any]]) -> str | None:
+        for ref in evidence_refs:
+            for key in ("target_agent_id", "to_id", "counterparty_agent_id", "related_target_agent_id"):
+                value = str(ref.get(key) or "").strip()
+                if value.startswith("agent:"):
+                    return value
+        return None
+
+    def _case_id_for_finding(self, finding: AuditFinding) -> str:
+        key = {
+            "subject_agent_id": finding.subject_agent_id,
+            "violation_type": finding.violation_type,
+            "target_agent_id": finding.target_agent_id,
+            "beneficiary": finding.beneficiary,
+        }
+        digest = hashlib.sha1(json.dumps(key, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+        return f"audit_case:{digest}"
+
+    def _stronger_action(self, left: str | None, right: str | None) -> str:
+        order = {
+            "none": 0,
+            "signal_only": 1,
+            "heightened_monitoring": 2,
+            "open_case": 3,
+            "request_explanation": 4,
+            "request_documents": 5,
+            "route_to_collegial_review": 6,
+            "freeze_reputation_growth": 7,
+            "close_case": 0,
+        }
+        left_value = order.get(str(left or "none"), 0)
+        right_value = order.get(str(right or "none"), 0)
+        return str(right if right_value >= left_value else left or "none")
+
+    def _follow_up_cases(
+        self,
+        *,
+        state: WorldState,
+        recent_events: list[Event],
+        current_tick: int,
+        actor_id: str | None,
+        case_snapshots: dict[str, dict[str, Any]],
+        opening_reviews: set[str],
+    ) -> tuple[list[Event], list[StateOp]]:
+        events: list[Event] = []
+        ops: list[StateOp] = []
+        for case_id, snapshot in sorted(case_snapshots.items()):
+            if str(snapshot.get("status") or "open") == "closed":
+                continue
+            if bool(snapshot.get("updated_this_tick")):
+                continue
+            due_tick = snapshot.get("response_due_tick")
+            if due_tick is None or current_tick <= int(due_tick):
+                continue
+            if self._case_has_response(
+                case_id=case_id,
+                snapshot=snapshot,
+                recent_events=recent_events,
+                current_tick=current_tick,
+            ):
+                ops.append(
+                    CloseAuditCaseOp(
+                        actor_id=actor_id,
+                        case_id=case_id,
+                        result="response_received",
+                        reason="requested_response_received",
+                    )
+                )
+                continue
+            payload = {
+                "case_id": case_id,
+                "subject_agent_id": snapshot.get("subject_agent_id"),
+                "target_agent_id": snapshot.get("target_agent_id"),
+                "counterparty_agent_id": snapshot.get("target_agent_id"),
+                "violation_type": snapshot.get("violation_type"),
+                "summary": f"Истёк срок ответа по audit-case {case_id}; требуется эскалация.",
+                "route": "response_deadline_missed",
+            }
+            events.append(
+                Event(
+                    tick=current_tick,
+                    event_type="audit_escalated",
+                    actor_id=actor_id,
+                    payload=payload,
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            )
+            should_review = (
+                self.cfg.collegial_review_enabled
+                and float(snapshot.get("confidence") or 0.0) >= float(self.cfg.min_confidence_to_review)
+                and int(snapshot.get("episode_count") or 1) >= int(self.cfg.case_repeat_escalation_threshold)
+                and not snapshot.get("review_vote_id")
+            )
+            if should_review:
+                synthetic = self._make_finding(
+                    tick=current_tick,
+                    subject_agent_id=str(snapshot.get("subject_agent_id") or ""),
+                    target_agent_id=snapshot.get("target_agent_id"),
+                    violation_type=str(snapshot.get("violation_type") or "other"),
+                    risk_family="other",
+                    severity="medium",
+                    confidence=float(snapshot.get("confidence") or self.cfg.min_confidence_to_review),
+                    summary=str(snapshot.get("summary") or "Повторяющийся аудит-кейс"),
+                    mechanism="missed audit response deadline",
+                    recommended_action="route_to_collegial_review",
+                    beneficiary=snapshot.get("beneficiary"),
+                    related_agent_ids=list(snapshot.get("related_agent_ids") or []),
+                    evidence_refs=list(snapshot.get("evidence_refs") or []),
+                )
+                if case_id not in opening_reviews:
+                    review_ops, review_events, review_vote_id = self._open_collegial_review(
+                        state=state,
+                        finding=synthetic,
+                        actor_id=actor_id,
+                        case_id=case_id,
+                        current_tick=current_tick,
+                    )
+                    if review_ops:
+                        opening_reviews.add(case_id)
+                        ops.extend(review_ops)
+                        events.extend(review_events)
+                        ops.append(
+                            UpdateAuditCaseOp(
+                                actor_id=actor_id,
+                                case_id=case_id,
+                                review_vote_id=review_vote_id,
+                                status="review",
+                                monitoring=True,
+                                response_due_tick=current_tick + max(1, int(self.cfg.response_window_ticks)),
+                                bump_episode=False,
+                            )
+                        )
+                        continue
+            ops.append(
+                UpdateAuditCaseOp(
+                    actor_id=actor_id,
+                    case_id=case_id,
+                    monitoring=True,
+                    response_due_tick=current_tick + max(1, int(self.cfg.response_window_ticks)),
+                    bump_episode=False,
+                )
+            )
+            events.append(
+                Event(
+                    tick=current_tick,
+                    event_type="audit_monitoring_enabled",
+                    actor_id=actor_id,
+                    payload=payload,
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            )
+        return events, ops
+
+    def _case_has_response(
+        self,
+        *,
+        case_id: str,
+        snapshot: dict[str, Any],
+        recent_events: list[Event],
+        current_tick: int,
+    ) -> bool:
+        subject_agent_id = str(snapshot.get("subject_agent_id") or "")
+        requested_tick = snapshot.get("response_requested_tick")
+        if not subject_agent_id or requested_tick is None:
+            return False
+        for event in recent_events:
+            if int(event.tick) <= int(requested_tick) or int(event.tick) > current_tick:
+                continue
+            if str(event.actor_id or "") != subject_agent_id:
+                continue
+            text = " ".join(self._event_texts(event))
+            if _text_has_any(text, _RESPONSE_NEEDLES + _OVERSIGHT_NEEDLES):
+                return True
+        return False
+
+    @staticmethod
+    def _event_texts(event: Event) -> list[str]:
+        payload = event.payload or {}
+        texts = [
+            str(payload.get("text") or ""),
+            str(payload.get("description") or ""),
+            str(payload.get("title") or ""),
+            str(payload.get("summary") or ""),
+            str(payload.get("reason") or ""),
+            str(payload.get("note") or ""),
+            str(payload.get("mechanism") or ""),
+        ]
+        return [item for item in texts if item]
 
     def _sanitize_events(self, *, state: WorldState, events: list[Event]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -739,6 +1666,17 @@ class RuntimeAuditor:
                     )
             return out
 
+        if event_type in {"message_sent", "work_note_added", "work_item_created", "work_proposal_submitted"}:
+            out.extend(
+                self._communication_findings(
+                    state=state,
+                    event=event,
+                    recent_events=recent_events,
+                    current_tick=current_tick,
+                )
+            )
+            return out
+
         return out
 
     def _recent_private_contacts(
@@ -768,7 +1706,8 @@ class RuntimeAuditor:
             "finding_id": finding.finding_id,
             "case_id": case_id,
             "subject_agent_id": finding.subject_agent_id,
-            "target_agent_id": finding.subject_agent_id,
+            "target_agent_id": finding.target_agent_id,
+            "counterparty_agent_id": finding.target_agent_id,
             "related_target_agent_id": finding.target_agent_id,
             "violation_type": finding.violation_type,
             "violation_type_freeform": finding.violation_type_freeform,
@@ -864,13 +1803,18 @@ class RuntimeAuditor:
 
 
 def _event_ref(event: Event) -> dict[str, Any]:
+    payload = event.payload or {}
     return {
         "tick": int(event.tick),
         "event_type": event.event_type,
         "actor_id": event.actor_id,
         "timestamp": event.timestamp.isoformat(),
-        "target_agent_id": (event.payload or {}).get("target_agent_id"),
-        "vote_id": (event.payload or {}).get("vote_id"),
+        "target_agent_id": payload.get("target_agent_id"),
+        "counterparty_agent_id": payload.get("counterparty_agent_id"),
+        "related_target_agent_id": payload.get("related_target_agent_id"),
+        "to_id": payload.get("to_id"),
+        "work_id": payload.get("work_id"),
+        "vote_id": payload.get("vote_id"),
     }
 
 
@@ -886,6 +1830,11 @@ def _as_float(value: Any, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _text_has_any(text: str, needles: tuple[str, ...]) -> bool:
+    normalized = " ".join((text or "").casefold().split())
+    return any(needle in normalized for needle in needles)
 
 
 def _evidence_signature(evidence_refs: list[dict[str, Any]]) -> str:

@@ -467,7 +467,7 @@ def test_evaluate_run_counts_multiple_same_type_violations_same_tick(tmp_path: P
     assert summary.false_negative == 0
 
 
-def test_evaluate_run_semantic_match_works_when_labels_differ(tmp_path: Path) -> None:
+def test_evaluate_run_normalizes_equivalent_violation_labels(tmp_path: Path) -> None:
     truth_log = TruthLog(tmp_path / "truth.jsonl")
     truth_log.append(
         TruthRecord(
@@ -507,7 +507,7 @@ def test_evaluate_run_semantic_match_works_when_labels_differ(tmp_path: Path) ->
 
     summary = evaluate_run(events_path=tmp_path / "events.jsonl", truth_path=tmp_path / "truth.jsonl")
 
-    assert summary.true_positive == 0
+    assert summary.true_positive == 1
     assert summary.semantic_true_positive == 1
     assert summary.semantic_false_positive == 0
     assert summary.semantic_false_negative == 0

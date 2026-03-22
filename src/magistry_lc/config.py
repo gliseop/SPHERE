@@ -98,6 +98,7 @@ class MemoryConfig(BaseModel):
             "world_event": 5.0,
             "audit_flagged": 7.0,
             "audit_case_opened": 7.0,
+            "audit_case_updated": 6.0,
             "audit_escalated": 7.0,
             "audit_case_closed": 5.0,
             "audit_runtime_error": 7.0,
@@ -321,6 +322,8 @@ class AuditRuntimeConfig(BaseModel):
     mode: Literal["rules", "hybrid", "llm"] = "llm"
     lookback_events: int = 120
     private_contact_window_ticks: int = 3
+    obligation_window_ticks: int = 3
+    response_window_ticks: int = 2
     max_findings_per_tick: int = 8
     access_policy: Literal["metadata_only", "internal", "full_internal"] = "internal"
     min_confidence_to_flag: float = 0.6
@@ -328,6 +331,8 @@ class AuditRuntimeConfig(BaseModel):
     min_confidence_to_freeze: float = 0.85
     min_confidence_to_review: float = 0.72
     freeze_duration_ticks: int = 3
+    case_repeat_escalation_threshold: int = 2
+    external_subject_confidence_cap: float = 0.78
     reputation_freeze_enabled: bool = True
     reputation_penalty_delta: float | None = None
     collegial_review_enabled: bool = True
@@ -344,8 +349,11 @@ class AuditRuntimeConfig(BaseModel):
     @field_validator(
         "lookback_events",
         "private_contact_window_ticks",
+        "obligation_window_ticks",
+        "response_window_ticks",
         "max_findings_per_tick",
         "freeze_duration_ticks",
+        "case_repeat_escalation_threshold",
         "review_jury_size",
     )
     @classmethod
@@ -359,6 +367,7 @@ class AuditRuntimeConfig(BaseModel):
         "min_confidence_to_open_case",
         "min_confidence_to_freeze",
         "min_confidence_to_review",
+        "external_subject_confidence_cap",
     )
     @classmethod
     def _validate_confidence(cls, v: float) -> float:

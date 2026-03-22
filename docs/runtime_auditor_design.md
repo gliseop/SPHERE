@@ -260,6 +260,8 @@ class AuditRuntimeConfig(BaseModel):
 
 - `metadata_only` или `internal`
 
+Даже при `audit.mode="llm"` рекомендуется оставлять deterministic baseline rules поверх `message_sent` / `work_*` / `world_event`, чтобы omission-like паттерны (`non_escalation_under_pressure`, `partial_disclosure_under_deadline_pressure`) не зависели только от LLM-интерпретации.
+
 ## Рекомендуемые event types
 
 ### Detection layer
@@ -282,15 +284,34 @@ Payload:
 
 #### `audit_case_opened`
 
-Формальное открытие кейса по finding.
+Формальное открытие стабильного кейса по finding. Кейс должен быть keyed не по `finding_id`, а по episode-key (`subject + violation_type + target + beneficiary`), чтобы повторные finding’и агрегировались.
 
 Payload:
 
+- `case_id`
 - `finding_id`
 - `subject_agent_id`
-- `case_type`
-- `opened_by`
-- `reason`
+- `target_agent_id` / `counterparty_agent_id`
+- `violation_type`
+- `recommended_action`
+- `episode_count`
+- `response_due_tick`
+
+#### `audit_case_updated`
+
+Повторный episode или policy-state обновили существующий кейс.
+
+Payload:
+
+- `case_id`
+- `finding_id`
+- `subject_agent_id`
+- `target_agent_id`
+- `violation_type`
+- `episode_count`
+- `response_due_tick`
+- `monitoring`
+- `review_vote_id`
 
 #### `audit_escalated`
 
@@ -309,10 +330,9 @@ Payload:
 
 Payload:
 
-- `finding_id`
-- `resolution`
-- `outcome`
-- `notes`
+- `case_id`
+- `result`
+- `reason`
 
 ### Intervention layer
 

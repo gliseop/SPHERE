@@ -398,6 +398,10 @@ class OpenAuditCaseOp:
     beneficiary: str | None = None
     related_agent_ids: list[str] | None = None
     evidence_refs: list[dict[str, Any]] | None = None
+    response_requested_tick: int | None = None
+    response_due_tick: int | None = None
+    monitoring: bool = False
+    review_vote_id: str | None = None
 
     def apply(self, state: WorldState) -> list[Event]:
         if self.case_id in state.audit_cases:
@@ -416,6 +420,14 @@ class OpenAuditCaseOp:
             beneficiary=self.beneficiary,
             related_agent_ids=list(self.related_agent_ids or []),
             evidence_refs=list(self.evidence_refs or []),
+            finding_ids=[self.finding_id],
+            episode_count=1,
+            updated_tick=state.tick,
+            last_finding_tick=state.tick,
+            response_requested_tick=self.response_requested_tick,
+            response_due_tick=self.response_due_tick,
+            monitoring=bool(self.monitoring),
+            review_vote_id=self.review_vote_id,
         )
         return [
             Event(
@@ -426,7 +438,8 @@ class OpenAuditCaseOp:
                     "case_id": self.case_id,
                     "finding_id": self.finding_id,
                     "subject_agent_id": self.subject_agent_id,
-                    "target_agent_id": self.subject_agent_id,
+                    "target_agent_id": self.target_agent_id,
+                    "counterparty_agent_id": self.target_agent_id,
                     "related_target_agent_id": self.target_agent_id,
                     "risk_family": self.risk_family,
                     "violation_type": self.violation_type,
@@ -436,6 +449,108 @@ class OpenAuditCaseOp:
                     "beneficiary": self.beneficiary,
                     "related_agent_ids": list(self.related_agent_ids or []),
                     "evidence_refs": list(self.evidence_refs or []),
+                    "episode_count": 1,
+                    "response_requested_tick": self.response_requested_tick,
+                    "response_due_tick": self.response_due_tick,
+                    "monitoring": bool(self.monitoring),
+                    "review_vote_id": self.review_vote_id,
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateAuditCaseOp:
+    """Обновить существующий audit-case новым эпизодом или policy-состоянием."""
+
+    actor_id: str | None
+    case_id: str
+    finding_id: str | None = None
+    summary: str | None = None
+    recommended_action: str | None = None
+    confidence: float | None = None
+    target_agent_id: str | None = None
+    beneficiary: str | None = None
+    related_agent_ids: list[str] | None = None
+    evidence_refs: list[dict[str, Any]] | None = None
+    response_requested_tick: int | None = None
+    response_due_tick: int | None = None
+    monitoring: bool | None = None
+    review_vote_id: str | None = None
+    status: str | None = None
+    bump_episode: bool = True
+
+    def apply(self, state: WorldState) -> list[Event]:
+        case = state.audit_cases.get(self.case_id)
+        if case is None:
+            raise ValueError(f"Audit case not found: {self.case_id!r}")
+        if case.status == "closed":
+            raise ValueError(f"Audit case already closed: {self.case_id!r}")
+
+        if self.finding_id and self.finding_id not in case.finding_ids:
+            case.finding_ids.append(self.finding_id)
+        if self.bump_episode:
+            case.episode_count += 1
+            case.last_finding_tick = state.tick
+        case.updated_tick = state.tick
+        if self.summary:
+            case.summary = self.summary
+        if self.recommended_action:
+            case.recommended_action = self.recommended_action
+        if self.confidence is not None:
+            case.confidence = max(float(case.confidence), float(self.confidence))
+        if self.target_agent_id is not None:
+            case.target_agent_id = self.target_agent_id
+        if self.beneficiary is not None:
+            case.beneficiary = self.beneficiary
+        if self.related_agent_ids:
+            merged_related = list(case.related_agent_ids)
+            for agent_id in self.related_agent_ids:
+                if agent_id not in merged_related:
+                    merged_related.append(agent_id)
+            case.related_agent_ids = merged_related
+        if self.evidence_refs:
+            merged_evidence = list(case.evidence_refs)
+            for item in self.evidence_refs:
+                if item not in merged_evidence:
+                    merged_evidence.append(item)
+            case.evidence_refs = merged_evidence
+        if self.response_requested_tick is not None:
+            case.response_requested_tick = self.response_requested_tick
+        if self.response_due_tick is not None:
+            case.response_due_tick = self.response_due_tick
+        if self.monitoring is not None:
+            case.monitoring = bool(self.monitoring)
+        if self.review_vote_id is not None:
+            case.review_vote_id = self.review_vote_id
+        if self.status is not None:
+            case.status = self.status
+
+        return [
+            Event(
+                tick=state.tick,
+                event_type="audit_case_updated",
+                actor_id=self.actor_id,
+                payload={
+                    "case_id": self.case_id,
+                    "finding_id": self.finding_id,
+                    "subject_agent_id": case.subject_agent_id,
+                    "target_agent_id": case.target_agent_id,
+                    "counterparty_agent_id": case.target_agent_id,
+                    "violation_type": case.violation_type,
+                    "summary": case.summary,
+                    "recommended_action": case.recommended_action,
+                    "confidence": case.confidence,
+                    "beneficiary": case.beneficiary,
+                    "related_agent_ids": list(case.related_agent_ids),
+                    "evidence_refs": list(case.evidence_refs),
+                    "episode_count": case.episode_count,
+                    "response_requested_tick": case.response_requested_tick,
+                    "response_due_tick": case.response_due_tick,
+                    "monitoring": case.monitoring,
+                    "review_vote_id": case.review_vote_id,
+                    "status": case.status,
                 },
                 audience=[INTERNAL_AUDIENCE],
             )

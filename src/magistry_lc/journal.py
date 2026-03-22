@@ -418,12 +418,13 @@ class WorldJournal:
                 "until_tick": p.get("until_tick"),
             }
 
-        if t in ("audit_flagged", "audit_case_opened", "audit_escalated", "audit_case_closed"):
+        if t in ("audit_flagged", "audit_case_opened", "audit_case_updated", "audit_escalated", "audit_case_closed"):
             return {
                 "tick": int(ev.tick),
                 "type": t,
                 "actor_id": ev.actor_id,
                 "finding_id": self._truncate(str(p.get("finding_id") or ""), 120),
+                "subject_agent_id": str(p.get("subject_agent_id") or ""),
                 "target_agent_id": str(p.get("target_agent_id") or ""),
                 "violation_type": self._truncate(str(p.get("violation_type") or ""), 120),
                 "severity": self._truncate(str(p.get("severity") or ""), 32),

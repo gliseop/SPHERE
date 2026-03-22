@@ -93,6 +93,12 @@ class AuditCase:
     beneficiary: str | None = None
     related_agent_ids: list[str] = field(default_factory=list)
     evidence_refs: list[dict[str, Any]] = field(default_factory=list)
+    finding_ids: list[str] = field(default_factory=list)
+    episode_count: int = 1
+    updated_tick: int | None = None
+    last_finding_tick: int | None = None
+    response_requested_tick: int | None = None
+    response_due_tick: int | None = None
 
     status: str = "open"  # open|closed|review
     result: str | None = None
@@ -189,7 +195,13 @@ class WorldState:
                     "subject_agent_id": c.subject_agent_id,
                     "risk_family": c.risk_family,
                     "violation_type": c.violation_type,
+                    "target_agent_id": c.target_agent_id,
+                    "beneficiary": c.beneficiary,
                     "recommended_action": c.recommended_action,
+                    "episode_count": c.episode_count,
+                    "updated_tick": c.updated_tick,
+                    "last_finding_tick": c.last_finding_tick,
+                    "response_due_tick": c.response_due_tick,
                     "review_vote_id": c.review_vote_id,
                     "result": c.result,
                     "result_reason": c.result_reason,

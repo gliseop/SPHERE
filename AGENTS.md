@@ -296,9 +296,8 @@ cd web/frontend && npm run test:e2e
 - **Scripted events + pre-tick worldgen**: сценарий может задавать `scripted_events`, а `runtime.worldgen_pre_tick=true` включает personal-ecology слой до хода агентов: `agent_daily_context`, `scene_hooks`, глобальные сигналы и `story_state` агента. Эти prompt-layer данные не подменяют детерминированный apply.
 - **Risky personal contexts**: `agent_daily_context` теперь может нести не только общий фон, но и richer pressure-поля (`private_pressure`, `opportunity`, `exposure_risk`). Это считается допустимым средовым давлением, а не прямой директивой агенту.
 - **`request_entity` по умолчанию внутренний**: при `runtime.request_entity_internal_only=true` внешние/ecology-акторы не могут бесконтрольно разворачивать публичную инфраструктуру (`chan:*`/`org:*`) через `request_entity`.
-- **Runtime-аудитор v1**: `RuntimeAuditor` реализован как отдельный rules-first модуль, а не как обычный `AgentRunner`; он пишет audit-сигналы и может замораживать репутацию, но не заменяет post-hoc `ViolationOracle`. В конфиге v1 поддерживается только `audit.mode="rules"`; `hybrid`/`llm` отклоняются при валидации.
+- **Runtime-аудитор**: `RuntimeAuditor` существует только как отдельный runtime governance-layer, а не как narrative-agent. Он сочетает deterministic baseline rules с LLM-findings, нормализует `violation_type`, детерминированно привязывает `evidence_refs`, агрегирует повторяющиеся finding’и в стабильные `audit_case:*`, умеет ставить response-deadline на объяснения/документы и эскалировать просроченные кейсы в monitoring / collegial review.
 - **Сюжетные аудиторы удалены**: narrative-агенты с capability `audit` больше не поддерживаются. Аудит существует только как отдельный runtime governance-layer, а не как персонаж симуляции.
-- **LLM-аудит как основной режим**: `RuntimeAuditor` теперь проектируется как LLM-first online auditor. `rules` остаётся fallback/debug-режимом, но основной путь — structured findings + deterministic actuator.
 - **Collegial review**: спорные audit-case могут маршрутизироваться в отдельный collegial review через `audit_review` vote-path с детерминированным составом жюри и закрытием кейса по итогам review.
 - **Deterministic truth + freeform truth**: `truth.jsonl` остаётся формальным baseline для evaluation, а `truth_freeform.jsonl` — отдельным LLM-sidecar для richer post-hoc записи нарушений в свободной форме по схеме. Эти два слоя не смешиваются.
 - **Unified findings**: runtime audit, deterministic truth и freeform truth постепенно приводятся к общей finding-структуре (`summary`, `mechanism`, `beneficiary`, `risk_tags`, `evidence_refs`). Exact `violation_type` больше не считается единственным носителем смысла.
@@ -316,6 +315,13 @@ cd web/frontend && npm run test:e2e
 - **Локальные артефакты в рабочем дереве**: в репозитории могут присутствовать `results/`, `web/backend/users.db`, `web/frontend/dist/`, `web/frontend/node_modules/` и `__pycache__/`. Источником истины при чтении и редактировании считать `src/`, `web/backend/`, `web/frontend/src/`, `docs/`, `tests/`, `data/` и `scenarios/`.
 
 ## Техническое состояние кодовой базы
+
+### Открытый технический долг
+
+| Область | Описание |
+|----------|---------|
+| Runtime latency в full-ecology прогонах | Реальные 20-50k-token prompts на `openai/gpt-oss-120b` через OpenRouter дают long-tail latency. Дополнительные факторы: `provider_order=["Groq"]` без latency-aware routing, отсутствие коротких per-role timeout/fallback, не трассируемые embeddings и последовательная `memory`-суммаризация. |
+| Strict audit evaluation | Даже после выравнивания payload/evidence strict exact-match в `evaluation.json` остаётся слишком хрупким на живых прогонах; semantic matching уже даёт сигнал, но exact всё ещё часто уходит в `0 TP`. Нужна дальнейшая нормализация target/evidence или case-level matching. |
 
 ### Завершённые миграции
 
