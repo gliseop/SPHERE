@@ -87,6 +87,17 @@ class _ResourcePoolUpdateModel(BaseModel):
     pressure: str | None = None
 
 
+class _OperationalQueueUpdateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    queue_id: str
+    backlog: int | None = None
+    capacity_per_tick: int | None = None
+    avg_delay_ticks: int | None = None
+    status: str | None = None
+    pressure: str | None = None
+
+
 class _InformationClimateUpdateModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -95,6 +106,18 @@ class _InformationClimateUpdateModel(BaseModel):
     media_pressure: str | None = None
     narrative_temperature: str | None = None
     active_signals: list[str] | None = None
+
+
+class _InformalLinkUpdateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_a_id: str
+    agent_b_id: str
+    link_type: str
+    strength: float | None = None
+    visibility: str | None = None
+    pressure: str | None = None
+    source: str | None = None
 
 
 class _ArtifactCreationModel(BaseModel):
@@ -195,6 +218,18 @@ class ResourcePoolUpdate:
 
 
 @dataclass(slots=True)
+class OperationalQueueUpdate:
+    """Изменение operational queue среды."""
+
+    queue_id: str
+    backlog: int | None = None
+    capacity_per_tick: int | None = None
+    avg_delay_ticks: int | None = None
+    status: str | None = None
+    pressure: str | None = None
+
+
+@dataclass(slots=True)
 class InformationClimateUpdate:
     """Изменение глобального информационного климата."""
 
@@ -206,13 +241,28 @@ class InformationClimateUpdate:
 
 
 @dataclass(slots=True)
+class InformalLinkUpdate:
+    """Изменение неформальной связи."""
+
+    agent_a_id: str
+    agent_b_id: str
+    link_type: str
+    strength: float | None = None
+    visibility: str | None = None
+    pressure: str | None = None
+    source: str | None = None
+
+
+@dataclass(slots=True)
 class EnvironmentUpdates:
     """Пакет средовых изменений от worldgen."""
 
     institutions: list[InstitutionUpdate] = field(default_factory=list)
     zones: list[ZoneUpdate] = field(default_factory=list)
     resource_pools: list[ResourcePoolUpdate] = field(default_factory=list)
+    operational_queues: list[OperationalQueueUpdate] = field(default_factory=list)
     information_climate: InformationClimateUpdate | None = None
+    informal_links: list[InformalLinkUpdate] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -351,6 +401,22 @@ def _worldgen_schema(
                             "required": ["resource_id"],
                         },
                     },
+                    "operational_queues": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "queue_id": {"type": "string"},
+                                "backlog": {"type": ["integer", "null"]},
+                                "capacity_per_tick": {"type": ["integer", "null"]},
+                                "avg_delay_ticks": {"type": ["integer", "null"]},
+                                "status": {"type": ["string", "null"]},
+                                "pressure": {"type": ["string", "null"]},
+                            },
+                            "required": ["queue_id"],
+                        },
+                    },
                     "information_climate": {
                         "type": ["object", "null"],
                         "additionalProperties": False,
@@ -363,6 +429,23 @@ def _worldgen_schema(
                                 "type": ["array", "null"],
                                 "items": {"type": "string"},
                             },
+                        },
+                    },
+                    "informal_links": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "agent_a_id": {"type": "string"},
+                                "agent_b_id": {"type": "string"},
+                                "link_type": {"type": "string"},
+                                "strength": {"type": ["number", "null"]},
+                                "visibility": {"type": ["string", "null"]},
+                                "pressure": {"type": ["string", "null"]},
+                                "source": {"type": ["string", "null"]},
+                            },
+                            "required": ["agent_a_id", "agent_b_id", "link_type"],
                         },
                     },
                 },
@@ -766,6 +849,27 @@ class WorldGenerator:
                         )
                     )
 
+            operational_queues_raw = environment_updates_raw.get("operational_queues") or []
+            if isinstance(operational_queues_raw, list):
+                for item in operational_queues_raw:
+                    try:
+                        raw = _OperationalQueueUpdateModel.model_validate(item)
+                    except Exception:
+                        continue
+                    queue_id = raw.queue_id.strip()
+                    if not queue_id:
+                        continue
+                    environment_updates.operational_queues.append(
+                        OperationalQueueUpdate(
+                            queue_id=queue_id,
+                            backlog=int(raw.backlog) if raw.backlog is not None else None,
+                            capacity_per_tick=int(raw.capacity_per_tick) if raw.capacity_per_tick is not None else None,
+                            avg_delay_ticks=int(raw.avg_delay_ticks) if raw.avg_delay_ticks is not None else None,
+                            status=(raw.status or "").strip() or None,
+                            pressure=(raw.pressure or "").strip() or None,
+                        )
+                    )
+
             climate_raw = environment_updates_raw.get("information_climate")
             if isinstance(climate_raw, dict):
                 try:
@@ -782,6 +886,30 @@ class WorldGenerator:
                         media_pressure=(raw_climate.media_pressure or "").strip() or None,
                         narrative_temperature=(raw_climate.narrative_temperature or "").strip() or None,
                         active_signals=active_signals,
+                    )
+
+            informal_links_raw = environment_updates_raw.get("informal_links") or []
+            if isinstance(informal_links_raw, list):
+                for item in informal_links_raw:
+                    try:
+                        raw = _InformalLinkUpdateModel.model_validate(item)
+                    except Exception:
+                        continue
+                    agent_a_id = raw.agent_a_id.strip()
+                    agent_b_id = raw.agent_b_id.strip()
+                    link_type = raw.link_type.strip()
+                    if not agent_a_id or not agent_b_id or not link_type or agent_a_id == agent_b_id:
+                        continue
+                    environment_updates.informal_links.append(
+                        InformalLinkUpdate(
+                            agent_a_id=agent_a_id,
+                            agent_b_id=agent_b_id,
+                            link_type=link_type,
+                            strength=float(raw.strength) if raw.strength is not None else None,
+                            visibility=(raw.visibility or "").strip() or None,
+                            pressure=(raw.pressure or "").strip() or None,
+                            source=(raw.source or "").strip() or None,
+                        )
                     )
 
         artifact_creations: list[ArtifactCreation] = []

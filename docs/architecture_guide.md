@@ -113,20 +113,24 @@ graph TB
 
 | Хочу понять... | Где читать |
 |---|---|
-| Как устроен тик симуляции | `engine.py` → `WorldEngine.run()`; обрати внимание на environment init/snapshot + scripted events + pre/post worldgen |
+| Как устроен тик симуляции | `engine.py` → `WorldEngine.run()`; обрати внимание на environment init/snapshot + scripted events + pending queues + pre/post worldgen |
 | Как агент принимает решение | `agent.py` → `AgentRunner`, `memory.py` → гибридный retrieval |
 | Какие действия доступны агенту | `actions.py` → structured actions, `spawn_agent`, `perform` |
 | Как арбитр проверяет действия | `arbiter.py` → полномочия + антифантомы + LLM-perform |
-| Как runtime-аудитор выявляет сигналы риска | `auditor.py` → LLM-first detection + deterministic actuator + collegial review |
-| Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра, включая environment-layer и `art:*`-артефакты |
+| Как runtime-аудитор выявляет сигналы риска | `auditor.py` → LLM-first detection + deterministic actuator + collegial review, включая queue-driven complaint/media obligations |
+| Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра, включая environment-layer, `art:*`-артефакты и informal links |
 | Как устроено DAO-голосование | `dao.py` → кворум, порог, закрытие голосования |
 | Типизированные ID и антифантомы | `ids.py` + `entities.py` → `EntityRegistry` |
 | Детерминированный apply | `ops.py` → `StateOp` преобразуется в `Event` |
 | Как генерируется сценарий через LLM | `composer.py` → `WorldComposer.compose()` |
 | Как работает генератор мира | `worldgen.py` → pre/post tick worldgen, external events, `agent_daily_context`, `scene_hooks`, spawn suggestions, `environment_updates`, `artifact_creations` / `artifact_updates` и safe snapshot без приватных утечек |
+| Как мир систематически наращивает периферию | `config.py` → `PopulationBlueprintConfig`, `engine.py` → bootstrap / environment_change materialization |
+| Как материализуются backlog и очереди | `config.py` → `OperationalQueueConfig`, `state.py` → `environment.operational_queues`, `engine.py` → resource-driven queue consequences + `queue_alert` |
+| Как работают локальные очереди follow-up | `state.py` → `pending_interactions`, `ops.py` → `UpsertPendingInteractionOp` / `ResolvePendingInteractionOp`, `engine.py` → due/expire/reactivation |
 | Как пишется truth-layer | `truth.py` → deterministic truth records в `truth.jsonl` |
 | Как считается post-hoc evaluation | `evaluation.py` → precision/recall runtime-аудита vs truth |
 | Как считаются fidelity-метрики | `fidelity.py` → temporal/identity/phantom/bureaucratic sidecar |
+| Как собирается средовая телеметрия | `engine.py` → `environment_summary.json` / `environment_timeline.jsonl`, `web/backend/routes/runs.py` → REST/export |
 | Как оракул и freeform truth анализируют нарушения | `oracle.py` → `ViolationOracle` + `FreeformTruthRecorder` |
 | Как устроена память агента | `memory.py` → working buffer + long-term hybrid index |
 | Как работает гибридный поиск | `memory.py` (retrieval) + `bm25.py` (лексический) + `embeddings.py` (векторный) |

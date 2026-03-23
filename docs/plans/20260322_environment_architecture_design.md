@@ -33,7 +33,19 @@
 - environment-aware активация периферийных агентов.
 - локальные reaction windows внутри того же тика для быстрых follow-up реакций.
 - first-class документарный слой `art:*` со статическими и runtime-обновляемыми артефактами.
+- first-class слой неформальных связей (`informal_links`) и их детерминированное усиление по interaction traces.
 - worldgen-spawn с привязкой новых агентов к `org_id` / `zone_id`.
+- `population_blueprints` для bootstrap- и environment-change-наращивания периферийной agent ecology.
+- first-class очередь локальных ожидающих follow-up (`pending_interactions`) с `pending_interaction_due` / `completed` / `expired`.
+- first-class material queues (`operational_queues`) и детерминированная queue-alert materialization при resource pressure.
+- детерминированный complaint/publication цикл поверх queue-layer с публичными `world_event` и service-degradation signals в `information_climate`.
+- per-tick degradation/recovery loop operational queues, зависящий от фактической `work`-активности релевантных агентов.
+- deterministic runtime-spawn внешних complainant/reporter акторов из service-degradation контуров.
+- seeded follow-up / `shared_issue` linkage для queue-spawned акторов, позволяющие им запускать собственные action chains.
+- deterministic bridge от действий queue-spawned акторов к internal response obligations и documentarized complaint/media surface.
+- deterministic bridge от queue-driven internal response obligations к runtime-auditor / governance escalation.
+- deterministic truth/evaluation bridge для queue-driven governance signals.
+- environment-sidecar observability (`environment_summary.json`, `environment_timeline.jsonl`) и graph-state environment slice для визуализации усиленной среды.
 
 Следовательно, документ больше не описывает только далёкую цель: часть первого и второго слоя уже материализована в движке.
 
@@ -283,6 +295,11 @@ flowchart TD
 - разные участки среды могут обновляться с разной интенсивностью;
 - локальные цепочки причин и последствий могут разворачиваться без обязательного ожидания полной синхронизации всей агентной среды;
 - среда начинает выглядеть менее пошаговой и более непрерывной.
+
+Частично это уже материализовано через два механизма:
+
+- локальные reaction windows внутри того же тика;
+- queue layer локальных `pending_interactions`, которые переживают тик и могут реактивировать периферию позже.
 
 ### Что здесь важно сохранить
 

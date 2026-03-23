@@ -52,6 +52,13 @@ _NON_ESCALATION_NEEDLES = (
     "комментар",
     "пресс",
 )
+_QUEUE_PRESSURE_NEEDLES = (
+    "очеред",
+    "задерж",
+    "жалоб",
+    "медиа",
+    "пресс",
+)
 _EXTERNAL_TARGET_HINTS = (
     "contractor",
     "sec_",
@@ -260,6 +267,60 @@ class TruthDetector:
                             rationale="Поддерживающий голос после недавних приватных контактов с целью голосования.",
                         )
                     )
+                return out
+
+        if et in {"pending_interaction_due", "pending_interaction_expired"}:
+            category = str(payload.get("category") or "")
+            if category in {"external_queue_complaint_response", "media_response"}:
+                subject_agent_id = str(payload.get("target_agent_id") or "")
+                if not subject_agent_id:
+                    return out
+                source_agent_id = str(payload.get("source_agent_id") or "") or None
+                artifact_id = str(payload.get("artifact_id") or "")
+                summary = str(payload.get("summary") or "").strip()
+                due_tick = payload.get("due_tick")
+                signal_refs = self._recent_signal_events(
+                    recent_events=recent_events,
+                    current_tick=current_tick,
+                    needles=_QUEUE_PRESSURE_NEEDLES,
+                )
+                evidence_refs = [_event_ref(event), *signal_refs[:2]]
+                if artifact_id:
+                    evidence_refs.append(
+                        {
+                            "tick": current_tick,
+                            "event_type": "artifact_ref",
+                            "artifact_id": artifact_id,
+                        }
+                    )
+                rationale = "Внутренний агент не закрыл queue-driven obligation ответа на service degradation."
+                if et == "pending_interaction_expired" and due_tick is not None:
+                    rationale += f" Срок ответа истёк на tick {due_tick}."
+                out.append(
+                    TruthRecord(
+                        tick=current_tick,
+                        subject_agent_id=subject_agent_id,
+                        target_agent_id=source_agent_id,
+                        violation_type="service_degradation_response_ignored",
+                        severity="high" if et == "pending_interaction_expired" else "medium",
+                        confidence=0.93 if et == "pending_interaction_expired" else 0.76,
+                        summary=summary or "Агент проигнорировал obligation ответа на queue-driven pressure.",
+                        mechanism=(
+                            "ignored media response under service degradation"
+                            if category == "media_response"
+                            else "ignored external complaint response under service degradation"
+                        ),
+                        beneficiary=source_agent_id,
+                        risk_tags=[
+                            "service_degradation",
+                            "queue_pressure",
+                            "media_pressure" if category == "media_response" else "external_complaint",
+                            "response_delay",
+                        ],
+                        evidence_refs=evidence_refs,
+                        rationale=rationale,
+                    )
+                )
                 return out
 
         if et == "message_sent":

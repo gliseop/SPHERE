@@ -53,18 +53,18 @@ web/backend/
 | Метод | Путь | Описание |
 |---|---|---|
 | GET | `/api/runs` | Список всех прогонов |
-| GET | `/api/run/{name}` | Детали прогона (события, граф, метрики) |
-| GET | `/api/run/{name}/export` | Экспорт полного прогона |
+| GET | `/api/run/{name}` | Детали прогона (события, граф, environment-summary, метрики) |
+| GET | `/api/run/{name}/export` | Экспорт полного прогона, включая environment sidecars |
 | GET | `/api/run/{name}/scenario` | Конфигурация сценария прогона |
 | GET | `/api/run/{name}/prompts` | Промпты и ответы LLM (только `admin`, limit ≤ 1000) |
 | GET | `/api/artifacts/{doc_id}` | Артефакты (сгенерированные документы, только `admin`) |
 | DELETE | `/api/runs/{run_name}` | Удалить прогон |
 
 `/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`. CLI `magistry-lc run` по умолчанию пишет прогоны именно в `results/<timestamp>`, поэтому такие запуски сразу видны web UI без дополнительного `--out`.
-Для directory-based LC-run движок дополнительно пишет sidecar-файлы `scenario.json`, `names.json`, `status.json`, `trace.jsonl` и `summary.json`, чтобы web UI мог загрузить конфиг прогона, человеко-читаемые имена агентов, heartbeat-статус и prompt-inspector без отдельной конвертации.
+Для directory-based LC-run движок дополнительно пишет sidecar-файлы `scenario.json`, `names.json`, `status.json`, `trace.jsonl`, `summary.json`, `environment_summary.json` и `environment_timeline.jsonl`, чтобы web UI и экспорт могли загрузить не только конфиг и итоговые метрики, но и отдельную телеметрию усиленной среды.
 Для активного directory-based прогона `GET /api/run/{name}/scenario` и `GET /api/run/{name}/export` умеют читать и ранний launcher-sidecar `_input_scenario.json`, поэтому конфиг доступен сразу после старта, ещё до записи финального `scenario.json`.
 Для MAGISTRY-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl`, если они вынесены из `events.jsonl`.
-Перед отдачей `GET /api/run/{name}` и `GET /api/run/{name}/export` backend теперь применяет `audience`-policy: viewer не получает point-to-point события, адресованные только конкретным `agent:*`, а admin по-прежнему видит полный поток. Это же правило используется и для построения `graph_state`, чтобы скрытые события не просачивались через побочные изменения графа.
+Перед отдачей `GET /api/run/{name}` и `GET /api/run/{name}/export` backend теперь применяет `audience`-policy: viewer не получает point-to-point события, адресованные только конкретным `agent:*`, а admin по-прежнему видит полный поток. Это же правило используется и для построения `graph_state`, чтобы скрытые события не просачивались через побочные изменения графа. В ответ `GET /api/run/{name}` теперь также входит компактный `environment`-блок, а `GET /api/run/{name}/export` дополнительно включает `environment` и `environment_timeline`.
 
 #### Живая симуляция
 
@@ -172,7 +172,7 @@ WebSocket-поток использует ту же visibility-policy, что и
 | `meta` | сервер → клиент | Метаданные прогона (`scenario`, `governance`, `seed`, `run_name`, `names`) |
 | `event` | сервер → клиент | Одно событие |
 | `events` | сервер → клиент | Пакет событий |
-| `graph_state` | сервер → клиент | Текущее состояние графа |
+| `graph_state` | сервер → клиент | Текущее состояние графа и компактный environment-срез |
 | `ping` | сервер → клиент | keepalive |
 | `done` | сервер → клиент | Поток завершён |
 | `error` | сервер → клиент | Ошибка (например, unauthorized/run not found) |

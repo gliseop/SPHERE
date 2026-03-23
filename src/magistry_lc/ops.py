@@ -25,12 +25,16 @@ from .state import (
     ArtifactState,
     AuditCase,
     InformationClimateState,
+    InformalLinkState,
     InstitutionRegimeState,
+    OperationalQueueState,
+    PendingInteractionState,
     ResourcePoolState,
     Vote,
     WorkItem,
     WorldState,
     ZoneState,
+    informal_link_key,
 )
 from .utils import normalize_agent_display_name
 
@@ -92,6 +96,9 @@ class CreateAgentOp:
     created_tick: int
     org_id: str | None = None
     zone_id: str | None = None
+    spawn_source: str = ""
+    blueprint_id: str | None = None
+    population_role: str = ""
 
     def apply(self, state: WorldState) -> list[Event]:
         ensure_kind(self.entity_id, EntityKind.AGENT)
@@ -115,6 +122,9 @@ class CreateAgentOp:
             "capabilities": list(self.capabilities),
             "org_id": self.org_id,
             "zone_id": self.zone_id,
+            "spawn_source": self.spawn_source,
+            "blueprint_id": self.blueprint_id,
+            "population_role": self.population_role,
         }
         state.registry.register(
             EntityRecord(
@@ -133,6 +143,9 @@ class CreateAgentOp:
             capabilities=list(self.capabilities),
             org_id=self.org_id,
             zone_id=self.zone_id,
+            spawn_source=self.spawn_source,
+            blueprint_id=self.blueprint_id,
+            population_role=self.population_role,
             wants_promotion=False,
         )
         return [
@@ -681,6 +694,58 @@ class UpdateResourcePoolOp:
 
 
 @dataclass(frozen=True, slots=True)
+class UpdateOperationalQueueOp:
+    """Обновить material operational queue среды."""
+
+    queue_id: str
+    backlog: int | None = None
+    capacity_per_tick: int | None = None
+    avg_delay_ticks: int | None = None
+    status: str | None = None
+    pressure: str | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        current = state.environment.operational_queues.get(self.queue_id)
+        if current is None:
+            raise ValueError(f"Unknown operational queue: {self.queue_id!r}")
+        backlog = int(current.backlog if self.backlog is None else self.backlog)
+        capacity = int(current.capacity_per_tick if self.capacity_per_tick is None else self.capacity_per_tick)
+        avg_delay = int(current.avg_delay_ticks if self.avg_delay_ticks is None else self.avg_delay_ticks)
+        if backlog < 0 or capacity < 0 or avg_delay < 0:
+            raise ValueError("Operational queue values must be >= 0")
+        updated = OperationalQueueState(
+            queue_id=current.queue_id,
+            title=current.title,
+            owner_org_id=current.owner_org_id,
+            zone_id=current.zone_id,
+            backlog=backlog,
+            capacity_per_tick=capacity,
+            avg_delay_ticks=avg_delay,
+            status=self.status or current.status,
+            pressure=self.pressure or current.pressure,
+        )
+        state.environment.operational_queues[self.queue_id] = updated
+        return [
+            Event(
+                tick=state.tick,
+                event_type="environment_operational_queue_updated",
+                actor_id=None,
+                payload={
+                    "queue_id": updated.queue_id,
+                    "backlog": updated.backlog,
+                    "capacity_per_tick": updated.capacity_per_tick,
+                    "avg_delay_ticks": updated.avg_delay_ticks,
+                    "status": updated.status,
+                    "pressure": updated.pressure,
+                    "owner_org_id": updated.owner_org_id,
+                    "zone_id": updated.zone_id,
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
 class UpdateInformationClimateOp:
     """Обновить глобальный информационный климат."""
 
@@ -711,6 +776,244 @@ class UpdateInformationClimateOp:
                     "media_pressure": updated.media_pressure,
                     "narrative_temperature": updated.narrative_temperature,
                     "active_signals": list(updated.active_signals),
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class AddInformationSignalOp:
+    """Добавить новый signal в information_climate без потери существующих."""
+
+    actor_id: str | None
+    signal: str
+
+    def apply(self, state: WorldState) -> list[Event]:
+        signal = (self.signal or "").strip()
+        if not signal:
+            return []
+        current = state.environment.information_climate
+        if signal in current.active_signals:
+            return []
+        updated = InformationClimateState(
+            public_mood=current.public_mood,
+            oversight_attention=current.oversight_attention,
+            media_pressure=current.media_pressure,
+            narrative_temperature=current.narrative_temperature,
+            active_signals=list(current.active_signals) + [signal],
+        )
+        state.environment.information_climate = updated
+        return [
+            Event(
+                tick=state.tick,
+                event_type="environment_information_climate_updated",
+                actor_id=self.actor_id,
+                payload={
+                    "public_mood": updated.public_mood,
+                    "oversight_attention": updated.oversight_attention,
+                    "media_pressure": updated.media_pressure,
+                    "narrative_temperature": updated.narrative_temperature,
+                    "active_signals": list(updated.active_signals),
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class UpsertInformalLinkOp:
+    """Создать или обновить неформальную связь между агентами."""
+
+    actor_id: str | None
+    agent_a_id: str
+    agent_b_id: str
+    link_type: str
+    strength: float | None = None
+    strength_delta: float | None = None
+    visibility: str | None = None
+    pressure: str | None = None
+    source: str | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        ensure_kind(self.agent_a_id, EntityKind.AGENT)
+        ensure_kind(self.agent_b_id, EntityKind.AGENT)
+        if self.agent_a_id not in state.agents or self.agent_b_id not in state.agents:
+            raise ValueError("Informal link agents must exist in world state")
+        link_type = (self.link_type or "").strip()
+        if not link_type:
+            raise ValueError("Informal link requires link_type")
+        link_id = informal_link_key(self.agent_a_id, self.agent_b_id, link_type)
+        left, right = sorted([self.agent_a_id, self.agent_b_id])
+        current = state.environment.informal_links.get(link_id)
+        current_strength = float(current.strength) if current is not None else 0.0
+        if self.strength is not None:
+            next_strength = float(self.strength)
+        else:
+            next_strength = current_strength + float(self.strength_delta or 0.0)
+        next_strength = max(0.0, min(1.0, next_strength))
+        updated = InformalLinkState(
+            link_id=link_id,
+            agent_a_id=left,
+            agent_b_id=right,
+            link_type=link_type,
+            strength=next_strength,
+            visibility=self.visibility or (current.visibility if current is not None else "latent"),
+            pressure=self.pressure or (current.pressure if current is not None else ""),
+            source=self.source or (current.source if current is not None else "interaction"),
+            last_updated_tick=state.tick,
+        )
+        state.environment.informal_links[link_id] = updated
+        return [
+            Event(
+                tick=state.tick,
+                event_type="environment_informal_link_updated",
+                actor_id=self.actor_id,
+                payload={
+                    "link_id": updated.link_id,
+                    "agent_a_id": updated.agent_a_id,
+                    "agent_b_id": updated.agent_b_id,
+                    "link_type": updated.link_type,
+                    "strength": updated.strength,
+                    "visibility": updated.visibility,
+                    "pressure": updated.pressure,
+                    "source": updated.source,
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class UpsertPendingInteractionOp:
+    """Создать или обновить ожидающее локальное взаимодействие."""
+
+    actor_id: str | None
+    interaction_id: str
+    target_agent_id: str
+    source_agent_id: str | None = None
+    category: str = "follow_up"
+    summary: str = ""
+    earliest_tick: int | None = None
+    due_tick: int | None = None
+    priority: str = "normal"
+    trigger_event_type: str = ""
+    related_work_id: str | None = None
+    artifact_id: str | None = None
+    org_id: str | None = None
+    zone_id: str | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        ensure_kind(self.target_agent_id, EntityKind.AGENT)
+        if self.target_agent_id not in state.agents:
+            raise ValueError(f"Pending interaction target not found: {self.target_agent_id!r}")
+        if self.source_agent_id is not None:
+            ensure_kind(self.source_agent_id, EntityKind.AGENT)
+            if self.source_agent_id not in state.agents:
+                raise ValueError(f"Pending interaction source not found: {self.source_agent_id!r}")
+        if self.related_work_id is not None:
+            ensure_kind(self.related_work_id, EntityKind.WORK_ITEM)
+            if self.related_work_id not in state.work_items:
+                raise ValueError(f"Pending interaction work item not found: {self.related_work_id!r}")
+        if self.artifact_id is not None:
+            ensure_kind(self.artifact_id, EntityKind.ARTIFACT)
+            if self.artifact_id not in state.artifacts:
+                raise ValueError(f"Pending interaction artifact not found: {self.artifact_id!r}")
+        if self.org_id is not None:
+            ensure_kind(self.org_id, EntityKind.ORG)
+            if not state.registry.exists(self.org_id):
+                raise ValueError(f"Pending interaction org not found: {self.org_id!r}")
+        if self.zone_id is not None:
+            ensure_kind(self.zone_id, EntityKind.ZONE)
+            if not state.registry.exists(self.zone_id):
+                raise ValueError(f"Pending interaction zone not found: {self.zone_id!r}")
+
+        category = (self.category or "").strip() or "follow_up"
+        current = state.pending_interactions.get(self.interaction_id)
+        created_tick = state.tick if current is None or current.status != "open" else current.created_tick
+        updated = PendingInteractionState(
+            interaction_id=self.interaction_id,
+            target_agent_id=self.target_agent_id,
+            source_agent_id=self.source_agent_id,
+            category=category,
+            summary=(self.summary or "").strip(),
+            created_tick=created_tick,
+            earliest_tick=int(self.earliest_tick if self.earliest_tick is not None else state.tick),
+            due_tick=self.due_tick,
+            priority=((self.priority or "").strip() or (current.priority if current is not None else "normal")),
+            status="open",
+            resolution_reason="",
+            trigger_event_type=((self.trigger_event_type or "").strip() or (current.trigger_event_type if current is not None else "")),
+            related_work_id=self.related_work_id,
+            artifact_id=self.artifact_id,
+            org_id=self.org_id,
+            zone_id=self.zone_id,
+            last_notified_tick=None,
+        )
+        state.pending_interactions[self.interaction_id] = updated
+        event_type = "pending_interaction_created" if current is None or current.status != "open" else "pending_interaction_updated"
+        return [
+            Event(
+                tick=state.tick,
+                event_type=event_type,
+                actor_id=self.actor_id,
+                payload={
+                    "interaction_id": updated.interaction_id,
+                    "target_agent_id": updated.target_agent_id,
+                    "source_agent_id": updated.source_agent_id,
+                    "category": updated.category,
+                    "summary": updated.summary,
+                    "created_tick": updated.created_tick,
+                    "earliest_tick": updated.earliest_tick,
+                    "due_tick": updated.due_tick,
+                    "priority": updated.priority,
+                    "trigger_event_type": updated.trigger_event_type,
+                    "related_work_id": updated.related_work_id,
+                    "artifact_id": updated.artifact_id,
+                    "org_id": updated.org_id,
+                    "zone_id": updated.zone_id,
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvePendingInteractionOp:
+    """Закрыть ожидающее взаимодействие как выполненное или просроченное."""
+
+    actor_id: str | None
+    interaction_id: str
+    status: str
+    reason: str = ""
+
+    def apply(self, state: WorldState) -> list[Event]:
+        interaction = state.pending_interactions.get(self.interaction_id)
+        if interaction is None:
+            raise ValueError(f"Pending interaction not found: {self.interaction_id!r}")
+        next_status = (self.status or "").strip()
+        if next_status not in {"completed", "expired"}:
+            raise ValueError(f"Unsupported pending interaction status: {self.status!r}")
+        interaction.status = next_status
+        interaction.resolution_reason = (self.reason or "").strip()
+        event_type = "pending_interaction_completed" if next_status == "completed" else "pending_interaction_expired"
+        return [
+            Event(
+                tick=state.tick,
+                event_type=event_type,
+                actor_id=self.actor_id,
+                payload={
+                    "interaction_id": interaction.interaction_id,
+                    "target_agent_id": interaction.target_agent_id,
+                    "source_agent_id": interaction.source_agent_id,
+                    "category": interaction.category,
+                    "summary": interaction.summary,
+                    "priority": interaction.priority,
+                    "reason": interaction.resolution_reason,
+                    "related_work_id": interaction.related_work_id,
+                    "artifact_id": interaction.artifact_id,
+                    "org_id": interaction.org_id,
+                    "zone_id": interaction.zone_id,
                 },
                 audience=[INTERNAL_AUDIENCE],
             )

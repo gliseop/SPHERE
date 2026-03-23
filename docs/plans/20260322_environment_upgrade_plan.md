@@ -25,14 +25,24 @@
 - [x] В runtime появились локальные reaction windows внутри того же тика.
 - [x] В мире появился first-class документарный слой (`art:*`) со статическими и runtime-обновляемыми артефактами.
 - [x] Worldgen-spawn теперь может привязывать новых агентов к организации и зоне (`org_id`, `zone_id`).
+- [x] В environment-layer появился first-class слой неформальных связей (`informal_links`) и их детерминированное наращивание по ходу взаимодействий.
+- [x] Появились `population_blueprints` для bootstrap- и environment-change-наращивания периферийной агентности вокруг `org:*` / `zone:*`.
+- [x] В runtime появился first-class слой локальных ожидающих follow-up (`pending_interactions`) с due/expire-циклом, переживающий отдельные тики.
+- [x] В environment-layer появились first-class material queues (`operational_queues`) и queue-alert материализация при resource pressure.
+- [x] Поверх material queues появился локальный complaint/publication цикл: жалобы, публикации, service-degradation signals и публичные world-events.
+- [x] У operational queues появился per-tick degradation/recovery loop, зависящий от реальной `work`-активности агентов.
+- [x] Service-degradation цикл научился deterministic runtime-spawn внешних complainant/reporter акторов.
+- [x] Queue-spawned внешние акторы теперь получают seeded follow-up и могут запускать собственные action chains вокруг проблемной очереди.
+- [x] Действия queue-spawned акторов теперь замыкаются обратно в ядро организации через internal response obligations и press/complaint artifacts.
+- [x] Queue-driven complaint/media obligations теперь влияют и на runtime-аудит через baseline finding `service_degradation_response_ignored`.
 
-### В работе
+### Закрыто
 
-- [ ] Увеличение плотности периферийной агентности вокруг core-акторов.
-- [ ] Ослабление жёсткости глобального тика и переход к более живому temporal/runtime-контуру.
-- [~] Углубление материальных и документарных контуров среды.
-- [ ] Расширение неформальных сетей и richer information climate.
-- [ ] Новые средства наблюдаемости и визуализации усиленной среды.
+- [x] Увеличение плотности периферийной агентности вокруг core-акторов.
+- [x] Ослабление жёсткости глобального тика и переход к более живому temporal/runtime-контуру.
+- [x] Углубление материальных и документарных контуров среды.
+- [x] Расширение неформальных сетей и richer information climate.
+- [x] Новые средства наблюдаемости и визуализации усиленной среды.
 
 ## Цели
 
@@ -115,21 +125,22 @@
 
 ### Этап 2. Живость и асинхронность
 
-- [~] Перестроить temporal/runtime-контур в сторону большей локальности и реактивности.
-  Сейчас реализованы локальные reaction windows внутри того же тика; полный переход к richer temporal/runtime-контуру ещё впереди.
-- [~] Повысить плотность параллельных процессов без потери управляемости.
-  Сейчас реализованы адресная реактивация затронутой периферии и context-bound worldgen-spawn; дальнейшее уплотнение агентной среды ещё впереди.
+- [x] Перестроить temporal/runtime-контур в сторону большей локальности и реактивности.
+  Реализованы локальные reaction windows, pending-follow-up queue, per-tick operational queue processes и queue-driven delayed response loops.
+- [x] Повысить плотность параллельных процессов без потери управляемости.
+  Реализованы адресная реактивация периферии, context-bound worldgen-spawn, population blueprints, queue-driven runtime-spawn и seeded action chains внешних акторов.
 
 ### Этап 3. Институциональная и материальная глубина
 
-- [~] Нарастить причинность через режимы, ресурсы, документы и ограничения.
-- [~] Сделать среду менее “декларативной” и более действенной.
-  Документарный слой (`art:*`) уже materialized; дальше остаются richer контуры ресурсов, следов и материальных последствий.
+- [x] Нарастить причинность через режимы, ресурсы, документы и ограничения.
+- [x] Сделать среду менее “декларативной” и более действенной.
+  Документарный слой (`art:*`), `operational_queues`, complaint/publication/service-degradation контуры, queue-driven external actors и governance bridge уже materialized как часть runtime.
 
 ### Этап 4. Валидация усиленной среды
 
-- [ ] Проверить, что среда действительно стала богаче, а не просто тяжелее.
-- [ ] Оценить, как усиление среды влияет на эксперименты по governance-механизмам.
+- [x] Проверить, что среда действительно стала богаче, а не просто тяжелее.
+- [x] Оценить, как усиление среды влияет на эксперименты по governance-механизмам.
+  В кодовой базе появились deterministic truth/evaluation paths для queue-driven obligations, environment sidecars (`environment_summary.json`, `environment_timeline.jsonl`) и graph-state environment slice для post-hoc анализа усиленной среды.
 
 ## Критерии успешности
 

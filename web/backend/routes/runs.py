@@ -209,6 +209,7 @@ async def get_run(
         "limit": limit,
         "total_events": total,
         "graph": builder.state(),
+        "environment": _read_run_sidecar_json(ref, "environment_summary"),
         "meta": parse_run_name(name),
     }
 
@@ -323,6 +324,8 @@ async def export_run(name: str, _user: User = Depends(require_viewer)) -> JSONRe
         "scenario": _read_scenario_json(),
         "names": _read_json("_names.json"),
         "summary": _read_json("_summary.json"),
+        "environment": _read_json("_environment_summary.json"),
+        "environment_timeline": _read_run_sidecar_jsonl(ref, "environment_timeline"),
     }
 
     return JSONResponse(
@@ -339,6 +342,36 @@ def _iter_run_scenario_candidates(ref) -> list[Path]:
     if ref.format == "directory":
         candidates.append(ref.events_path.parent / "_input_scenario.json")
     return candidates
+
+
+def _read_run_sidecar_json(ref, stem: str) -> dict | None:
+    for path in run_json_sidecar_candidates(ref, stem, results_dir=RESULTS_DIR):
+        if not path.exists():
+            continue
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return None
+
+
+def _read_run_sidecar_jsonl(ref, stem: str) -> list[dict]:
+    for path in run_jsonl_sidecar_candidates(ref, stem, results_dir=RESULTS_DIR):
+        if not path.exists():
+            continue
+        try:
+            rows: list[dict] = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                item = json.loads(line)
+                if isinstance(item, dict):
+                    rows.append(item)
+            return rows
+        except (json.JSONDecodeError, OSError):
+            continue
+    return []
 
 
 @router.get("/api/run/{name}/scenario")

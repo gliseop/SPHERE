@@ -687,6 +687,7 @@ class Arbiter:
                         capabilities=capabilities,
                         org_id=org_id,
                         zone_id=zone_id,
+                        spawn_source="agent_spawn",
                         created_by=agent_id,
                         created_tick=state.tick,
                     )

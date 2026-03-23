@@ -224,6 +224,95 @@ def test_truth_detector_records_partial_disclosure_under_deadline_pressure() -> 
     assert any(record.violation_type == "partial_disclosure_under_deadline_pressure" for record in records)
 
 
+def test_truth_detector_records_service_degradation_response_ignored() -> None:
+    state = _mk_state()
+    state.agents["agent:citizen_1"] = AgentState(
+        agent_id="agent:citizen_1",
+        name="agent:citizen_1",
+        internal=False,
+        capabilities=["message"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:citizen_1",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "agent:citizen_1"},
+        )
+    )
+    detector = TruthDetector()
+    tick_events = [
+        Event(
+            tick=1,
+            event_type="pending_interaction_expired",
+            actor_id="agent:citizen_1",
+            payload={
+                "interaction_id": "pend:q1",
+                "target_agent_id": "agent:off_1",
+                "source_agent_id": "agent:citizen_1",
+                "category": "external_queue_complaint_response",
+                "summary": "Подготовь ответ на внешнюю жалобу по очереди разрешений.",
+                "due_tick": 0,
+                "artifact_id": "art:queue_external_complaint_queue_permits",
+            },
+        )
+    ]
+    recent_events = [
+        Event(
+            tick=1,
+            event_type="world_event",
+            actor_id=None,
+            payload={"description": "По очереди разрешений растут жалобы и задержки."},
+        )
+    ]
+
+    records = detector.detect_tick(state=state, tick_events=tick_events, recent_events=recent_events)
+
+    assert any(record.violation_type == "service_degradation_response_ignored" for record in records)
+
+
+def test_evaluate_run_matches_service_degradation_truth_against_runtime_flag(tmp_path: Path) -> None:
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.append(
+        TruthRecord(
+            tick=4,
+            subject_agent_id="agent:off_1",
+            target_agent_id="agent:reporter_1",
+            violation_type="service_degradation_response_ignored",
+            summary="Агент не закрыл обязательство ответа на публичное давление по очереди.",
+            mechanism="ignored media response under service degradation",
+            evidence_refs=[{"tick": 4, "event_type": "pending_interaction_expired"}],
+        )
+    )
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text(
+        json.dumps(
+            {
+                "tick": 4,
+                "event_type": "audit_flagged",
+                "payload": {
+                    "subject_agent_id": "agent:off_1",
+                    "target_agent_id": "agent:reporter_1",
+                    "violation_type": "service_degradation_response_ignored",
+                    "summary": "Агент не закрыл обязательство ответа на публичное давление по очереди.",
+                    "mechanism": "ignored media response under service degradation",
+                    "evidence_refs": [{"tick": 4, "event_type": "pending_interaction_expired"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(events_path=events_path, truth_path=truth_log.path)
+
+    assert summary.true_positive == 1
+    assert summary.false_positive == 0
+    assert summary.false_negative == 0
+
+
 def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:
     truth_log = TruthLog(tmp_path / "truth.jsonl")
     truth_log.append(
@@ -595,6 +684,8 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert artifacts.evaluation_path is not None and artifacts.evaluation_path.exists()
     assert artifacts.fidelity_path is not None and artifacts.fidelity_path.exists()
     assert artifacts.summary_path is not None and artifacts.summary_path.exists()
+    assert artifacts.environment_summary_path is not None and artifacts.environment_summary_path.exists()
+    assert artifacts.environment_timeline_path is not None and artifacts.environment_timeline_path.exists()
     assert artifacts.scenario_path is not None and artifacts.scenario_path.exists()
     assert artifacts.names_path is not None and artifacts.names_path.exists()
     assert artifacts.status_path is not None and artifacts.status_path.exists()
@@ -607,6 +698,12 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     evaluation = json.loads(artifacts.evaluation_path.read_text(encoding="utf-8"))
     fidelity = json.loads(artifacts.fidelity_path.read_text(encoding="utf-8"))
     combined = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
+    environment_summary = json.loads(artifacts.environment_summary_path.read_text(encoding="utf-8"))
+    environment_timeline = [
+        json.loads(line)
+        for line in artifacts.environment_timeline_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     scenario = json.loads(artifacts.scenario_path.read_text(encoding="utf-8"))
     names = json.loads(artifacts.names_path.read_text(encoding="utf-8"))
     status = json.loads(artifacts.status_path.read_text(encoding="utf-8"))
@@ -617,6 +714,8 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert "temporal_violations_total" in fidelity
     assert combined["governance"]["truth_total"] >= 1
     assert "fidelity" in combined
+    assert "environment" in environment_summary
+    assert environment_timeline
     assert scenario["title"] == "lc-truth-evaluation"
     assert names == {"agent:off_1": "Off 1", "agent:off_2": "Off 2"}
     assert status["state"] == "finished"

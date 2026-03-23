@@ -38,9 +38,11 @@ class WorldJournal:
 
     max_work_items: int = 20
     max_artifacts: int = 20
+    max_pending_interactions: int = 20
     max_votes: int = 20
     store_max_work_items: int = 200
     store_max_artifacts: int = 200
+    store_max_pending_interactions: int = 200
     store_max_votes: int = 200
     history_max_entries: int = 60
 
@@ -55,6 +57,9 @@ class WorldJournal:
 
     artifact_order: list[str] = field(default_factory=list)
     artifacts: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    pending_interaction_order: list[str] = field(default_factory=list)
+    pending_interactions: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     vote_order: list[str] = field(default_factory=list)
     votes: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -72,18 +77,22 @@ class WorldJournal:
         state: WorldState,
         max_work_items: int = 20,
         max_artifacts: int = 20,
+        max_pending_interactions: int = 20,
         max_votes: int = 20,
         store_max_work_items: int = 200,
         store_max_artifacts: int = 200,
+        store_max_pending_interactions: int = 200,
         store_max_votes: int = 200,
         history_max_entries: int = 60,
     ) -> "WorldJournal":
         j = cls(
             max_work_items=max_work_items,
             max_artifacts=max_artifacts,
+            max_pending_interactions=max_pending_interactions,
             max_votes=max_votes,
             store_max_work_items=store_max_work_items,
             store_max_artifacts=store_max_artifacts,
+            store_max_pending_interactions=store_max_pending_interactions,
             store_max_votes=store_max_votes,
             history_max_entries=history_max_entries,
         )
@@ -94,9 +103,11 @@ class WorldJournal:
             "channels": len(state.registry.list_ids(EntityKind.CHANNEL)),
             "work_items": len(state.registry.list_ids(EntityKind.WORK_ITEM)),
             "artifacts": len(state.registry.list_ids(EntityKind.ARTIFACT)),
+            "pending_interactions": len(state.pending_interactions),
             "votes": len(state.registry.list_ids(EntityKind.VOTE)),
             "zones": len(state.registry.list_ids(EntityKind.ZONE)),
             "resource_pools": len(state.registry.list_ids(EntityKind.RESOURCE)),
+            "operational_queues": len(state.environment.operational_queues),
         }
 
         j.agent_ids = sorted(state.agents.keys())
@@ -110,6 +121,10 @@ class WorldJournal:
         j.artifact_order = sorted(state.artifacts.keys())
         for artifact_id in j.artifact_order:
             j.artifacts[artifact_id] = j._artifact_entry(state, artifact_id)
+
+        j.pending_interaction_order = sorted(state.pending_interactions.keys())
+        for interaction_id in j.pending_interaction_order:
+            j.pending_interactions[interaction_id] = j._pending_interaction_entry(state, interaction_id)
 
         j.vote_order = sorted(state.votes.keys())
         for vid in j.vote_order:
@@ -223,8 +238,11 @@ class WorldJournal:
                 "environment_institution_updated",
                 "environment_zone_updated",
                 "environment_resource_updated",
+                "environment_operational_queue_updated",
                 "environment_information_climate_updated",
+                "environment_informal_link_updated",
             ):
+                self.entity_counts["operational_queues"] = len(state.environment.operational_queues)
                 self.environment = state.environment.snapshot_dict()
                 changed = True
                 continue
@@ -250,6 +268,23 @@ class WorldJournal:
                     changed = True
                 continue
 
+            if ev.event_type in (
+                "pending_interaction_created",
+                "pending_interaction_updated",
+                "pending_interaction_due",
+                "pending_interaction_completed",
+                "pending_interaction_expired",
+            ):
+                self.entity_counts["pending_interactions"] = len(state.pending_interactions)
+                interaction_id = str((ev.payload or {}).get("interaction_id") or "").strip()
+                if interaction_id and interaction_id in state.pending_interactions:
+                    if interaction_id not in self.pending_interactions:
+                        self.pending_interaction_order.insert(0, interaction_id)
+                    self._touch(self.pending_interaction_order, interaction_id)
+                    self.pending_interactions[interaction_id] = self._pending_interaction_entry(state, interaction_id)
+                    changed = True
+                continue
+
         if changed:
             self._enforce_caps()
             self._dirty = True
@@ -263,9 +298,11 @@ class WorldJournal:
                 "channels": int(self.entity_counts.get("channels", 0)),
                 "work_items": int(self.entity_counts.get("work_items", 0)),
                 "artifacts": int(self.entity_counts.get("artifacts", 0)),
+                "pending_interactions": int(self.entity_counts.get("pending_interactions", 0)),
                 "votes": int(self.entity_counts.get("votes", 0)),
                 "zones": int(self.entity_counts.get("zones", 0)),
                 "resource_pools": int(self.entity_counts.get("resource_pools", 0)),
+                "operational_queues": int(self.entity_counts.get("operational_queues", 0)),
             },
             "agents": [self.agents[aid] for aid in self.agent_ids],
             "environment": dict(self.environment),
@@ -278,6 +315,11 @@ class WorldJournal:
                 self.artifacts[artifact_id]
                 for artifact_id in self.artifact_order[: self.max_artifacts]
                 if artifact_id in self.artifacts
+            ],
+            "pending_interactions": [
+                self.pending_interactions[interaction_id]
+                for interaction_id in self.pending_interaction_order[: self.max_pending_interactions]
+                if interaction_id in self.pending_interactions
             ],
             "votes": [
                 self.votes[vid]
@@ -319,6 +361,10 @@ class WorldJournal:
         if self.store_max_artifacts > 0:
             while len(self.artifacts) > self.store_max_artifacts and self.artifact_order:
                 self._evict_one_artifact()
+
+        if self.store_max_pending_interactions > 0:
+            while len(self.pending_interactions) > self.store_max_pending_interactions and self.pending_interaction_order:
+                self._evict_one_pending_interaction()
 
         if self.store_max_votes > 0:
             while len(self.votes) > self.store_max_votes and self.vote_order:
@@ -368,6 +414,21 @@ class WorldJournal:
             idx = len(self.artifact_order) - 1
         artifact_id = self.artifact_order.pop(idx)
         self.artifacts.pop(artifact_id, None)
+
+    def _evict_one_pending_interaction(self) -> None:
+        if not self.pending_interaction_order:
+            return
+        idx: int | None = None
+        for i in range(len(self.pending_interaction_order) - 1, -1, -1):
+            interaction_id = self.pending_interaction_order[i]
+            status = (self.pending_interactions.get(interaction_id) or {}).get("status")
+            if status and status != "open":
+                idx = i
+                break
+        if idx is None:
+            idx = len(self.pending_interaction_order) - 1
+        interaction_id = self.pending_interaction_order.pop(idx)
+        self.pending_interactions.pop(interaction_id, None)
 
     @staticmethod
     def _truncate(text: str, max_chars: int) -> str:
@@ -453,6 +514,38 @@ class WorldJournal:
                 "title": self._truncate(str(p.get("title") or ""), 120),
                 "status": self._truncate(str(p.get("status") or ""), 60),
                 "visibility": self._truncate(str(p.get("visibility") or ""), 32),
+            }
+
+        if t == "environment_operational_queue_updated":
+            return {
+                "tick": int(ev.tick),
+                "type": t,
+                "queue_id": str(p.get("queue_id") or ""),
+                "backlog": p.get("backlog"),
+                "capacity_per_tick": p.get("capacity_per_tick"),
+                "avg_delay_ticks": p.get("avg_delay_ticks"),
+                "status": self._truncate(str(p.get("status") or ""), 48),
+                "pressure": self._truncate(str(p.get("pressure") or ""), 180),
+            }
+
+        if t in (
+            "pending_interaction_created",
+            "pending_interaction_updated",
+            "pending_interaction_due",
+            "pending_interaction_completed",
+            "pending_interaction_expired",
+        ):
+            return {
+                "tick": int(ev.tick),
+                "type": t,
+                "actor_id": ev.actor_id,
+                "interaction_id": str(p.get("interaction_id") or ""),
+                "target_agent_id": str(p.get("target_agent_id") or ""),
+                "source_agent_id": str(p.get("source_agent_id") or ""),
+                "category": self._truncate(str(p.get("category") or ""), 64),
+                "priority": self._truncate(str(p.get("priority") or ""), 24),
+                "summary": self._truncate(str(p.get("summary") or ""), 220),
+                "reason": self._truncate(str(p.get("reason") or ""), 180),
             }
 
         if t in ("vote_opened", "vote_cast", "vote_closed"):
@@ -587,4 +680,27 @@ class WorldJournal:
             "visibility": artifact.visibility,
             "status": artifact.status,
             "tags": list(artifact.tags),
+        }
+
+    @staticmethod
+    def _pending_interaction_entry(state: WorldState, interaction_id: str) -> dict[str, Any]:
+        interaction = state.pending_interactions[interaction_id]
+        return {
+            "id": interaction.interaction_id,
+            "target_agent_id": interaction.target_agent_id,
+            "source_agent_id": interaction.source_agent_id,
+            "category": interaction.category,
+            "summary": WorldJournal._truncate(interaction.summary, 220),
+            "created_tick": interaction.created_tick,
+            "earliest_tick": interaction.earliest_tick,
+            "due_tick": interaction.due_tick,
+            "priority": interaction.priority,
+            "status": interaction.status,
+            "resolution_reason": WorldJournal._truncate(interaction.resolution_reason, 160),
+            "trigger_event_type": interaction.trigger_event_type,
+            "related_work_id": interaction.related_work_id,
+            "artifact_id": interaction.artifact_id,
+            "org_id": interaction.org_id,
+            "zone_id": interaction.zone_id,
+            "last_notified_tick": interaction.last_notified_tick,
         }

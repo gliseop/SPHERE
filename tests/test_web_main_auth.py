@@ -143,6 +143,7 @@ def test_get_run_reads_directory_events(tmp_path: Path):
         '{"event_type":"message_sent","payload":{"to_id":"chan:public","text":"x"}}\n',
         encoding="utf-8",
     )
+    (run_dir / "environment_summary.json").write_text('{"environment":{"counts":{"queues":1}}}\n', encoding="utf-8")
 
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
@@ -156,6 +157,7 @@ def test_get_run_reads_directory_events(tmp_path: Path):
     assert payload["name"] == "lc_run"
     assert payload["total_events"] == 1
     assert isinstance(payload["events"], list) and len(payload["events"]) == 1
+    assert payload["environment"] == {"environment": {"counts": {"queues": 1}}}
 
 
 def test_get_run_hides_private_events_for_viewer(tmp_path: Path):
@@ -449,6 +451,8 @@ def test_export_run_reads_directory_sidecars(tmp_path: Path):
     (run_dir / "scenario.json").write_text('{"title":"demo"}\n', encoding="utf-8")
     (run_dir / "names.json").write_text('{"agent:1":"Alice"}\n', encoding="utf-8")
     (run_dir / "summary.json").write_text('{"score":1}\n', encoding="utf-8")
+    (run_dir / "environment_summary.json").write_text('{"environment":{"counts":{"queues":1}}}\n', encoding="utf-8")
+    (run_dir / "environment_timeline.jsonl").write_text('{"tick":0,"environment":{"counts":{"queues":1}}}\n', encoding="utf-8")
 
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
@@ -463,6 +467,8 @@ def test_export_run_reads_directory_sidecars(tmp_path: Path):
     assert payload["scenario"] == {"title": "demo"}
     assert payload["names"] == {"agent:1": "Alice"}
     assert payload["summary"] == {"score": 1}
+    assert payload["environment"] == {"environment": {"counts": {"queues": 1}}}
+    assert payload["environment_timeline"] == [{"tick": 0, "environment": {"counts": {"queues": 1}}}]
 
 
 def test_export_run_falls_back_to_input_sidecar_for_live_run(tmp_path: Path):

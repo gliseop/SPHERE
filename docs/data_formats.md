@@ -32,6 +32,7 @@ runtime:
   temporal_future_horizon_days: 120
   micro_reaction_rounds: 0
   micro_reaction_max_agents_per_round: 6
+  pending_interaction_horizon_ticks: 2
   max_actions_per_turn: 2
   tick_events_history: 200
   enable_worldgen: false
@@ -140,6 +141,16 @@ world:
         unit: "тыс. руб."
         status: "strained"
         pressure: "Сроки поджимают."
+    operational_queues:
+      - queue_id: "queue:permits"
+        title: "Очередь разрешений"
+        owner_org_id: "org:admin"
+        zone_id: "zone:main_office"
+        backlog: 6
+        capacity_per_tick: 2
+        avg_delay_ticks: 2
+        status: "strained"
+        pressure: "Заявки копятся быстрее, чем их успевают разбирать."
     information_climate:
       public_mood: "Раздражение из-за задержек."
       oversight_attention: "Повышенное."
@@ -172,7 +183,8 @@ scripted_events:
 Поля `agents[].org_id` и `agents[].zone_id` опционально привязывают агента к организации и/или зоне среды. Если они заданы, движок может:
 
 - включать релевантный environment-brief в prompt агента;
-- активировать периферийного агента при изменениях связанной организации, зоны или принадлежащего ей ресурсного пула.
+- активировать периферийного агента при изменениях связанной организации, зоны или принадлежащего ей ресурсного пула;
+- подавать агенту локальные pending-follow-up обязательства, если они адресованы этому агенту.
 
 ### Ключевые поля `runtime`
 
@@ -188,6 +200,7 @@ scripted_events:
 | `temporal_future_horizon_days` | `int` | Максимальный горизонт будущих абсолютных дат в структурированных действиях |
 | `micro_reaction_rounds` | `int` | Сколько локальных reaction windows движок запускает внутри одного тика после основного батча действий |
 | `micro_reaction_max_agents_per_round` | `int` | Верхняя граница числа агентов в одном локальном окне реакции |
+| `pending_interaction_horizon_ticks` | `int` | На сколько тиков вперёд живёт локальное ожидающее взаимодействие (`pending_interaction`) после того, как стало актуальным |
 | `worldgen_every_ticks` | `int` | Положительный интервал запуска worldgen в тиках; `0` и отрицательные значения недопустимы |
 | `worldgen_pre_tick` | `bool` | Запускать ли pre-tick worldgen до `propose_actions`, чтобы подать агентам personal contexts |
 | `worldgen_event_budget_per_tick` | `int` | Верхняя граница числа `world_event` от worldgen за один запуск |
@@ -239,6 +252,36 @@ scripted_events:
 - `opportunity`;
 - `exposure_risk`.
 
+### Runtime pending-follow-up queue
+
+`WorldState.pending_interactions` не задаётся напрямую в сценарии, но является частью runtime-состояния мира.
+
+Это first-class очередь коротких локальных обязательств, которые могут переживать несколько тиков:
+
+- ответ на приватное сообщение;
+- follow-up по документу или артефакту;
+- реакция на ресурсное давление;
+- ответ на audit-запрос.
+
+Каждый элемент такой очереди хранит:
+
+- `interaction_id`;
+- `target_agent_id`;
+- `source_agent_id`;
+- `category`;
+- `summary`;
+- `created_tick`;
+- `earliest_tick`;
+- `due_tick`;
+- `priority`;
+- `status`.
+
+Движок может:
+
+- детерминированно создавать и обновлять `pending_interaction_created` / `pending_interaction_updated`;
+- эмитить `pending_interaction_due`, когда локальное обязательство доходит до адресата;
+- закрывать его через `pending_interaction_completed` или `pending_interaction_expired`.
+
 ### Ключевые поля `memory`
 
 | Поле | Тип | Назначение |
@@ -284,18 +327,37 @@ Post-worldgen теперь также может возвращать:
 - `artifact_creations` — создание новых `art:*` сущностей;
 - `artifact_updates` — обновление уже существующих артефактов.
 
+### `world.environment.informal_links`
+
+`WorldConfig.environment.informal_links` задаёт стартовые неформальные связи между агентами.
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `agent_a_id` | `agent:*` | Первый участник связи |
+| `agent_b_id` | `agent:*` | Второй участник связи |
+| `link_type` | `str` | Тип связи (`private_contact`, `coordination`, `favor`, `kinship`, `dependency` и т.п.) |
+| `strength` | `float` | Сила связи в диапазоне `[0, 1]` |
+| `visibility` | `str` | Насколько связь явная или латентная |
+| `pressure` | `str` | Какое неформальное давление или ожидание она несёт |
+| `source` | `str` | Источник (`configured`, `worldgen`, `interaction`) |
+
+Кроме конфигурации и worldgen, движок теперь может детерминированно усиливать такие связи по факту взаимодействий, например после приватных сообщений и координации по общему делу.
+
 ### `world.environment`
 
 `WorldConfig.environment` задаёт стартовый stateful environment layer поверх обычной оргструктуры.
 
-Поддерживаются четыре блока:
+Поддерживаются следующие блоки:
 
 | Поле | Тип | Назначение |
 |---|---|---|
 | `institution_modes` | `InstitutionRegimeConfig[]` | Операционные режимы организаций (`org:*`) |
 | `zones` | `ZoneConfig[]` | Зоны/территории среды с собственными режимами доступа и прозрачности |
 | `resource_pools` | `ResourcePoolConfig[]` | Ресурсные контуры с количеством, владельцем и текущим давлением |
+| `operational_queues` | `OperationalQueueConfig[]` | Material queues / backlog-контуры с пропускной способностью, задержкой и operational pressure |
 | `information_climate` | `InformationClimateConfig` | Глобальный информационный фон мира |
+| `informal_links` | `InformalLinkConfig[]` | Стартовые неформальные связи и зависимости между агентами |
+| `population_blueprints` | `PopulationBlueprintConfig[]` | Шаблоны для систематического наращивания периферийной агентности вокруг `org:*` / `zone:*` |
 
 Этот слой на текущем этапе:
 
@@ -309,7 +371,70 @@ Post-worldgen может дополнительно вернуть `environment_
 - обновление режимов организаций;
 - обновление режимов зон;
 - обновление ресурсных пулов;
+- обновление operational queues;
 - обновление глобального информационного климата.
+
+### `world.environment.operational_queues`
+
+`OperationalQueueConfig` задаёт материализованные operational queues: backlog’и, задержки и пропускную способность процессов вокруг организации или зоны.
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `queue_id` | `str` | Стабильный ID очереди |
+| `title` | `str` | Человеко-читаемое название |
+| `owner_org_id` | `org:* \| null` | Какая организация несёт ответственность за очередь |
+| `zone_id` | `zone:* \| null` | В какой зоне локализована очередь |
+| `backlog` | `int` | Текущий накопленный хвост задач / заявок |
+| `capacity_per_tick` | `int` | Сколько единиц очередь в среднем способна обработать за тик |
+| `avg_delay_ticks` | `int` | Средняя задержка обработки в тиках |
+| `status` | `str` | Качественное состояние (`stable`, `strained`, `overloaded`, `recovering`) |
+| `pressure` | `str` | Текстовое описание текущего operational pressure |
+
+Этот слой нужен для того, чтобы материальные ограничения мира проявлялись не только через `res:*`, но и через накопление backlog / просрочки.
+
+В текущем runtime поверх таких очередей уже могут детерминированно появляться:
+
+- `queue_alert` — внутренний сигнал перегрузки;
+- `complaint_wave` — публичная волна жалоб;
+- `publication` — публичное обсуждение задержек;
+- `world_event` и допсигналы в `information_climate.active_signals`.
+
+Дополнительно эти очереди теперь участвуют в per-tick process loop: без реакции backlog и delay могут продолжать ухудшаться, а при реальной `work`-активности релевантных агентов очередь может перейти в `recovering` / `stable` и закрыть complaint/publication-контур.
+
+При включённом `runtime.allow_runtime_spawn` тот же service-degradation контур теперь может детерминированно порождать внешних акторов с `spawn_source="queue_process"` и `population_role` вроде `queue_complainant` / `queue_reporter`.
+
+Для таких акторов движок дополнительно может seed’ить:
+
+- `pending_interactions` категорий `queue_escalation`, `queue_publication_push`, `issue_coordination`;
+- неформальную связь `shared_issue` между complainant и reporter вокруг одной и той же очереди.
+
+Когда такие акторы реально совершают свои действия, движок дополнительно может materialize:
+
+- `external_complaint` и `press_inquiry` артефакты;
+- internal `pending_interactions` категорий `external_queue_complaint_response` и `media_response`;
+- новые pressure-signals в `information_climate.active_signals`.
+
+### `world.environment.population_blueprints`
+
+`PopulationBlueprintConfig` позволяет не вручную перечислять всех периферийных акторов, а задавать шаблоны плотности среды вокруг организации или зоны.
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `blueprint_id` | `str` | Стабильный ID шаблона |
+| `role_label` | `str` | Человеко-читаемая роль для новых акторов |
+| `persona_hint` | `str` | Базовая подсказка для персоны |
+| `desired_count` | `int` | Сколько акторов этого класса мир старается поддерживать |
+| `activation` | `bootstrap` / `environment_change` | Когда включается шаблон |
+| `internal` | `bool` | Внутренний ли это актор |
+| `capabilities` | `list[str]` | Разрешённые capabilities |
+| `org_id` | `org:* \| null` | К какой организации привязан актор |
+| `zone_id` | `zone:* \| null` | К какой зоне привязан актор |
+| `name_pool` | `list[str]` | Опциональный пул имён для новых акторов |
+
+На текущем этапе движок поддерживает два режима:
+
+- `bootstrap` — заполнить population-сегмент сразу при инициализации мира;
+- `environment_change` — дорастить population-сегмент после значимых средовых сдвигов.
 
 ### Полномочия агентов
 
@@ -563,6 +688,8 @@ JSON-файлы с результатами нарративных интерв�
 - `names.json` — отображение `agent_id -> display name`, используемое web UI и WebSocket `meta`.
 - `status.json` — heartbeat-статус прогона (`running` / `finished` / `failed`) с `updated_at`, `pid` и последним tick.
 - `summary.json` — итоговая агрегированная сводка (`governance` + `fidelity`).
+- `environment_summary.json` — финальный компактный срез усиленной среды, pending-interactions и queue-actor roles.
+- `environment_timeline.jsonl` — покадровая телеметрия среды по тикам.
 
 Примеры:
 
@@ -602,6 +729,19 @@ JSON-файлы с результатами нарративных интерв�
 }
 ```
 
+```json
+// environment_summary.json
+{
+  "tick": 2,
+  "environment": {
+    "counts": {"institutions": 1, "zones": 1, "resource_pools": 1, "operational_queues": 1, "informal_links": 2}
+  },
+  "pending_interactions": {"open": 1, "completed": 3, "expired": 0},
+  "queue_actor_roles": {"queue_complainant": 1, "queue_reporter": 1},
+  "spawn_sources": {"scenario": 2, "queue_process": 2}
+}
+```
+
 ### Truth-layer (`truth.jsonl`)
 
 Отдельный deterministic sidecar с каноническими truth-records для post-hoc оценки runtime-аудита.
@@ -634,6 +774,7 @@ JSON-файлы с результатами нарративных интерв�
 - `preferential_treatment_for_connected_actor`;
 - `non_escalation_under_pressure`;
 - `partial_disclosure_under_deadline_pressure`.
+- `service_degradation_response_ignored`.
 
 `truth.jsonl` постепенно смещается в сторону unified finding contract:
 

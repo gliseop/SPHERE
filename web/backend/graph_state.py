@@ -78,6 +78,8 @@ class GraphStateBuilder:
     agents: dict[str, dict] = field(default_factory=dict)
     edges: dict[tuple[str, str], float] = field(default_factory=dict)
     _thread_strength: dict[str, float] = field(default_factory=dict)
+    environment_queues: dict[str, dict] = field(default_factory=dict)
+    environment_signals: list[str] = field(default_factory=list)
 
     def ingest(self, e: dict[str, Any]) -> None:
         e = normalize_event_compat(e)
@@ -165,6 +167,27 @@ class GraphStateBuilder:
                     self.agents[target]["position_title"] = new_title
             return
 
+        if event_type == "environment_operational_queue_updated":
+            queue_id = str(payload.get("queue_id", "") or "")
+            if queue_id:
+                self.environment_queues[queue_id] = {
+                    "queue_id": queue_id,
+                    "backlog": int(_as_float(payload.get("backlog", 0), default=0.0)),
+                    "capacity_per_tick": int(_as_float(payload.get("capacity_per_tick", 0), default=0.0)),
+                    "avg_delay_ticks": int(_as_float(payload.get("avg_delay_ticks", 0), default=0.0)),
+                    "status": str(payload.get("status", "") or ""),
+                    "pressure": str(payload.get("pressure", "") or ""),
+                    "owner_org_id": str(payload.get("owner_org_id", "") or ""),
+                    "zone_id": str(payload.get("zone_id", "") or ""),
+                }
+            return
+
+        if event_type == "environment_information_climate_updated":
+            signals = payload.get("active_signals") or []
+            if isinstance(signals, list):
+                self.environment_signals = [str(item) for item in signals if str(item)]
+            return
+
         # Backward/legacy: edges strengthened implicitly by message traffic.
         if event_type == "message_sent":
             to_id = str(payload.get("to_id", "") or "")
@@ -201,7 +224,14 @@ class GraphStateBuilder:
             {"source": k[0], "target": k[1], "strength": v}
             for k, v in self.edges.items()
         ]
-        return {"nodes": nodes, "edges": edge_list}
+        return {
+            "nodes": nodes,
+            "edges": edge_list,
+            "environment": {
+                "queues": list(self.environment_queues.values()),
+                "active_signals": list(self.environment_signals),
+            },
+        }
 
     def _ensure_agent(self, agent_id: str) -> None:
         if agent_id and agent_id not in self.agents:

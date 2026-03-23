@@ -45,10 +45,10 @@ flowchart TD
     MEM --> NEXT{Ещё тики?}
     NEXT -->|да| TICK
     NEXT -->|нет| EVAL[Governance eval + fidelity sidecars]
-    EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + status.json + evaluation.json + fidelity.json + summary.json]
+    EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + status.json + evaluation.json + fidelity.json + summary.json + environment_summary.json + environment_timeline.jsonl]
 ```
 
-Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы, стартовый `environment`-слой и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry`, материализует `world.environment` как отдельный слой состояния среды и запускает цикл тиков.
+Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы, стартовый `environment`-слой и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry`, материализует `world.environment` как отдельный слой состояния среды, включая operational queues / backlog-контуры, и запускает цикл тиков.
 
 ## Агент (AgentRunner)
 
@@ -61,9 +61,16 @@ flowchart TD
 - режим организации;
 - режим зоны;
 - связанные ресурсные пулы организации;
+- связанные operational queues / backlog-контуры;
 - текущий информационный климат.
 
 Если в мире есть релевантные `art:*`-артефакты (по `org_id`, `zone_id` или связанному `work item`), агент дополнительно видит краткий список документов и следов, относящихся к его локальной среде.
+
+Если в `environment.informal_links` есть связи, в которых участвует агент, движок также подаёт краткий informal-links brief: тип связи, силу, видимость, источник и возможное давление.
+
+Если агенту адресованы открытые `pending_interactions`, он дополнительно видит краткий блок локальных обязательств и ожидающих follow-up: кто инициировал ожидание, какого оно типа, в каком временном окне живёт и к какому `artifact` / `work` / `org` оно привязано.
+
+Если мир порождает периферийных акторов через `population_blueprints`, они сразу получают привязку к `org_id` / `zone_id` и потому начинают видеть релевантный environment-brief и документарную поверхность своей локальной среды.
 
 Помимо списка ID, агент видит краткий shortlist существующих дел (`work_id + title + status`) и блок недавних отклонённых действий/ID. Это уменьшает вероятность phantom-ссылок на несуществующие `work_id` и повторного создания уже существующих задач.
 
@@ -83,7 +90,31 @@ flowchart TD
 
 Поверх основного батча действий движок теперь может запускать локальные reaction windows внутри того же тика (`runtime.micro_reaction_rounds`). Они выбирают ограниченный набор агентов, затронутых событиями текущего тика (например, приватным сообщением, `scene_occurred`, `environment_*_updated`) и дают им короткую реакцию до перехода к следующему глобальному тику. Это не отменяет общий tick-engine, но делает мир менее жёстко синхронным.
 
-Если `runtime.ecology_activation_window_ticks > 0`, не-core акторы (secondary/worldgen/runtime-spawned) не ходят автоматически каждый тик. Движок активирует их только если они недавно были затронуты событиями, hook-ами, созданием или прямым взаимодействием. Это уменьшает public-process capture со стороны ecology без отключения самой среды.
+Дополнительно движок поддерживает first-class очередь `pending_interactions`: короткие локальные обязательства, переживающие тик и доходящие до адресата как `pending_interaction_due`. Эта очередь пополняется детерминированно из самих событий мира (например, private message, документарный follow-up, ресурсное давление, audit-запрос), помогает будить периферию уже после выпадения исходного события из обычного activation-window и частично ослабляет жёсткость глобального тика без отказа от детерминированного apply.
+
+Материальный слой среды теперь не ограничивается только `res:*`. Движок также поддерживает `environment.operational_queues`: backlog, задержки и пропускную способность локальных процессов. Ресурсное давление может детерминированно переводить такие очереди в `strained` / `overloaded`, эмитить `environment_operational_queue_updated`, создавать `queue_alert`-артефакты и через них давить на релевантных агентов.
+
+Поверх queue-layer добавлен и простой local-process контур: перегруженная очередь может детерминированно порождать `complaint_wave` и `publication` артефакты, дописывать service-degradation сигнал в `information_climate.active_signals` и эмитить публичные `world_event` о росте задержек и жалоб. Это делает backlog не только числом в состоянии, но и источником наблюдаемых последствий для внешней среды.
+
+Кроме того, у operational queues теперь есть собственный per-tick процесс. Если релевантные агенты ничего не делают, backlog и delay могут продолжать расти даже без нового worldgen-update. Если же внутри организации или зоны появляется фактическая `work`-активность, очередь может начать переход в `recovering`, а complaint/publication-контур — закрываться через recovery-world-event.
+
+На следующем уровне этот же queue-process уже умеет materialize external actors: при тяжёлой service-degradation и включённом `runtime.allow_runtime_spawn` движок может детерминированно порождать внешнего complainant и/или reporter, привязанных к конкретной очереди и организации/зоне. Это превращает service-degradation из чисто средового сигнала в источник новой агентности мира.
+
+Спавн не остаётся пустым. Для таких акторов движок сразу seed’ит локальные `pending_interactions` (`queue_escalation`, `queue_publication_push`, `issue_coordination`) и неформальную связь `shared_issue`, поэтому уже на следующем тике они могут начать собственную action-chain: жалоба в организацию, координация между собой, публикация в публичный канал.
+
+Этот контур теперь замыкается обратно в ядро организации. Когда complainant или reporter действительно совершают свои действия, движок детерминированно материализует:
+
+- `external_complaint` / `press_inquiry` артефакты;
+- новые signals в `information_climate.active_signals`;
+- internal `pending_interactions` категорий `external_queue_complaint_response` и `media_response` для релевантных внутренних агентов.
+
+За счёт этого queue-driven ecology начинает влиять не только на внешнюю среду, но и на decisions core-акторов.
+
+Дополнительно после применения действий движок может детерминированно обновлять `environment.informal_links`: частные сообщения усиливают связи типа `private_contact`, а совместная работа по одному делу — связи типа `coordination`. Это даёт среде накапливаемый латентный слой зависимостей даже без отдельной worldgen-подсказки.
+
+Помимо worldgen-spawn, движок теперь поддерживает `population_blueprints`: конфигурационные шаблоны, позволяющие систематически насыщать мир периферийными акторами вокруг конкретной организации или зоны. В режиме `bootstrap` такие акторы материализуются при инициализации мира, в режиме `environment_change` — после значимых сдвигов среды.
+
+Если `runtime.ecology_activation_window_ticks > 0`, не-core акторы (secondary/worldgen/runtime-spawned) не ходят автоматически каждый тик. Движок активирует их только если они недавно были затронуты событиями, hook-ами, созданием, прямым взаимодействием или открытым `pending_interaction`. Это уменьшает public-process capture со стороны ecology без отключения самой среды.
 
 Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью + expert reflection). Результат сохраняется в `{out_dir}/personas.json` и повторно используется при совпадении fingerprint входов (seed, язык, модель, режим, описание сценария и базовые данные агентов).
 
@@ -155,6 +186,13 @@ flowchart TD
 
 Дополнительно у открытых кейсов есть follow-up policy: если по `request_explanation` / `request_documents` истёк `response_due_tick`, аудитор либо поднимает `audit_monitoring_enabled`, либо открывает `audit_review`, либо закрывает кейс при детектированном ответе/пакете документов.
 
+В baseline-эвристиках аудитора теперь есть и queue-driven governance bridge. Если service-degradation породила internal obligations категорий `external_queue_complaint_response` или `media_response`, аудитор рассматривает их как значимую governance-поверхность:
+
+- `pending_interaction_due` по таким обязательствам может привести к `service_degradation_response_ignored` с `request_explanation` / `request_documents`;
+- `pending_interaction_expired` по ним может привести к `open_case`.
+
+Тем самым очередь, жалобы и медийное давление влияют уже не только на ecology и core-agent prompts, но и на формальный oversight path.
+
 `RuntimeAuditor` не подменяет собой `ViolationOracle` и не создаёт ground truth эксперимента. Его выход — это governance-treatment, а не пост-фактум измерение качества режима.
 
 Нарративный агент-аудитор удалён: аудит больше не живёт как обычный `AgentRunner` с capability `audit`, а существует только как отдельный runtime-layer.
@@ -171,6 +209,8 @@ flowchart TD
 
 - `evaluation.json` — governance-eval: сравнение runtime-аудита и deterministic truth-layer;
 - `fidelity.json` — метрики правдоподобия (`temporal consistency`, `identity drift`, `phantom drift`, `bureaucratic loop`, `narrating leakage`, `perform`).
+- `environment_summary.json` — финальный компактный снимок усиленной среды;
+- `environment_timeline.jsonl` — покадровая средовая телеметрия для observability/export.
 
 Сводка `summary.json` просто объединяет оба блока, не смешивая governance-treatment и fidelity.
 
@@ -197,7 +237,7 @@ flowchart TD
 
 ## Операции состояния (StateOp → Event)
 
-`ops.py` определяет детерминированные операции: `SendMessageOp`, `CreateEntityOp`, `CreateAgentOp`, `CreateWorkItemOp`, `AddWorkNoteOp`, `SubmitWorkProposalOp`, `CastVoteOp`, `OpenVoteOp`, `ModifyReputationOp`, `SetVoteConsentOp`, `SetReputationFreezeOp`. Каждая операция применяется к `WorldState` и порождает `Event`, записываемый в `EventLog` (JSONL). Последовательное применение гарантирует детерминизм при фиксированном зерне.
+`ops.py` определяет детерминированные операции: `SendMessageOp`, `CreateEntityOp`, `CreateAgentOp`, `CreateWorkItemOp`, `AddWorkNoteOp`, `SubmitWorkProposalOp`, `CastVoteOp`, `OpenVoteOp`, `ModifyReputationOp`, `SetVoteConsentOp`, `SetReputationFreezeOp`, а также runtime-ops для richer среды вроде `UpsertPendingInteractionOp` / `ResolvePendingInteractionOp`. Каждая операция применяется к `WorldState` и порождает `Event`, записываемый в `EventLog` (JSONL). Последовательное применение гарантирует детерминизм при фиксированном зерне.
 
 `CreateAgentOp` создаёт `AgentState` и `entity_created`, а полноценный `AgentRunner` и bootstrap памяти для нового агента регистрируются отдельным шагом после применения ops. Новый участник начинает ходить со следующего тика.
 

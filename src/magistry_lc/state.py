@@ -11,6 +11,13 @@ from .memory import AgentMemory
 from .persona import PersonaArtifact
 
 
+def informal_link_key(agent_a_id: str, agent_b_id: str, link_type: str) -> str:
+    """Стабильный ключ неформальной связи между двумя агентами."""
+
+    left, right = sorted([str(agent_a_id).strip(), str(agent_b_id).strip()])
+    return f"{left}|{right}|{(link_type or '').strip()}"
+
+
 @dataclass(slots=True)
 class InstitutionRegimeState:
     """Операционный режим организации как части среды."""
@@ -62,13 +69,45 @@ class InformationClimateState:
 
 
 @dataclass(slots=True)
+class OperationalQueueState:
+    """Материальная operational queue: backlog, capacity, delay."""
+
+    queue_id: str
+    title: str
+    owner_org_id: str | None = None
+    zone_id: str | None = None
+    backlog: int = 0
+    capacity_per_tick: int = 0
+    avg_delay_ticks: int = 0
+    status: str = "stable"
+    pressure: str = ""
+
+
+@dataclass(slots=True)
+class InformalLinkState:
+    """Неформальная связь или зависимость между агентами."""
+
+    link_id: str
+    agent_a_id: str
+    agent_b_id: str
+    link_type: str
+    strength: float = 0.0
+    visibility: str = "latent"
+    pressure: str = ""
+    source: str = "configured"
+    last_updated_tick: int | None = None
+
+
+@dataclass(slots=True)
 class EnvironmentState:
     """Самостоятельный слой состояния среды."""
 
     institutions: dict[str, InstitutionRegimeState] = field(default_factory=dict)
     zones: dict[str, ZoneState] = field(default_factory=dict)
     resource_pools: dict[str, ResourcePoolState] = field(default_factory=dict)
+    operational_queues: dict[str, OperationalQueueState] = field(default_factory=dict)
     information_climate: InformationClimateState = field(default_factory=InformationClimateState)
+    informal_links: dict[str, InformalLinkState] = field(default_factory=dict)
 
     def snapshot_dict(
         self,
@@ -76,6 +115,8 @@ class EnvironmentState:
         max_institutions: int = 12,
         max_zones: int = 12,
         max_resource_pools: int = 12,
+        max_operational_queues: int = 12,
+        max_informal_links: int = 20,
     ) -> dict[str, Any]:
         """Вернуть компактный срез среды для журналов и worldgen."""
         return {
@@ -83,6 +124,8 @@ class EnvironmentState:
                 "institutions": len(self.institutions),
                 "zones": len(self.zones),
                 "resource_pools": len(self.resource_pools),
+                "operational_queues": len(self.operational_queues),
+                "informal_links": len(self.informal_links),
             },
             "institutions": [
                 {
@@ -120,6 +163,20 @@ class EnvironmentState:
                 }
                 for _, item in sorted(self.resource_pools.items())[:max_resource_pools]
             ],
+            "operational_queues": [
+                {
+                    "queue_id": item.queue_id,
+                    "title": item.title,
+                    "owner_org_id": item.owner_org_id,
+                    "zone_id": item.zone_id,
+                    "backlog": int(item.backlog),
+                    "capacity_per_tick": int(item.capacity_per_tick),
+                    "avg_delay_ticks": int(item.avg_delay_ticks),
+                    "status": item.status,
+                    "pressure": item.pressure,
+                }
+                for _, item in sorted(self.operational_queues.items())[:max_operational_queues]
+            ],
             "information_climate": {
                 "public_mood": self.information_climate.public_mood,
                 "oversight_attention": self.information_climate.oversight_attention,
@@ -127,6 +184,27 @@ class EnvironmentState:
                 "narrative_temperature": self.information_climate.narrative_temperature,
                 "active_signals": list(self.information_climate.active_signals),
             },
+            "informal_links": [
+                {
+                    "link_id": item.link_id,
+                    "agent_a_id": item.agent_a_id,
+                    "agent_b_id": item.agent_b_id,
+                    "link_type": item.link_type,
+                    "strength": round(float(item.strength), 3),
+                    "visibility": item.visibility,
+                    "pressure": item.pressure,
+                    "source": item.source,
+                    "last_updated_tick": item.last_updated_tick,
+                }
+                for _, item in sorted(
+                    self.informal_links.items(),
+                    key=lambda pair: (
+                        -(pair[1].last_updated_tick or -1),
+                        -pair[1].strength,
+                        pair[0],
+                    ),
+                )[:max_informal_links]
+            ],
         }
 
 
@@ -144,6 +222,9 @@ class AgentState:
     capabilities: list[str] = field(default_factory=list)
     org_id: str | None = None
     zone_id: str | None = None
+    spawn_source: str = ""
+    blueprint_id: str | None = None
+    population_role: str = ""
 
     reputation: float = 0.0  # clamp >= 0
     reputation_frozen: bool = False
@@ -187,6 +268,29 @@ class ArtifactState:
     visibility: str = "internal"
     status: str = "active"
     tags: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class PendingInteractionState:
+    """Локальное ожидающее взаимодействие или короткое обязательство."""
+
+    interaction_id: str
+    target_agent_id: str
+    source_agent_id: str | None = None
+    category: str = "follow_up"
+    summary: str = ""
+    created_tick: int = 0
+    earliest_tick: int = 0
+    due_tick: int | None = None
+    priority: str = "normal"
+    status: str = "open"  # open|completed|expired
+    resolution_reason: str = ""
+    trigger_event_type: str = ""
+    related_work_id: str | None = None
+    artifact_id: str | None = None
+    org_id: str | None = None
+    zone_id: str | None = None
+    last_notified_tick: int | None = None
 
 
 @dataclass(slots=True)
@@ -254,6 +358,7 @@ class WorldState:
     agents: dict[str, AgentState] = field(default_factory=dict)
     work_items: dict[str, WorkItem] = field(default_factory=dict)
     artifacts: dict[str, ArtifactState] = field(default_factory=dict)
+    pending_interactions: dict[str, PendingInteractionState] = field(default_factory=dict)
     votes: dict[str, Vote] = field(default_factory=dict)
     audit_cases: dict[str, AuditCase] = field(default_factory=dict)
 
@@ -272,6 +377,7 @@ class WorldState:
         *,
         max_work_items: int = 20,
         max_artifacts: int = 20,
+        max_pending_interactions: int = 20,
         max_votes: int = 20,
     ) -> dict[str, Any]:
         """Собрать компактный YAML-журнал мира (как словарь).
@@ -348,6 +454,38 @@ class WorldState:
                 }
             )
 
+        pending_interactions = []
+        for interaction_id, interaction in sorted(
+            self.pending_interactions.items(),
+            key=lambda pair: (
+                pair[1].status != "open",
+                pair[1].due_tick if pair[1].due_tick is not None else 10**9,
+                pair[1].earliest_tick,
+                pair[1].interaction_id,
+            ),
+        )[:max_pending_interactions]:
+            pending_interactions.append(
+                {
+                    "id": interaction_id,
+                    "target_agent_id": interaction.target_agent_id,
+                    "source_agent_id": interaction.source_agent_id,
+                    "category": interaction.category,
+                    "summary": interaction.summary,
+                    "created_tick": interaction.created_tick,
+                    "earliest_tick": interaction.earliest_tick,
+                    "due_tick": interaction.due_tick,
+                    "priority": interaction.priority,
+                    "status": interaction.status,
+                    "resolution_reason": interaction.resolution_reason,
+                    "trigger_event_type": interaction.trigger_event_type,
+                    "related_work_id": interaction.related_work_id,
+                    "artifact_id": interaction.artifact_id,
+                    "org_id": interaction.org_id,
+                    "zone_id": interaction.zone_id,
+                    "last_notified_tick": interaction.last_notified_tick,
+                }
+            )
+
         audit_cases = []
         for cid in sorted(self.audit_cases.keys())[:max_votes]:
             c = self.audit_cases[cid]
@@ -380,15 +518,18 @@ class WorldState:
                 "channels": len(self.registry.list_ids(EntityKind.CHANNEL)),
                 "work_items": len(self.registry.list_ids(EntityKind.WORK_ITEM)),
                 "artifacts": len(self.registry.list_ids(EntityKind.ARTIFACT)),
+                "pending_interactions": len(self.pending_interactions),
                 "votes": len(self.registry.list_ids(EntityKind.VOTE)),
                 "zones": len(self.registry.list_ids(EntityKind.ZONE)),
                 "resource_pools": len(self.registry.list_ids(EntityKind.RESOURCE)),
+                "operational_queues": len(self.environment.operational_queues),
                 "audit_cases": len(self.audit_cases),
             },
             "environment": self.environment.snapshot_dict(),
             "agents": agents,
             "work_items": work_items,
             "artifacts": artifacts,
+            "pending_interactions": pending_interactions,
             "votes": votes,
             "audit_cases": audit_cases,
         }

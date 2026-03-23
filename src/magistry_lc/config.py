@@ -97,10 +97,16 @@ class MemoryConfig(BaseModel):
             "work_proposal_submitted": 5.0,
             "artifact_created": 5.0,
             "artifact_updated": 5.0,
+            "pending_interaction_created": 4.0,
+            "pending_interaction_updated": 4.0,
+            "pending_interaction_due": 5.0,
+            "pending_interaction_completed": 4.0,
+            "pending_interaction_expired": 5.0,
             "world_event": 5.0,
             "environment_institution_updated": 5.0,
             "environment_zone_updated": 5.0,
             "environment_resource_updated": 5.0,
+            "environment_operational_queue_updated": 5.0,
             "environment_information_climate_updated": 5.0,
             "audit_flagged": 7.0,
             "audit_case_opened": 7.0,
@@ -200,6 +206,7 @@ class RuntimeConfig(BaseModel):
     freeform_truth_window_ticks: int = 5
     micro_reaction_rounds: int = 0
     micro_reaction_max_agents_per_round: int = 6
+    pending_interaction_horizon_ticks: int = 2
     parallel_agents: bool = True
     parallel_workers: int | None = None
     parallel_window_seconds: float | None = None
@@ -232,6 +239,7 @@ class RuntimeConfig(BaseModel):
         "freeform_truth_window_ticks",
         "micro_reaction_rounds",
         "micro_reaction_max_agents_per_round",
+        "pending_interaction_horizon_ticks",
     )
     @classmethod
     def _validate_non_negative_runtime_budget(cls, v: int) -> int:
@@ -630,6 +638,53 @@ class ResourcePoolConfig(BaseModel):
         return float(v)
 
 
+class OperationalQueueConfig(BaseModel):
+    """Стартовая operational queue: backlog, capacity, average delay."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    queue_id: str
+    title: str
+    owner_org_id: str | None = None
+    zone_id: str | None = None
+    backlog: int = 0
+    capacity_per_tick: int = 0
+    avg_delay_ticks: int = 0
+    status: str = "stable"
+    pressure: str = ""
+
+    @field_validator("queue_id", "title", "status")
+    @classmethod
+    def _validate_non_empty_string(cls, v: str) -> str:
+        value = str(v or "").strip()
+        if not value:
+            raise ValueError("value must be non-empty")
+        return value
+
+    @field_validator("owner_org_id")
+    @classmethod
+    def _validate_queue_owner_org_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.ORG)
+        return v
+
+    @field_validator("zone_id")
+    @classmethod
+    def _validate_queue_zone_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.ZONE)
+        return v
+
+    @field_validator("backlog", "capacity_per_tick", "avg_delay_ticks")
+    @classmethod
+    def _validate_non_negative_queue_int(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("queue values must be >= 0")
+        return int(v)
+
+
 class ArtifactConfig(BaseModel):
     """Стартовый документ/артефакт мира."""
 
@@ -709,6 +764,83 @@ class InformationClimateConfig(BaseModel):
         return out
 
 
+class InformalLinkConfig(BaseModel):
+    """Стартовая неформальная связь между агентами."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_a_id: str
+    agent_b_id: str
+    link_type: str
+    strength: float = 0.5
+    visibility: str = "latent"
+    pressure: str = ""
+    source: str = "configured"
+
+    @field_validator("agent_a_id", "agent_b_id")
+    @classmethod
+    def _validate_agent_ids(cls, v: str) -> str:
+        ensure_kind(v, EntityKind.AGENT)
+        return v
+
+    @field_validator("strength")
+    @classmethod
+    def _validate_strength(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("informal link strength must be in [0, 1]")
+        return float(v)
+
+
+class PopulationBlueprintConfig(BaseModel):
+    """Шаблон для систематического наращивания периферийной агентности."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    blueprint_id: str
+    role_label: str
+    persona_hint: str
+    desired_count: int = 1
+    activation: Literal["bootstrap", "environment_change"] = "bootstrap"
+    internal: bool = False
+    capabilities: list[str] = Field(default_factory=lambda: ["message"])
+    org_id: str | None = None
+    zone_id: str | None = None
+    name_pool: list[str] = Field(default_factory=list)
+
+    @field_validator("desired_count")
+    @classmethod
+    def _validate_desired_count(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("desired_count must be >= 0")
+        return v
+
+    @field_validator("org_id")
+    @classmethod
+    def _validate_org_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.ORG)
+        return v
+
+    @field_validator("zone_id")
+    @classmethod
+    def _validate_zone_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.ZONE)
+        return v
+
+    @field_validator("name_pool", "capabilities")
+    @classmethod
+    def _normalize_string_list(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for item in v or []:
+            value = str(item or "").strip()
+            if value:
+                out.append(value)
+        return out
+
+
 class EnvironmentConfig(BaseModel):
     """Стартовый слой среды поверх агентов и оргструктуры."""
 
@@ -717,7 +849,10 @@ class EnvironmentConfig(BaseModel):
     institution_modes: list[InstitutionRegimeConfig] = Field(default_factory=list)
     zones: list[ZoneConfig] = Field(default_factory=list)
     resource_pools: list[ResourcePoolConfig] = Field(default_factory=list)
+    operational_queues: list[OperationalQueueConfig] = Field(default_factory=list)
     information_climate: InformationClimateConfig = Field(default_factory=InformationClimateConfig)
+    informal_links: list[InformalLinkConfig] = Field(default_factory=list)
+    population_blueprints: list[PopulationBlueprintConfig] = Field(default_factory=list)
 
 
 class WorkItemConfig(BaseModel):

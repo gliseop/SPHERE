@@ -147,6 +147,20 @@ def _format_environment_brief(*, agent: AgentState, state: WorldState) -> str:
                 f"- Зона {agent.zone_id} ({zone.title}): доступ={zone.access_mode}, прозрачность={zone.transparency_mode}, безопасность={zone.security_level}"
             )
 
+    relevant_queues = []
+    for _, queue in sorted(state.environment.operational_queues.items()):
+        if agent.org_id and queue.owner_org_id == agent.org_id:
+            relevant_queues.append(queue)
+            continue
+        if agent.zone_id and queue.zone_id == agent.zone_id:
+            relevant_queues.append(queue)
+            continue
+    for queue in relevant_queues[:3]:
+        lines.append(
+            f"- Очередь {queue.queue_id}: backlog={queue.backlog}, capacity={queue.capacity_per_tick}/tick, delay={queue.avg_delay_ticks}, status={queue.status}"
+            + (f", pressure={queue.pressure}" if queue.pressure else "")
+        )
+
     climate = state.environment.information_climate
     if any(
         [
@@ -201,6 +215,78 @@ def _format_relevant_artifacts(*, agent: AgentState, state: WorldState) -> str:
         lines.append(
             f"- {artifact.artifact_id}: {artifact.title} [{artifact.artifact_type}, {artifact.status}, {artifact.visibility}]{relation_text}{tags}{summary}"
         )
+    return "\n".join(lines) + "\n\n"
+
+
+def _format_informal_links(*, agent: AgentState, state: WorldState) -> str:
+    relevant = []
+    for _, link in sorted(
+        state.environment.informal_links.items(),
+        key=lambda pair: (-(pair[1].last_updated_tick or -1), -pair[1].strength, pair[0]),
+    ):
+        if agent.agent_id not in {link.agent_a_id, link.agent_b_id}:
+            continue
+        counterpart = link.agent_b_id if link.agent_a_id == agent.agent_id else link.agent_a_id
+        relevant.append((counterpart, link))
+    if not relevant:
+        return ""
+
+    lines = ["Неформальные связи и зависимости:"]
+    for counterpart, link in relevant[:6]:
+        pressure = f" | давление={link.pressure}" if link.pressure else ""
+        lines.append(
+            f"- {counterpart}: {link.link_type}, strength={round(float(link.strength), 3)}, visibility={link.visibility}, source={link.source}{pressure}"
+        )
+    return "\n".join(lines) + "\n\n"
+
+
+def _format_pending_interactions(*, agent: AgentState, state: WorldState) -> str:
+    relevant = [
+        interaction
+        for interaction in state.pending_interactions.values()
+        if interaction.target_agent_id == agent.agent_id and interaction.status == "open"
+    ]
+    if not relevant:
+        return ""
+
+    relevant.sort(
+        key=lambda item: (
+            item.due_tick if item.due_tick is not None else 10**9,
+            item.earliest_tick,
+            item.created_tick,
+            item.interaction_id,
+        )
+    )
+    lines = ["Ожидающие локальные обязательства и follow-up:"]
+    for interaction in relevant[:6]:
+        source = f" от {interaction.source_agent_id}" if interaction.source_agent_id else ""
+        window = f" | окно=t{interaction.earliest_tick}..t{interaction.due_tick}" if interaction.due_tick is not None else f" | c t{interaction.earliest_tick}"
+        anchor: list[str] = []
+        if interaction.related_work_id:
+            anchor.append(f"work={interaction.related_work_id}")
+        if interaction.artifact_id:
+            anchor.append(f"artifact={interaction.artifact_id}")
+        if interaction.org_id:
+            anchor.append(f"org={interaction.org_id}")
+        if interaction.zone_id:
+            anchor.append(f"zone={interaction.zone_id}")
+        anchor_text = f" | {'; '.join(anchor)}" if anchor else ""
+        lines.append(
+            f"- {interaction.category}{source}, priority={interaction.priority}{window}{anchor_text}: {interaction.summary or '(без summary)'}"
+        )
+    return "\n".join(lines) + "\n\n"
+
+
+def _format_spawn_context(*, agent: AgentState) -> str:
+    if not agent.spawn_source and not agent.population_role and not agent.blueprint_id:
+        return ""
+    lines = ["Локальное происхождение и роль:"]
+    if agent.spawn_source:
+        lines.append(f"- Источник появления: {agent.spawn_source}")
+    if agent.population_role:
+        lines.append(f"- Текущая локальная роль: {agent.population_role}")
+    if agent.blueprint_id:
+        lines.append(f"- Локальный контур: {agent.blueprint_id}")
     return "\n".join(lines) + "\n\n"
 
 
@@ -331,6 +417,9 @@ class AgentRunner:
         daily_context_text = _format_daily_context(daily_context, scene_hooks or [])
         environment_brief = _format_environment_brief(agent=agent, state=state)
         artifacts_brief = _format_relevant_artifacts(agent=agent, state=state)
+        informal_links_brief = _format_informal_links(agent=agent, state=state)
+        pending_interactions_brief = _format_pending_interactions(agent=agent, state=state)
+        spawn_context_brief = _format_spawn_context(agent=agent)
         motivation_block = _motivation_block(agent, visible_events)
 
         # Инструкция по действиям.
@@ -388,6 +477,9 @@ class AgentRunner:
             f"{daily_context_text}"
             f"{environment_brief}"
             f"{artifacts_brief}"
+            f"{informal_links_brief}"
+            f"{pending_interactions_brief}"
+            f"{spawn_context_brief}"
             f"Память:\n{mem_text}\n\n"
             "Доступные типы действий:\n"
             f"{actions_block}\n\n"

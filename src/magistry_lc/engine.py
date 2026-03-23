@@ -31,6 +31,7 @@ from .ids import (
     PUBLIC_AUDIENCE,
     make_id,
     make_unique_id,
+    parse_typed_id,
     normalize_slug,
 )
 from .journal import WorldJournal
@@ -42,13 +43,18 @@ from .ops import (
     CreateEntityOp,
     CreateWorkItemOp,
     ModifyReputationOp,
+    AddInformationSignalOp,
+    ResolvePendingInteractionOp,
     SetReputationFreezeOp,
     StateOp,
     UpdateInformationClimateOp,
+    UpsertPendingInteractionOp,
+    UpsertInformalLinkOp,
     UpdateInstitutionRegimeOp,
     UpdateResourcePoolOp,
     UpdateArtifactOp,
     UpdateZoneStateOp,
+    UpdateOperationalQueueOp,
 )
 from .persona import (
     INTERVIEW_QUESTIONS_V2,
@@ -64,9 +70,13 @@ from .state import AgentState, WorkItem, WorldState
 from .state import (
     EnvironmentState,
     InformationClimateState,
+    InformalLinkState,
     InstitutionRegimeState,
+    OperationalQueueState,
+    PendingInteractionState,
     ResourcePoolState,
     ZoneState,
+    informal_link_key,
 )
 from .tracing import TraceLog
 from .truth import TruthDetector, TruthLog
@@ -107,6 +117,8 @@ class RunArtifacts:
     evaluation_path: Path | None = None
     fidelity_path: Path | None = None
     summary_path: Path | None = None
+    environment_summary_path: Path | None = None
+    environment_timeline_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -135,6 +147,10 @@ class WorldEngine:
             self.artifacts.fidelity_path = self.artifacts.out_dir / "fidelity.json"
         if self.artifacts.summary_path is None:
             self.artifacts.summary_path = self.artifacts.out_dir / "summary.json"
+        if self.artifacts.environment_summary_path is None:
+            self.artifacts.environment_summary_path = self.artifacts.out_dir / "environment_summary.json"
+        if self.artifacts.environment_timeline_path is None:
+            self.artifacts.environment_timeline_path = self.artifacts.out_dir / "environment_timeline.jsonl"
 
     async def run(self) -> WorldState:
         """Запустить симуляцию и вернуть финальный WorldState."""
@@ -294,6 +310,9 @@ class WorldEngine:
 
             agent_order = self._agent_order(state=state, tick=tick)
             tick_events = self._expire_reputation_freezes(state=state, event_log=event_log)
+            pending_expired = self._expire_pending_interactions(state=state, event_log=event_log)
+            if pending_expired:
+                tick_events.extend(pending_expired)
             daily_contexts: dict[str, AgentDailyContext] = {}
             scene_hooks_by_agent: dict[str, list[SceneHook]] = {}
             current_date, current_time = self._world_time_labels(tick=state.tick)
@@ -307,6 +326,13 @@ class WorldEngine:
             if scripted_events:
                 event_log.extend(scripted_events)
                 tick_events.extend(scripted_events)
+
+            pending_due_events = self._emit_pending_interaction_due_events(
+                state=state,
+                event_log=event_log,
+            )
+            if pending_due_events:
+                tick_events.extend(pending_due_events)
 
             visible_history = list(events_history) + list(tick_events)
             if (
@@ -366,6 +392,13 @@ class WorldEngine:
                 )
                 if env_events:
                     tick_events.extend(env_events)
+                consequence_events = self._apply_environment_material_consequences(
+                    state=state,
+                    tick_events=env_events,
+                    event_log=event_log,
+                )
+                if consequence_events:
+                    tick_events.extend(consequence_events)
                 scene_events = self._materialize_scene_hook_events(
                     tick=state.tick,
                     scene_hooks=generated_pre.scene_hooks,
@@ -394,6 +427,13 @@ class WorldEngine:
                     }
                 )
                 tick_events.extend(list(out.get("tick_events") or []))
+                tick_events.extend(
+                    self._apply_interaction_network_updates(
+                        state=state,
+                        tick_events=tick_events,
+                        event_log=event_log,
+                    )
+                )
             else:
                 # Сбор действий агентов параллельно.
                 proposed, gather_errors = await self._gather_actions(
@@ -432,6 +472,28 @@ class WorldEngine:
                         already_acted=already_acted,
                     )
                 )
+                tick_events.extend(
+                    self._apply_interaction_network_updates(
+                        state=state,
+                        tick_events=tick_events,
+                        event_log=event_log,
+                    )
+                )
+
+            queue_process_events = self._apply_operational_queue_processes(
+                state=state,
+                tick_events=tick_events,
+                event_log=event_log,
+            )
+            if queue_process_events:
+                tick_events.extend(queue_process_events)
+                queue_consequence_events = self._apply_environment_material_consequences(
+                    state=state,
+                    tick_events=queue_process_events,
+                    event_log=event_log,
+                )
+                if queue_consequence_events:
+                    tick_events.extend(queue_consequence_events)
 
             new_agents = self._detect_new_agents(state=state, runners=runners)
             if new_agents:
@@ -509,6 +571,13 @@ class WorldEngine:
                 )
                 if env_events:
                     tick_events.extend(env_events)
+                consequence_events = self._apply_environment_material_consequences(
+                    state=state,
+                    tick_events=env_events,
+                    event_log=event_log,
+                )
+                if consequence_events:
+                    tick_events.extend(consequence_events)
                 artifact_events = self._apply_worldgen_artifact_changes(
                     state=state,
                     creations=[
@@ -541,6 +610,13 @@ class WorldEngine:
                 )
                 if artifact_events:
                     tick_events.extend(artifact_events)
+                blueprint_events = self._apply_population_blueprints(
+                    state=state,
+                    event_log=event_log,
+                    activation="environment_change",
+                )
+                if blueprint_events:
+                    tick_events.extend(blueprint_events)
                 scene_events = self._materialize_scene_hook_events(
                     tick=state.tick,
                     scene_hooks=generated.scene_hooks,
@@ -621,9 +697,18 @@ class WorldEngine:
             if reputation_events:
                 tick_events.extend(reputation_events)
 
+            pending_update_events = self._apply_pending_interaction_updates(
+                state=state,
+                tick_events=list(tick_events),
+                event_log=event_log,
+            )
+            if pending_update_events:
+                tick_events.extend(pending_update_events)
+
             self._refresh_story_states(state=state, tick_events=tick_events)
 
             journal.apply_events(state=state, events=tick_events)
+            self._append_environment_timeline(state=state, tick_events=tick_events)
 
             events_history.extend(tick_events)
             # Ограничиваем историю для памяти.
@@ -674,6 +759,7 @@ class WorldEngine:
                 json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
+        self._write_environment_summary(state=state)
         self._write_names_sidecar(state=state)
         self._write_status_sidecar(state="finished", tick=state.tick)
         return state
@@ -696,6 +782,69 @@ class WorldEngine:
         }
         self.artifacts.names_path.write_text(
             json.dumps(names, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def _environment_timeline_entry(self, *, state: WorldState, tick_events: list[Event]) -> dict[str, Any]:
+        queue_actor_counts: dict[str, int] = {}
+        for agent in state.agents.values():
+            role = str(agent.population_role or "").strip()
+            if not role.startswith("queue_"):
+                continue
+            queue_actor_counts[role] = queue_actor_counts.get(role, 0) + 1
+        pending_by_category: dict[str, int] = {}
+        for interaction in state.pending_interactions.values():
+            if interaction.status != "open":
+                continue
+            category = str(interaction.category or "").strip() or "other"
+            pending_by_category[category] = pending_by_category.get(category, 0) + 1
+        return {
+            "tick": int(state.tick),
+            "environment": state.environment.snapshot_dict(),
+            "pending_interactions_open": len([item for item in state.pending_interactions.values() if item.status == "open"]),
+            "pending_interactions_by_category": pending_by_category,
+            "queue_actor_counts": queue_actor_counts,
+            "tick_event_types": sorted({str(event.event_type or "") for event in tick_events if str(event.event_type or "").strip()}),
+        }
+
+    def _append_environment_timeline(self, *, state: WorldState, tick_events: list[Event]) -> None:
+        if self.artifacts.environment_timeline_path is None:
+            return
+        entry = self._environment_timeline_entry(state=state, tick_events=tick_events)
+        self.artifacts.environment_timeline_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.artifacts.environment_timeline_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def _write_environment_summary(self, *, state: WorldState) -> None:
+        if self.artifacts.environment_summary_path is None:
+            return
+        open_pending = [item for item in state.pending_interactions.values() if item.status == "open"]
+        completed_pending = [item for item in state.pending_interactions.values() if item.status == "completed"]
+        expired_pending = [item for item in state.pending_interactions.values() if item.status == "expired"]
+        queue_roles: dict[str, int] = {}
+        spawn_sources: dict[str, int] = {}
+        for agent in state.agents.values():
+            if agent.population_role:
+                queue_roles[agent.population_role] = queue_roles.get(agent.population_role, 0) + 1
+            if agent.spawn_source:
+                spawn_sources[agent.spawn_source] = spawn_sources.get(agent.spawn_source, 0) + 1
+        payload = {
+            "tick": int(state.tick),
+            "environment": state.environment.snapshot_dict(),
+            "pending_interactions": {
+                "open": len(open_pending),
+                "completed": len(completed_pending),
+                "expired": len(expired_pending),
+                "by_category_open": {
+                    category: len([item for item in open_pending if item.category == category])
+                    for category in sorted({item.category for item in open_pending if item.category})
+                },
+            },
+            "queue_actor_roles": queue_roles,
+            "spawn_sources": spawn_sources,
+        }
+        self.artifacts.environment_summary_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
 
@@ -860,6 +1009,42 @@ class WorldEngine:
                     "tags": list(artifact.tags[:4]),
                 }
             )
+        population_targets = []
+        for blueprint in self.cfg.world.environment.population_blueprints:
+            current = len(
+                [agent for agent in state.agents.values() if agent.blueprint_id == blueprint.blueprint_id]
+            )
+            population_targets.append(
+                {
+                    "blueprint_id": blueprint.blueprint_id,
+                    "role_label": blueprint.role_label,
+                    "desired_count": int(blueprint.desired_count),
+                    "current_count": current,
+                    "activation": blueprint.activation,
+                    "internal": bool(blueprint.internal),
+                    "org_id": blueprint.org_id,
+                    "zone_id": blueprint.zone_id,
+                }
+            )
+        pending_interactions = []
+        for interaction in self._open_pending_interactions(state=state):
+            pending_interactions.append(
+                {
+                    "interaction_id": interaction.interaction_id,
+                    "target_agent_id": interaction.target_agent_id,
+                    "source_agent_id": interaction.source_agent_id,
+                    "category": interaction.category,
+                    "summary": self._compact_text(interaction.summary, max_chars=180),
+                    "earliest_tick": interaction.earliest_tick,
+                    "due_tick": interaction.due_tick,
+                    "priority": interaction.priority,
+                    "trigger_event_type": interaction.trigger_event_type,
+                    "related_work_id": interaction.related_work_id,
+                    "artifact_id": interaction.artifact_id,
+                    "org_id": interaction.org_id,
+                    "zone_id": interaction.zone_id,
+                }
+            )
         votes = []
         for vid, vote in sorted(state.votes.items()):
             if vote.status != "open":
@@ -890,9 +1075,12 @@ class WorldEngine:
                 max_institutions=10,
                 max_zones=10,
                 max_resource_pools=10,
+                max_informal_links=16,
             ),
             "open_work_items": work_items,
             "artifacts": artifacts,
+            "pending_interactions": pending_interactions[:16],
+            "population_targets": population_targets,
             "open_votes": votes,
             "secondary_agents": secondary_agents[:20],
             "agent_count": len(state.agents),
@@ -901,6 +1089,46 @@ class WorldEngine:
 
     def _primary_agent_ids(self) -> set[str]:
         return {agent.agent_id for agent in self.cfg.agents}
+
+    @staticmethod
+    def _pending_priority_rank(priority: str) -> int:
+        ranks = {
+            "critical": 0,
+            "high": 1,
+            "normal": 2,
+            "low": 3,
+        }
+        return ranks.get((priority or "").strip().lower(), 2)
+
+    def _open_pending_interactions(
+        self,
+        *,
+        state: WorldState,
+        agent_id: str | None = None,
+        tick: int | None = None,
+    ) -> list[PendingInteractionState]:
+        current_tick = state.tick if tick is None else int(tick)
+        out: list[PendingInteractionState] = []
+        for interaction in state.pending_interactions.values():
+            if interaction.status != "open":
+                continue
+            if agent_id is not None and interaction.target_agent_id != agent_id:
+                continue
+            if int(interaction.earliest_tick) > current_tick:
+                continue
+            if interaction.due_tick is not None and current_tick > int(interaction.due_tick):
+                continue
+            out.append(interaction)
+        out.sort(
+            key=lambda item: (
+                self._pending_priority_rank(item.priority),
+                item.due_tick if item.due_tick is not None else 10**9,
+                item.earliest_tick,
+                item.created_tick,
+                item.interaction_id,
+            )
+        )
+        return out
 
     @staticmethod
     def _event_mentions_agent(*, event: Event, agent_id: str) -> bool:
@@ -947,6 +1175,8 @@ class WorldEngine:
         agent = state.agents.get(agent_id)
         if agent is None:
             return False
+        if self._open_pending_interactions(state=state, agent_id=agent_id):
+            return True
         for event in reversed(events_history):
             if int(event.tick) < low_tick:
                 break
@@ -973,8 +1203,18 @@ class WorldEngine:
             if pool is None:
                 return False
             return bool(agent.org_id) and pool.owner_org_id == agent.org_id
+        if event.event_type == "environment_operational_queue_updated":
+            queue_id = str(payload.get("queue_id") or "")
+            queue = state.environment.operational_queues.get(queue_id)
+            if queue is None:
+                return False
+            return (bool(agent.org_id) and queue.owner_org_id == agent.org_id) or (
+                bool(agent.zone_id) and queue.zone_id == agent.zone_id
+            )
         if event.event_type == "environment_information_climate_updated":
             return True
+        if event.event_type == "environment_informal_link_updated":
+            return agent.agent_id in {str(payload.get("agent_a_id") or ""), str(payload.get("agent_b_id") or "")}
         return False
 
     def _build_worldgen_agent_briefs(self, *, state: WorldState, scope: str = "all") -> list[dict[str, Any]]:
@@ -994,6 +1234,9 @@ class WorldEngine:
                     "zone_id": agent.zone_id,
                     "capabilities": list(agent.capabilities),
                     "story_state": self._compact_text(agent.story_state, max_chars=320),
+                    "pending_interaction_count": len(
+                        self._open_pending_interactions(state=state, agent_id=aid)
+                    ),
                 }
             )
         return briefs
@@ -1713,11 +1956,99 @@ class WorldEngine:
                     capabilities=Arbiter._sanitize_spawn_capabilities([], internal=bool(spawn.internal)),
                     org_id=org_id,
                     zone_id=zone_id,
+                    spawn_source="worldgen",
                     created_by=None,
                     created_tick=state.tick,
                 )
             )
         return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_spawn")
+
+    def _apply_population_blueprints(
+        self,
+        *,
+        state: WorldState,
+        event_log: EventLog,
+        activation: str,
+    ) -> list[Event]:
+        current_count = len(state.agents)
+        if current_count >= self.cfg.runtime.max_agents:
+            return []
+
+        existing_ids = set(state.registry.list_ids()) | set(state.agents.keys())
+        reserved_name_keys = {
+            social_link_name_key(agent.name)
+            for agent in state.agents.values()
+            if social_link_name_key(agent.name)
+        }
+        ops: list[StateOp] = []
+
+        for blueprint in self.cfg.world.environment.population_blueprints:
+            if blueprint.activation != activation or int(blueprint.desired_count) <= 0:
+                continue
+            current_blueprint_agents = [
+                agent for agent in state.agents.values() if agent.blueprint_id == blueprint.blueprint_id
+            ]
+            missing = int(blueprint.desired_count) - len(current_blueprint_agents)
+            if missing <= 0:
+                continue
+            if blueprint.org_id and not state.registry.exists(blueprint.org_id):
+                continue
+            if blueprint.zone_id and not state.registry.exists(blueprint.zone_id):
+                continue
+
+            used_names = {
+                social_link_name_key(agent.name)
+                for agent in current_blueprint_agents
+                if social_link_name_key(agent.name)
+            }
+            pool = [name for name in blueprint.name_pool if social_link_name_key(name) not in used_names]
+            next_index = len(current_blueprint_agents) + 1
+
+            for _ in range(missing):
+                if current_count + len(ops) >= self.cfg.runtime.max_agents:
+                    break
+                current_label_index = next_index
+                next_index += 1
+                if pool:
+                    display_name = normalize_agent_display_name(pool.pop(0), fallback=blueprint.role_label)
+                else:
+                    display_name = normalize_agent_display_name(
+                        f"{blueprint.role_label} {current_label_index}",
+                        fallback=blueprint.role_label,
+                    )
+                if not display_name:
+                    continue
+                display_name_key = social_link_name_key(display_name)
+                if display_name_key and display_name_key in reserved_name_keys:
+                    continue
+                slug = normalize_slug(
+                    f"{blueprint.blueprint_id}_{current_label_index}",
+                    fallback=blueprint.blueprint_id or blueprint.role_label,
+                )
+                entity_id = make_unique_id(EntityKind.AGENT, slug, existing_ids=existing_ids, fallback="peripheral")
+                existing_ids.add(entity_id)
+                if display_name_key:
+                    reserved_name_keys.add(display_name_key)
+                ops.append(
+                    CreateAgentOp(
+                        entity_id=entity_id,
+                        name=display_name,
+                        internal=bool(blueprint.internal),
+                        persona_hint=blueprint.persona_hint,
+                        capabilities=Arbiter._sanitize_spawn_capabilities(
+                            list(blueprint.capabilities),
+                            internal=bool(blueprint.internal),
+                        ),
+                        created_by=None,
+                        created_tick=state.tick,
+                        org_id=blueprint.org_id,
+                        zone_id=blueprint.zone_id,
+                        spawn_source="population_blueprint",
+                        blueprint_id=blueprint.blueprint_id,
+                        population_role=blueprint.role_label,
+                    )
+                )
+        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="population_blueprint")
 
     def _apply_worldgen_environment_updates(
         self,
@@ -1730,7 +2061,9 @@ class WorldEngine:
             not updates.institutions
             and not updates.zones
             and not updates.resource_pools
+            and not updates.operational_queues
             and updates.information_climate is None
+            and not updates.informal_links
         ):
             return []
 
@@ -1765,6 +2098,17 @@ class WorldEngine:
                     pressure=item.pressure,
                 )
             )
+        for item in updates.operational_queues:
+            ops.append(
+                UpdateOperationalQueueOp(
+                    queue_id=item.queue_id,
+                    backlog=item.backlog,
+                    capacity_per_tick=item.capacity_per_tick,
+                    avg_delay_ticks=item.avg_delay_ticks,
+                    status=item.status,
+                    pressure=item.pressure,
+                )
+            )
         climate = updates.information_climate
         if climate is not None:
             ops.append(
@@ -1774,6 +2118,19 @@ class WorldEngine:
                     media_pressure=climate.media_pressure,
                     narrative_temperature=climate.narrative_temperature,
                     active_signals=list(climate.active_signals) if climate.active_signals is not None else None,
+                )
+            )
+        for item in updates.informal_links:
+            ops.append(
+                UpsertInformalLinkOp(
+                    actor_id=None,
+                    agent_a_id=item.agent_a_id,
+                    agent_b_id=item.agent_b_id,
+                    link_type=item.link_type,
+                    strength=item.strength,
+                    visibility=item.visibility,
+                    pressure=item.pressure,
+                    source=item.source or "worldgen",
                 )
             )
         return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_environment")
@@ -1834,6 +2191,1274 @@ class WorldEngine:
                 )
             )
         return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_artifact")
+
+    def _apply_environment_material_consequences(
+        self,
+        *,
+        state: WorldState,
+        tick_events: list[Event],
+        event_log: EventLog,
+    ) -> list[Event]:
+        resource_ids: list[str] = []
+        queue_ids: list[str] = []
+        seen_resources: set[str] = set()
+        seen_queues: set[str] = set()
+        for event in tick_events:
+            payload = event.payload or {}
+            if event.event_type == "environment_resource_updated":
+                resource_id = str(payload.get("resource_id") or "").strip()
+                if resource_id and resource_id not in seen_resources:
+                    seen_resources.add(resource_id)
+                    resource_ids.append(resource_id)
+                continue
+            if event.event_type == "environment_operational_queue_updated":
+                queue_id = str(payload.get("queue_id") or "").strip()
+                if queue_id and queue_id not in seen_queues:
+                    seen_queues.add(queue_id)
+                    queue_ids.append(queue_id)
+        if not resource_ids and not queue_ids:
+            return []
+
+        ops: list[StateOp] = []
+        queue_shadow: dict[str, OperationalQueueState] = {
+            queue_id: OperationalQueueState(
+                queue_id=queue.queue_id,
+                title=queue.title,
+                owner_org_id=queue.owner_org_id,
+                zone_id=queue.zone_id,
+                backlog=int(queue.backlog),
+                capacity_per_tick=int(queue.capacity_per_tick),
+                avg_delay_ticks=int(queue.avg_delay_ticks),
+                status=queue.status,
+                pressure=queue.pressure,
+            )
+            for queue_id, queue in state.environment.operational_queues.items()
+        }
+        touched_queue_ids: set[str] = set(queue_ids)
+        for resource_id in resource_ids:
+            pool = state.environment.resource_pools.get(resource_id)
+            if pool is None:
+                continue
+            parsed = parse_typed_id(resource_id)
+            artifact_id = make_id(EntityKind.ARTIFACT, f"resource_alert_{parsed.slug}")
+            tags = ["resource", pool.status]
+            if pool.owner_org_id:
+                tags.append("org_bound")
+            if pool.pressure:
+                tags.append("pressure")
+            tags = [tag for tag in tags if tag]
+            is_alert = bool(pool.pressure.strip()) or pool.quantity <= 0 or pool.status not in {"stable", "normal", "ok", "routine"}
+            summary = (
+                f"Ресурс {pool.title} ({resource_id}) перешёл в состояние '{pool.status}'. "
+                f"Остаток: {pool.quantity}{(' ' + pool.unit) if pool.unit else ''}."
+            )
+            if pool.pressure:
+                summary += f" Давление: {pool.pressure}"
+
+            current = state.artifacts.get(artifact_id)
+            if current is not None or is_alert:
+                desired_status = "active" if is_alert else "resolved"
+                desired_title = f"Сигнал по ресурсу: {pool.title}"
+                if current is None:
+                    ops.append(
+                        CreateArtifactOp(
+                            created_by=None,
+                            artifact_id=artifact_id,
+                            artifact_type="resource_alert",
+                            title=desired_title,
+                            summary=summary,
+                            owner_org_id=pool.owner_org_id,
+                            visibility="internal",
+                            status=desired_status,
+                            tags=tags,
+                        )
+                    )
+                elif (
+                    current.title != desired_title
+                    or current.summary != summary
+                    or current.status != desired_status
+                    or list(current.tags) != tags
+                ):
+                    ops.append(
+                        UpdateArtifactOp(
+                            actor_id=None,
+                            artifact_id=artifact_id,
+                            title=desired_title,
+                            summary=summary,
+                            status=desired_status,
+                            tags=tags,
+                        )
+                    )
+
+            if not pool.owner_org_id:
+                continue
+            severity = 2 if pool.quantity <= 0 or pool.status in {"critical", "depleted", "exhausted"} else 1 if is_alert else -1
+            linked_queues = [
+                queue
+                for queue in queue_shadow.values()
+                if queue.owner_org_id == pool.owner_org_id
+            ]
+            for queue in linked_queues:
+                touched_queue_ids.add(queue.queue_id)
+                next_backlog = max(0, int(queue.backlog) + severity)
+                if severity > 0:
+                    next_delay = int(queue.avg_delay_ticks) + 1
+                    next_status = (
+                        "overloaded"
+                        if next_backlog > max(int(queue.capacity_per_tick), 1) * 2 or next_delay >= 2
+                        else "strained"
+                    )
+                    next_pressure = (pool.pressure or "").strip() or f"Ресурс {pool.title} замедляет обработку очереди."
+                else:
+                    next_delay = max(0, int(queue.avg_delay_ticks) - 1)
+                    next_status = "stable" if next_backlog == 0 and next_delay == 0 else "recovering"
+                    next_pressure = "" if next_status == "stable" else queue.pressure
+                if (
+                    next_backlog != queue.backlog
+                    or next_delay != queue.avg_delay_ticks
+                    or next_status != queue.status
+                    or next_pressure != queue.pressure
+                ):
+                    ops.append(
+                        UpdateOperationalQueueOp(
+                            queue_id=queue.queue_id,
+                            backlog=next_backlog,
+                            capacity_per_tick=queue.capacity_per_tick,
+                            avg_delay_ticks=next_delay,
+                            status=next_status,
+                            pressure=next_pressure,
+                        )
+                    )
+                    queue_shadow[queue.queue_id] = OperationalQueueState(
+                        queue_id=queue.queue_id,
+                        title=queue.title,
+                        owner_org_id=queue.owner_org_id,
+                        zone_id=queue.zone_id,
+                        backlog=next_backlog,
+                        capacity_per_tick=queue.capacity_per_tick,
+                        avg_delay_ticks=next_delay,
+                        status=next_status,
+                        pressure=next_pressure,
+                    )
+
+        for queue_id in sorted(touched_queue_ids):
+            queue = queue_shadow.get(queue_id)
+            if queue is None:
+                continue
+            artifact_id = make_id(EntityKind.ARTIFACT, f"queue_alert_{normalize_slug(queue.queue_id)}")
+            tags = ["queue", queue.status]
+            if queue.owner_org_id:
+                tags.append("org_bound")
+            if queue.zone_id:
+                tags.append("zone_bound")
+            if queue.pressure:
+                tags.append("pressure")
+            tags = [tag for tag in tags if tag]
+            is_alert = (
+                queue.backlog > max(int(queue.capacity_per_tick), 1)
+                or queue.avg_delay_ticks > 0
+                or queue.status not in {"stable", "normal", "ok", "routine"}
+            )
+            summary = (
+                f"Очередь {queue.title} ({queue.queue_id}) имеет backlog={queue.backlog}, "
+                f"capacity={queue.capacity_per_tick}/tick, avg_delay={queue.avg_delay_ticks}."
+            )
+            if queue.pressure:
+                summary += f" Давление: {queue.pressure}"
+            current = state.artifacts.get(artifact_id)
+            if current is None and not is_alert:
+                continue
+            desired_status = "active" if is_alert else "resolved"
+            desired_title = f"Сигнал очереди: {queue.title}"
+            if current is None:
+                ops.append(
+                    CreateArtifactOp(
+                        created_by=None,
+                        artifact_id=artifact_id,
+                        artifact_type="queue_alert",
+                        title=desired_title,
+                        summary=summary,
+                        owner_org_id=queue.owner_org_id,
+                        zone_id=queue.zone_id,
+                        visibility="internal",
+                        status=desired_status,
+                        tags=tags,
+                    )
+                )
+                continue
+            if (
+                current.title != desired_title
+                or current.summary != summary
+                or current.status != desired_status
+                or list(current.tags) != tags
+            ):
+                ops.append(
+                    UpdateArtifactOp(
+                        actor_id=None,
+                        artifact_id=artifact_id,
+                        title=desired_title,
+                        summary=summary,
+                        status=desired_status,
+                        tags=tags,
+                    )
+                )
+
+        climate = state.environment.information_climate
+        next_active_signals = list(climate.active_signals)
+        next_public_mood = climate.public_mood
+        next_media_pressure = climate.media_pressure
+        climate_changed = False
+        world_events: list[Event] = []
+        existing_agent_ids = set(state.registry.list_ids()) | set(state.agents.keys())
+        reserved_name_keys = {
+            social_link_name_key(agent.name)
+            for agent in state.agents.values()
+            if social_link_name_key(agent.name)
+        }
+        queued_agent_spawns = 0
+        queue_role_agent_ids: dict[tuple[str, str], str] = {}
+
+        for queue_id in sorted(touched_queue_ids):
+            queue = queue_shadow.get(queue_id)
+            if queue is None:
+                continue
+            queue_slug = normalize_slug(queue.queue_id)
+            complaint_artifact_id = make_id(EntityKind.ARTIFACT, f"complaint_wave_{queue_slug}")
+            publication_artifact_id = make_id(EntityKind.ARTIFACT, f"queue_publication_{queue_slug}")
+            complaint_signal = f"очередь {queue.queue_id} перегружена"
+            complaint_active = (
+                queue.backlog > max(int(queue.capacity_per_tick), 1)
+                or queue.avg_delay_ticks >= 2
+                or queue.status == "overloaded"
+            )
+            publication_active = complaint_active and (
+                queue.status == "overloaded"
+                or bool((climate.media_pressure or "").strip())
+                or bool((climate.oversight_attention or "").strip())
+            )
+
+            complaint_summary = (
+                f"По {queue.title} ({queue.queue_id}) накапливается жалобный фон: "
+                f"backlog={queue.backlog}, avg_delay={queue.avg_delay_ticks}, status={queue.status}."
+            )
+            if queue.pressure:
+                complaint_summary += f" Давление: {queue.pressure}"
+            publication_summary = (
+                f"В публичном поле обсуждаются задержки по {queue.title} ({queue.queue_id}). "
+                f"backlog={queue.backlog}, avg_delay={queue.avg_delay_ticks}."
+            )
+
+            current_complaint = state.artifacts.get(complaint_artifact_id)
+            if current_complaint is not None or complaint_active:
+                desired_status = "active" if complaint_active else "resolved"
+                desired_title = f"Волна жалоб: {queue.title}"
+                if current_complaint is None:
+                    ops.append(
+                        CreateArtifactOp(
+                            created_by=None,
+                            artifact_id=complaint_artifact_id,
+                            artifact_type="complaint_wave",
+                            title=desired_title,
+                            summary=complaint_summary,
+                            owner_org_id=queue.owner_org_id,
+                            zone_id=queue.zone_id,
+                            visibility="public",
+                            status=desired_status,
+                            tags=["complaint", "queue", queue.status],
+                        )
+                    )
+                elif (
+                    current_complaint.title != desired_title
+                    or current_complaint.summary != complaint_summary
+                    or current_complaint.status != desired_status
+                    or list(current_complaint.tags) != ["complaint", "queue", queue.status]
+                ):
+                    ops.append(
+                        UpdateArtifactOp(
+                            actor_id=None,
+                            artifact_id=complaint_artifact_id,
+                            title=desired_title,
+                            summary=complaint_summary,
+                            status=desired_status,
+                            tags=["complaint", "queue", queue.status],
+                        )
+                    )
+
+            current_publication = state.artifacts.get(publication_artifact_id)
+            if current_publication is not None or publication_active:
+                desired_status = "active" if publication_active else "resolved"
+                desired_title = f"Публикация о задержках: {queue.title}"
+                if current_publication is None:
+                    ops.append(
+                        CreateArtifactOp(
+                            created_by=None,
+                            artifact_id=publication_artifact_id,
+                            artifact_type="publication",
+                            title=desired_title,
+                            summary=publication_summary,
+                            owner_org_id=queue.owner_org_id,
+                            zone_id=queue.zone_id,
+                            visibility="public",
+                            status=desired_status,
+                            tags=["publication", "queue", queue.status],
+                        )
+                    )
+                elif (
+                    current_publication.title != desired_title
+                    or current_publication.summary != publication_summary
+                    or current_publication.status != desired_status
+                    or list(current_publication.tags) != ["publication", "queue", queue.status]
+                ):
+                    ops.append(
+                        UpdateArtifactOp(
+                            actor_id=None,
+                            artifact_id=publication_artifact_id,
+                            title=desired_title,
+                            summary=publication_summary,
+                            status=desired_status,
+                            tags=["publication", "queue", queue.status],
+                        )
+                    )
+
+            if complaint_active and complaint_signal not in next_active_signals:
+                next_active_signals.append(complaint_signal)
+                climate_changed = True
+            if not complaint_active and complaint_signal in next_active_signals:
+                next_active_signals = [item for item in next_active_signals if item != complaint_signal]
+                climate_changed = True
+            if complaint_active and not next_public_mood.strip():
+                next_public_mood = f"Растёт раздражение из-за задержек по {queue.title}."
+                climate_changed = True
+            if publication_active and not next_media_pressure.strip():
+                next_media_pressure = f"Локальные медиа поднимают тему задержек по {queue.title}."
+                climate_changed = True
+
+            if complaint_active and (current_complaint is None or current_complaint.status != "active"):
+                world_events.append(
+                    Event.public(
+                        tick=state.tick,
+                        event_type="world_event",
+                        actor_id=None,
+                        payload={
+                            "description": f"По {queue.title} растут задержки и жалобы заявителей.",
+                            "source": "queue_process",
+                            "queue_id": queue.queue_id,
+                        },
+                    )
+                )
+            if not complaint_active and current_complaint is not None and current_complaint.status == "active":
+                world_events.append(
+                    Event.public(
+                        tick=state.tick,
+                        event_type="world_event",
+                        actor_id=None,
+                        payload={
+                            "description": f"По {queue.title} ситуация с жалобами начала стабилизироваться.",
+                            "source": "queue_recovery",
+                            "queue_id": queue.queue_id,
+                        },
+                    )
+                )
+            if publication_active and (current_publication is None or current_publication.status != "active"):
+                world_events.append(
+                    Event.public(
+                        tick=state.tick,
+                        event_type="world_event",
+                        actor_id=None,
+                        payload={
+                            "description": f"В публичном поле обсуждают задержки по {queue.title}.",
+                            "source": "queue_publication",
+                            "queue_id": queue.queue_id,
+                        },
+                    )
+                )
+
+            if self.cfg.runtime.allow_runtime_spawn and len(state.agents) + queued_agent_spawns < self.cfg.runtime.max_agents:
+                queue_slug = normalize_slug(queue.queue_id)
+                queue_roles = []
+                if complaint_active:
+                    queue_roles.append("complainant")
+                if publication_active:
+                    queue_roles.append("reporter")
+                for role in queue_roles:
+                    blueprint_id = f"queue_process:{queue_slug}:{role}"
+                    existing_agent = next((agent for agent in state.agents.values() if agent.blueprint_id == blueprint_id), None)
+                    if existing_agent is not None:
+                        queue_role_agent_ids[(queue.queue_id, role)] = existing_agent.agent_id
+                        continue
+                    queued_op = next(
+                        (
+                            op
+                            for op in ops
+                            if isinstance(op, CreateAgentOp) and op.blueprint_id == blueprint_id
+                        ),
+                        None,
+                    )
+                    if queued_op is not None:
+                        queue_role_agent_ids[(queue.queue_id, role)] = queued_op.entity_id
+                        continue
+                    display_name = self._pick_queue_process_display_name(
+                        queue_id=queue.queue_id,
+                        role=role,
+                        reserved_name_keys=reserved_name_keys,
+                    )
+                    display_name_key = social_link_name_key(display_name)
+                    if display_name_key:
+                        reserved_name_keys.add(display_name_key)
+                    entity_id = make_unique_id(
+                        EntityKind.AGENT,
+                        f"{queue_slug}_{role}",
+                        existing_ids=existing_agent_ids,
+                        fallback=role,
+                    )
+                    existing_agent_ids.add(entity_id)
+                    queue_role_agent_ids[(queue.queue_id, role)] = entity_id
+                    persona_hint = (
+                        f"Столкнулся с задержками по {queue.title}, раздражён и склонен добиваться ответа."
+                        if role == "complainant"
+                        else f"Следит за задержками по {queue.title} и ищет публично значимую историю."
+                    )
+                    ops.append(
+                        CreateAgentOp(
+                            entity_id=entity_id,
+                            name=display_name,
+                            internal=False,
+                            persona_hint=persona_hint,
+                            capabilities=Arbiter._sanitize_spawn_capabilities([], internal=False),
+                            org_id=queue.owner_org_id,
+                            zone_id=queue.zone_id,
+                            spawn_source="queue_process",
+                            blueprint_id=blueprint_id,
+                            population_role=f"queue_{role}",
+                            created_by=None,
+                            created_tick=state.tick,
+                        )
+                    )
+                    queued_agent_spawns += 1
+                    if len(state.agents) + queued_agent_spawns >= self.cfg.runtime.max_agents:
+                        break
+
+            earliest_tick = state.tick + 1
+            due_tick = self._pending_due_tick(earliest_tick=earliest_tick)
+            complainant_id = queue_role_agent_ids.get((queue.queue_id, "complainant"))
+            reporter_id = queue_role_agent_ids.get((queue.queue_id, "reporter"))
+
+            if complaint_active and complainant_id:
+                interaction_id = self._make_pending_interaction_id("queue_escalation", complainant_id, queue.queue_id)
+                ops.append(
+                    UpsertPendingInteractionOp(
+                        actor_id=None,
+                        interaction_id=interaction_id,
+                        target_agent_id=complainant_id,
+                        category="queue_escalation",
+                        summary=(
+                            f"Подними жалобу по {queue.title}: можно написать в {queue.owner_org_id or 'организацию'} "
+                            f"или выйти в публичный канал с сигналом о задержках."
+                        ),
+                        earliest_tick=earliest_tick,
+                        due_tick=due_tick,
+                        priority="high" if queue.status == "overloaded" else "normal",
+                        trigger_event_type="environment_operational_queue_updated",
+                        org_id=queue.owner_org_id,
+                        zone_id=queue.zone_id,
+                    )
+                )
+
+            if publication_active and reporter_id:
+                interaction_id = self._make_pending_interaction_id("queue_publication_push", reporter_id, queue.queue_id)
+                ops.append(
+                    UpsertPendingInteractionOp(
+                        actor_id=None,
+                        interaction_id=interaction_id,
+                        target_agent_id=reporter_id,
+                        source_agent_id=complainant_id,
+                        category="queue_publication_push",
+                        summary=(
+                            f"Подними тему задержек по {queue.title} публично или запроси комментарий у {queue.owner_org_id or 'организации'}."
+                        ),
+                        earliest_tick=earliest_tick,
+                        due_tick=due_tick,
+                        priority="high" if queue.status == "overloaded" else "normal",
+                        trigger_event_type="environment_operational_queue_updated",
+                        org_id=queue.owner_org_id,
+                        zone_id=queue.zone_id,
+                    )
+                )
+
+            if complainant_id and reporter_id and complainant_id != reporter_id:
+                ops.append(
+                    UpsertInformalLinkOp(
+                        actor_id=None,
+                        agent_a_id=complainant_id,
+                        agent_b_id=reporter_id,
+                        link_type="shared_issue",
+                        strength=0.55,
+                        visibility="emerging",
+                        pressure=f"Обе стороны завязаны на проблемную очередь {queue.queue_id}.",
+                        source="queue_process",
+                    )
+                )
+                coordination_due = self._pending_due_tick(earliest_tick=earliest_tick)
+                ops.append(
+                    UpsertPendingInteractionOp(
+                        actor_id=None,
+                        interaction_id=self._make_pending_interaction_id("issue_coordination", reporter_id, complainant_id, queue.queue_id),
+                        target_agent_id=reporter_id,
+                        source_agent_id=complainant_id,
+                        category="issue_coordination",
+                        summary=f"Свяжись с {complainant_id} и собери конкретику по задержкам в {queue.title}.",
+                        earliest_tick=earliest_tick,
+                        due_tick=coordination_due,
+                        priority="normal",
+                        trigger_event_type="environment_operational_queue_updated",
+                        org_id=queue.owner_org_id,
+                        zone_id=queue.zone_id,
+                    )
+                )
+
+        if climate_changed:
+            ops.append(
+                UpdateInformationClimateOp(
+                    public_mood=next_public_mood,
+                    media_pressure=next_media_pressure,
+                    active_signals=next_active_signals,
+                )
+            )
+
+        emitted = self._apply_ops(state=state, ops=ops, event_log=event_log, origin="environment_material")
+        if world_events:
+            event_log.extend(world_events)
+            emitted.extend(world_events)
+        return emitted
+
+    def _apply_operational_queue_processes(
+        self,
+        *,
+        state: WorldState,
+        tick_events: list[Event],
+        event_log: EventLog,
+    ) -> list[Event]:
+        if not state.environment.operational_queues:
+            return []
+
+        touched_queue_ids = {
+            str((event.payload or {}).get("queue_id") or "").strip()
+            for event in tick_events
+            if event.event_type == "environment_operational_queue_updated"
+        }
+        service_actions_by_agent: dict[str, int] = {}
+        for event in tick_events:
+            if event.event_type not in {"work_item_created", "work_note_added", "work_proposal_submitted", "artifact_updated"}:
+                continue
+            actor_id = str(event.actor_id or "").strip()
+            if actor_id and actor_id in state.agents:
+                service_actions_by_agent[actor_id] = service_actions_by_agent.get(actor_id, 0) + 1
+
+        ops: list[StateOp] = []
+        for queue_id, queue in sorted(state.environment.operational_queues.items()):
+            if queue_id in touched_queue_ids:
+                continue
+            relevant_actions = 0
+            for agent_id, count in service_actions_by_agent.items():
+                agent = state.agents.get(agent_id)
+                if agent is None:
+                    continue
+                if queue.owner_org_id and agent.org_id == queue.owner_org_id:
+                    relevant_actions += count
+                    continue
+                if queue.zone_id and agent.zone_id == queue.zone_id:
+                    relevant_actions += count
+
+            capacity = max(0, int(queue.capacity_per_tick))
+            backlog = max(0, int(queue.backlog))
+            delay = max(0, int(queue.avg_delay_ticks))
+            natural_incoming = 1 if backlog > 0 or queue.status in {"strained", "overloaded", "recovering"} else 0
+            escalation_incoming = 1 if queue.status == "overloaded" and relevant_actions == 0 else 0
+            incoming = natural_incoming + escalation_incoming
+            throughput = 0
+            if backlog > 0 and capacity > 0:
+                throughput = min(capacity, 1 + max(0, relevant_actions))
+            next_backlog = max(0, backlog + incoming - throughput)
+            if next_backlog < backlog or relevant_actions > 0:
+                next_delay = max(0, delay - 1)
+            elif next_backlog > max(capacity, 1):
+                next_delay = delay + 1
+            elif next_backlog == 0:
+                next_delay = 0
+            else:
+                next_delay = delay
+
+            if next_backlog == 0 and next_delay == 0:
+                next_status = "stable"
+                next_pressure = ""
+            elif next_backlog > max(capacity, 1) * 2 or next_delay >= 3:
+                next_status = "overloaded"
+                next_pressure = queue.pressure or "Очередь не справляется с накопившимися задачами."
+            elif next_backlog > max(capacity, 1) or next_delay >= 1:
+                next_status = "strained"
+                next_pressure = queue.pressure or "Очередь начинает буксовать."
+            else:
+                next_status = "recovering" if queue.status in {"strained", "overloaded"} else queue.status
+                next_pressure = "" if next_status == "recovering" else queue.pressure
+
+            if (
+                next_backlog != backlog
+                or next_delay != delay
+                or next_status != queue.status
+                or next_pressure != queue.pressure
+            ):
+                ops.append(
+                    UpdateOperationalQueueOp(
+                        queue_id=queue_id,
+                        backlog=next_backlog,
+                        capacity_per_tick=capacity,
+                        avg_delay_ticks=next_delay,
+                        status=next_status,
+                        pressure=next_pressure,
+                    )
+                )
+
+        if not ops:
+            return []
+        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="operational_queue_process")
+
+    @staticmethod
+    def _make_pending_interaction_id(*parts: str) -> str:
+        basis = "||".join(str(part or "").strip() for part in parts)
+        digest = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:12]
+        slug_parts = [normalize_slug(str(part or "")) for part in parts[:4] if str(part or "").strip()]
+        slug = "_".join(part for part in slug_parts if part)[:48].strip("_") or "item"
+        return f"pend:{slug}_{digest}"
+
+    @staticmethod
+    def _queue_process_name_pool(*, role: str) -> list[str]:
+        if role == "complainant":
+            return [
+                "Ирина Климова",
+                "Павел Власов",
+                "Марина Ершова",
+                "Сергей Дроздов",
+                "Елена Лапина",
+                "Андрей Рябов",
+            ]
+        return [
+            "Ольга Савельева",
+            "Дмитрий Корнеев",
+            "Наталья Белова",
+            "Алексей Фомин",
+            "Татьяна Лазарева",
+            "Игорь Чистяков",
+        ]
+
+    def _pick_queue_process_display_name(
+        self,
+        *,
+        queue_id: str,
+        role: str,
+        reserved_name_keys: set[str],
+    ) -> str:
+        pool = self._queue_process_name_pool(role=role)
+        start_index = int(hashlib.sha1(f"{queue_id}|{role}".encode("utf-8")).hexdigest(), 16) % len(pool)
+        for offset in range(len(pool)):
+            candidate = pool[(start_index + offset) % len(pool)]
+            key = social_link_name_key(candidate)
+            if not key or key in reserved_name_keys:
+                continue
+            return candidate
+        fallback = pool[start_index]
+        suffix = 2
+        while True:
+            candidate = f"{fallback} {suffix}"
+            key = social_link_name_key(candidate)
+            if key and key not in reserved_name_keys:
+                return candidate
+            suffix += 1
+
+    def _pending_due_tick(self, *, earliest_tick: int) -> int:
+        horizon = max(0, int(self.cfg.runtime.pending_interaction_horizon_ticks))
+        return int(earliest_tick) + max(0, horizon)
+
+    def _queue_process_context_for_agent(
+        self,
+        *,
+        state: WorldState,
+        agent_id: str,
+    ) -> tuple[str, OperationalQueueState] | None:
+        agent = state.agents.get(agent_id)
+        if agent is None or agent.spawn_source != "queue_process":
+            return None
+        blueprint_id = str(agent.blueprint_id or "")
+        parts = blueprint_id.split(":")
+        if len(parts) < 3 or parts[0] != "queue_process":
+            return None
+        queue_slug = parts[1]
+        for queue_id, queue in state.environment.operational_queues.items():
+            if normalize_slug(queue_id) == queue_slug:
+                return queue_id, queue
+        return None
+
+    @staticmethod
+    def _queue_internal_agent_ids(*, state: WorldState, queue: OperationalQueueState) -> list[str]:
+        selected: list[str] = []
+        for aid, agent in sorted(state.agents.items()):
+            if not agent.internal:
+                continue
+            if queue.owner_org_id and agent.org_id == queue.owner_org_id:
+                selected.append(aid)
+                continue
+            if queue.zone_id and agent.zone_id == queue.zone_id:
+                selected.append(aid)
+        return selected
+
+    def _expire_pending_interactions(
+        self,
+        *,
+        state: WorldState,
+        event_log: EventLog,
+    ) -> list[Event]:
+        ops: list[StateOp] = []
+        for interaction in state.pending_interactions.values():
+            if interaction.status != "open":
+                continue
+            if interaction.due_tick is None:
+                continue
+            if int(state.tick) <= int(interaction.due_tick):
+                continue
+            ops.append(
+                ResolvePendingInteractionOp(
+                    actor_id=None,
+                    interaction_id=interaction.interaction_id,
+                    status="expired",
+                    reason="deadline_passed",
+                )
+            )
+        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="pending_expire")
+
+    def _emit_pending_interaction_due_events(
+        self,
+        *,
+        state: WorldState,
+        event_log: EventLog,
+    ) -> list[Event]:
+        events: list[Event] = []
+        for interaction in self._open_pending_interactions(state=state):
+            if interaction.last_notified_tick is not None:
+                continue
+            interaction.last_notified_tick = int(state.tick)
+            payload = {
+                "interaction_id": interaction.interaction_id,
+                "target_agent_id": interaction.target_agent_id,
+                "source_agent_id": interaction.source_agent_id,
+                "category": interaction.category,
+                "summary": interaction.summary,
+                "earliest_tick": interaction.earliest_tick,
+                "due_tick": interaction.due_tick,
+                "priority": interaction.priority,
+                "related_work_id": interaction.related_work_id,
+                "artifact_id": interaction.artifact_id,
+                "org_id": interaction.org_id,
+                "zone_id": interaction.zone_id,
+            }
+            events.append(
+                Event(
+                    tick=state.tick,
+                    event_type="pending_interaction_due",
+                    actor_id=interaction.source_agent_id,
+                    payload=payload,
+                    audience=[interaction.target_agent_id],
+                )
+            )
+        if events:
+            event_log.extend(events)
+        return events
+
+    def _pending_interaction_ops_from_event(
+        self,
+        *,
+        state: WorldState,
+        event: Event,
+    ) -> list[StateOp]:
+        payload = event.payload or {}
+        ops: list[StateOp] = []
+        earliest_tick = int(state.tick) + 1
+        due_tick = self._pending_due_tick(earliest_tick=earliest_tick)
+
+        if event.event_type == "message_sent" and bool(payload.get("private", True)):
+            actor_id = str(event.actor_id or "").strip()
+            target_id = str(payload.get("to_id") or "").strip()
+            if actor_id in state.agents and target_id in state.agents and actor_id != target_id:
+                interaction_id = self._make_pending_interaction_id("reply", target_id, actor_id)
+                ops.append(
+                    UpsertPendingInteractionOp(
+                        actor_id=actor_id,
+                        interaction_id=interaction_id,
+                        target_agent_id=target_id,
+                        source_agent_id=actor_id,
+                        category="reply",
+                        summary=f"Нужно отреагировать на личное сообщение от {actor_id}.",
+                        earliest_tick=earliest_tick,
+                        due_tick=due_tick,
+                        priority="high",
+                        trigger_event_type=event.event_type,
+                        org_id=state.agents[target_id].org_id,
+                        zone_id=state.agents[target_id].zone_id,
+                    )
+                )
+            return ops
+
+        if event.event_type in {"artifact_created", "artifact_updated"}:
+            artifact_id = str(payload.get("artifact_id") or "").strip()
+            artifact = state.artifacts.get(artifact_id)
+            if artifact is None:
+                return ops
+            target_ids: set[str] = set()
+            if artifact.related_work_id:
+                work = state.work_items.get(artifact.related_work_id)
+                if work is not None:
+                    target_ids.update(str(aid) for aid in work.participants if str(aid) in state.agents)
+            if not target_ids:
+                for aid, agent in sorted(state.agents.items()):
+                    if "work" not in agent.capabilities:
+                        continue
+                    if artifact.owner_org_id and agent.org_id == artifact.owner_org_id:
+                        target_ids.add(aid)
+                    if artifact.zone_id and agent.zone_id == artifact.zone_id:
+                        target_ids.add(aid)
+            target_ids.discard(str(event.actor_id or "").strip())
+            priority = "high" if artifact.status in {"new", "revised", "urgent"} else "normal"
+            for target_id in sorted(target_ids):
+                interaction_id = self._make_pending_interaction_id("artifact", target_id, artifact_id)
+                ops.append(
+                    UpsertPendingInteractionOp(
+                        actor_id=event.actor_id,
+                        interaction_id=interaction_id,
+                        target_agent_id=target_id,
+                        source_agent_id=str(event.actor_id or "").strip() or None,
+                        category="artifact_follow_up",
+                        summary=f"Нужно отреагировать на документ {artifact_id}: {artifact.title}.",
+                        earliest_tick=earliest_tick,
+                        due_tick=due_tick,
+                        priority=priority,
+                        trigger_event_type=event.event_type,
+                        related_work_id=artifact.related_work_id,
+                        artifact_id=artifact_id,
+                        org_id=artifact.owner_org_id,
+                        zone_id=artifact.zone_id,
+                    )
+                )
+            return ops
+
+        if event.event_type == "environment_resource_updated":
+            resource_id = str(payload.get("resource_id") or "").strip()
+            pool = state.environment.resource_pools.get(resource_id)
+            if pool is None or not pool.owner_org_id:
+                return ops
+            is_pressure = bool((pool.pressure or "").strip()) or pool.quantity <= 0 or pool.status not in {
+                "stable",
+                "normal",
+                "ok",
+                "routine",
+            }
+            if not is_pressure:
+                return ops
+            priority = "high" if pool.quantity <= 0 or pool.status in {"critical", "depleted", "exhausted"} else "normal"
+            for aid, agent in sorted(state.agents.items()):
+                if agent.org_id != pool.owner_org_id or "work" not in agent.capabilities:
+                    continue
+                interaction_id = self._make_pending_interaction_id("resource", aid, resource_id)
+                ops.append(
+                    UpsertPendingInteractionOp(
+                        actor_id=event.actor_id,
+                        interaction_id=interaction_id,
+                        target_agent_id=aid,
+                        category="resource_pressure",
+                        summary=(
+                            f"Нужно отреагировать на изменение ресурса {resource_id}: "
+                            f"статус={pool.status}, остаток={pool.quantity}{(' ' + pool.unit) if pool.unit else ''}."
+                            f"{(' Давление: ' + pool.pressure) if pool.pressure else ''}"
+                        ),
+                        earliest_tick=earliest_tick,
+                        due_tick=due_tick,
+                        priority=priority,
+                        trigger_event_type=event.event_type,
+                        org_id=pool.owner_org_id,
+                    )
+                )
+            return ops
+
+        if event.event_type == "environment_operational_queue_updated":
+            queue_id = str(payload.get("queue_id") or "").strip()
+            queue = state.environment.operational_queues.get(queue_id)
+            if queue is None:
+                return ops
+            is_pressure = (
+                queue.backlog > max(int(queue.capacity_per_tick), 1)
+                or queue.avg_delay_ticks > 0
+                or queue.status not in {"stable", "normal", "ok", "routine"}
+                or bool((queue.pressure or "").strip())
+            )
+            if not is_pressure:
+                return ops
+            priority = "high" if queue.status == "overloaded" or queue.avg_delay_ticks >= 2 else "normal"
+            for aid, agent in sorted(state.agents.items()):
+                if "work" not in agent.capabilities:
+                    continue
+                if queue.owner_org_id and agent.org_id == queue.owner_org_id:
+                    pass
+                elif queue.zone_id and agent.zone_id == queue.zone_id:
+                    pass
+                else:
+                    continue
+                interaction_id = self._make_pending_interaction_id("queue", aid, queue_id)
+                ops.append(
+                    UpsertPendingInteractionOp(
+                        actor_id=event.actor_id,
+                        interaction_id=interaction_id,
+                        target_agent_id=aid,
+                        category="queue_pressure",
+                        summary=(
+                            f"Нужно отреагировать на очередь {queue_id}: backlog={queue.backlog}, "
+                            f"delay={queue.avg_delay_ticks}, status={queue.status}."
+                            f"{(' Давление: ' + queue.pressure) if queue.pressure else ''}"
+                        ),
+                        earliest_tick=earliest_tick,
+                        due_tick=due_tick,
+                        priority=priority,
+                        trigger_event_type=event.event_type,
+                        org_id=queue.owner_org_id,
+                        zone_id=queue.zone_id,
+                    )
+                )
+            return ops
+
+        if event.event_type in {"audit_explanation_requested", "audit_documents_requested"}:
+            target_id = str(payload.get("subject_agent_id") or payload.get("target_agent_id") or "").strip()
+            if target_id in state.agents:
+                audit_due_tick = payload.get("response_due_tick")
+                interaction_id = self._make_pending_interaction_id("audit", target_id, str(payload.get("case_id") or event.event_type))
+                ops.append(
+                    UpsertPendingInteractionOp(
+                        actor_id=event.actor_id,
+                        interaction_id=interaction_id,
+                        target_agent_id=target_id,
+                        category="audit_response",
+                        summary=str(payload.get("summary") or "Нужно ответить на запрос аудитора.").strip(),
+                        earliest_tick=earliest_tick,
+                        due_tick=int(audit_due_tick) if audit_due_tick is not None else due_tick,
+                        priority="high",
+                        trigger_event_type=event.event_type,
+                        org_id=state.agents[target_id].org_id,
+                        zone_id=state.agents[target_id].zone_id,
+                    )
+                )
+            return ops
+
+        if event.event_type == "message_sent":
+            actor_id = str(event.actor_id or "").strip()
+            queue_ctx = self._queue_process_context_for_agent(state=state, agent_id=actor_id)
+            if queue_ctx is None:
+                return ops
+            queue_id, queue = queue_ctx
+            actor = state.agents.get(actor_id)
+            if actor is None:
+                return ops
+            to_id = str(payload.get("to_id") or "").strip()
+            text = str(payload.get("text") or "").strip()
+            private = bool(payload.get("private", True))
+            queue_slug = normalize_slug(queue_id)
+            internal_agent_ids = self._queue_internal_agent_ids(state=state, queue=queue)
+            current_climate = state.environment.information_climate
+
+            if actor.population_role == "queue_complainant" and not private and to_id.startswith("org:"):
+                artifact_id = make_id(EntityKind.ARTIFACT, f"queue_external_complaint_{queue_slug}")
+                title = f"Внешняя жалоба по очереди: {queue.title}"
+                summary = f"{actor.name} направил жалобу по {queue.title}. {text}".strip()
+                current_artifact = state.artifacts.get(artifact_id)
+                if current_artifact is None:
+                    ops.append(
+                        CreateArtifactOp(
+                            created_by=actor_id,
+                            artifact_id=artifact_id,
+                            artifact_type="external_complaint",
+                            title=title,
+                            summary=summary,
+                            owner_org_id=queue.owner_org_id,
+                            zone_id=queue.zone_id,
+                            visibility="internal",
+                            status="active",
+                            tags=["queue", "complaint", queue.status],
+                        )
+                    )
+                elif current_artifact.summary != summary or current_artifact.status != "active":
+                    ops.append(
+                        UpdateArtifactOp(
+                            actor_id=actor_id,
+                            artifact_id=artifact_id,
+                            summary=summary,
+                            status="active",
+                            tags=["queue", "complaint", queue.status],
+                        )
+                    )
+                signal = f"внешняя жалоба по {queue.queue_id}"
+                if signal not in current_climate.active_signals:
+                    ops.append(AddInformationSignalOp(actor_id=actor_id, signal=signal))
+                if not current_climate.public_mood.strip():
+                    ops.append(
+                        UpdateInformationClimateOp(
+                            public_mood=f"Недовольство по {queue.title} выходит наружу.",
+                        )
+                    )
+                for internal_id in internal_agent_ids:
+                    ops.append(
+                        UpsertPendingInteractionOp(
+                            actor_id=actor_id,
+                            interaction_id=self._make_pending_interaction_id("queue_complaint_response", internal_id, actor_id, queue_id),
+                            target_agent_id=internal_id,
+                            source_agent_id=actor_id,
+                            category="external_queue_complaint_response",
+                            summary=f"Подготовь ответ на внешнюю жалобу {actor_id} по {queue.title}.",
+                            earliest_tick=earliest_tick,
+                            due_tick=due_tick,
+                            priority="high",
+                            trigger_event_type=event.event_type,
+                            artifact_id=artifact_id,
+                            org_id=queue.owner_org_id,
+                            zone_id=queue.zone_id,
+                        )
+                    )
+                return ops
+
+            if actor.population_role == "queue_reporter" and not private and (to_id.startswith("chan:") or to_id.startswith("org:")):
+                artifact_id = make_id(EntityKind.ARTIFACT, f"queue_press_inquiry_{queue_slug}")
+                title = f"Публичный запрос по очереди: {queue.title}"
+                summary = f"{actor.name} вынес тему задержек по {queue.title} в публичное поле. {text}".strip()
+                current_artifact = state.artifacts.get(artifact_id)
+                if current_artifact is None:
+                    ops.append(
+                        CreateArtifactOp(
+                            created_by=actor_id,
+                            artifact_id=artifact_id,
+                            artifact_type="press_inquiry",
+                            title=title,
+                            summary=summary,
+                            owner_org_id=queue.owner_org_id,
+                            zone_id=queue.zone_id,
+                            visibility="public",
+                            status="active",
+                            tags=["queue", "media", queue.status],
+                        )
+                    )
+                elif current_artifact.summary != summary or current_artifact.status != "active":
+                    ops.append(
+                        UpdateArtifactOp(
+                            actor_id=actor_id,
+                            artifact_id=artifact_id,
+                            summary=summary,
+                            status="active",
+                            tags=["queue", "media", queue.status],
+                        )
+                    )
+                signal = f"публичное давление по {queue.queue_id}"
+                if signal not in current_climate.active_signals:
+                    ops.append(AddInformationSignalOp(actor_id=actor_id, signal=signal))
+                if not current_climate.media_pressure.strip():
+                    ops.append(
+                        UpdateInformationClimateOp(
+                            media_pressure=f"Нужен комментарий по {queue.title}.",
+                        )
+                    )
+                for internal_id in internal_agent_ids:
+                    ops.append(
+                        UpsertPendingInteractionOp(
+                            actor_id=actor_id,
+                            interaction_id=self._make_pending_interaction_id("media_response", internal_id, actor_id, queue_id),
+                            target_agent_id=internal_id,
+                            source_agent_id=actor_id,
+                            category="media_response",
+                            summary=f"Подготовь реакцию на публичный запрос/публикацию {actor_id} по {queue.title}.",
+                            earliest_tick=earliest_tick,
+                            due_tick=due_tick,
+                            priority="high",
+                            trigger_event_type=event.event_type,
+                            artifact_id=artifact_id,
+                            org_id=queue.owner_org_id,
+                            zone_id=queue.zone_id,
+                        )
+                    )
+                return ops
+
+        return ops
+
+    @staticmethod
+    def _event_resolves_pending_interaction(
+        *,
+        interaction: PendingInteractionState,
+        event: Event,
+    ) -> bool:
+        if interaction.status != "open":
+            return False
+        if str(event.actor_id or "").strip() != interaction.target_agent_id:
+            return False
+        payload = event.payload or {}
+        if interaction.category == "reply":
+            return (
+                event.event_type == "message_sent"
+                and interaction.source_agent_id is not None
+                and str(payload.get("to_id") or "").strip() == interaction.source_agent_id
+            )
+        if interaction.category == "artifact_follow_up":
+            if interaction.artifact_id and event.event_type == "artifact_updated":
+                return str(payload.get("artifact_id") or "").strip() == interaction.artifact_id
+            if interaction.related_work_id and event.event_type in {"work_note_added", "work_proposal_submitted"}:
+                return str(payload.get("work_id") or "").strip() == interaction.related_work_id
+            return event.event_type == "message_sent"
+        if interaction.category == "resource_pressure":
+            return event.event_type in {
+                "work_item_created",
+                "work_note_added",
+                "work_proposal_submitted",
+                "artifact_updated",
+                "message_sent",
+            }
+        if interaction.category == "queue_pressure":
+            return event.event_type in {
+                "work_item_created",
+                "work_note_added",
+                "work_proposal_submitted",
+                "artifact_updated",
+                "message_sent",
+            }
+        if interaction.category == "queue_escalation":
+            if event.event_type != "message_sent":
+                return False
+            to_id = str(payload.get("to_id") or "").strip()
+            return bool(to_id) and (to_id.startswith("org:") or to_id.startswith("chan:"))
+        if interaction.category == "queue_publication_push":
+            if event.event_type == "publish":
+                return True
+            if event.event_type != "message_sent":
+                return False
+            return not bool(payload.get("private", True))
+        if interaction.category == "issue_coordination":
+            return (
+                event.event_type == "message_sent"
+                and interaction.source_agent_id is not None
+                and str(payload.get("to_id") or "").strip() == interaction.source_agent_id
+            )
+        if interaction.category in {"external_queue_complaint_response", "media_response"}:
+            if event.event_type != "message_sent":
+                return False
+            to_id = str(payload.get("to_id") or "").strip()
+            if interaction.source_agent_id and to_id == interaction.source_agent_id:
+                return True
+            return to_id.startswith("org:") or to_id.startswith("chan:")
+        if interaction.category == "audit_response":
+            return event.event_type in {
+                "message_sent",
+                "artifact_updated",
+                "work_note_added",
+                "work_proposal_submitted",
+            }
+        return event.event_type in {"message_sent", "work_note_added", "work_proposal_submitted", "artifact_updated"}
+
+    def _apply_pending_interaction_updates(
+        self,
+        *,
+        state: WorldState,
+        tick_events: list[Event],
+        event_log: EventLog,
+    ) -> list[Event]:
+        if not tick_events:
+            return []
+
+        create_ops: list[StateOp] = []
+        for event in tick_events:
+            create_ops.extend(self._pending_interaction_ops_from_event(state=state, event=event))
+
+        emitted: list[Event] = []
+        if create_ops:
+            emitted.extend(
+                self._apply_ops(
+                    state=state,
+                    ops=create_ops,
+                    event_log=event_log,
+                    origin="pending_create",
+                )
+            )
+
+        resolve_ops: list[StateOp] = []
+        for interaction in list(state.pending_interactions.values()):
+            if interaction.status != "open":
+                continue
+            for event in tick_events:
+                if self._event_resolves_pending_interaction(interaction=interaction, event=event):
+                    resolve_ops.append(
+                        ResolvePendingInteractionOp(
+                            actor_id=interaction.target_agent_id,
+                            interaction_id=interaction.interaction_id,
+                            status="completed",
+                            reason=f"matched:{event.event_type}",
+                        )
+                    )
+                    break
+        if resolve_ops:
+            emitted.extend(
+                self._apply_ops(
+                    state=state,
+                    ops=resolve_ops,
+                    event_log=event_log,
+                    origin="pending_resolve",
+                )
+            )
+        return emitted
+
+    def _apply_interaction_network_updates(
+        self,
+        *,
+        state: WorldState,
+        tick_events: list[Event],
+        event_log: EventLog,
+    ) -> list[Event]:
+        ops: list[StateOp] = []
+        for event in tick_events:
+            payload = event.payload or {}
+            if event.event_type == "message_sent" and bool(payload.get("private", True)):
+                actor_id = str(event.actor_id or "").strip()
+                to_id = str(payload.get("to_id") or "").strip()
+                if actor_id.startswith("agent:") and to_id.startswith("agent:") and actor_id != to_id:
+                    ops.append(
+                        UpsertInformalLinkOp(
+                            actor_id=actor_id,
+                            agent_a_id=actor_id,
+                            agent_b_id=to_id,
+                            link_type="private_contact",
+                            strength_delta=0.1,
+                            visibility="latent",
+                            source="interaction",
+                        )
+                    )
+            if event.event_type in {"work_note_added", "work_proposal_submitted"}:
+                actor_id = str(event.actor_id or "").strip()
+                work_id = str(payload.get("work_id") or "").strip()
+                work = state.work_items.get(work_id)
+                if work is None or not actor_id.startswith("agent:"):
+                    continue
+                for participant_id in work.participants:
+                    participant_id = str(participant_id).strip()
+                    if not participant_id.startswith("agent:") or participant_id == actor_id:
+                        continue
+                    ops.append(
+                        UpsertInformalLinkOp(
+                            actor_id=actor_id,
+                            agent_a_id=actor_id,
+                            agent_b_id=participant_id,
+                            link_type="coordination",
+                            strength_delta=0.05,
+                            visibility="latent",
+                            source="interaction",
+                        )
+                    )
+        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="interaction_network")
 
     def _personas_cache_path(self) -> Path:
         return self.artifacts.out_dir / "personas.json"
@@ -2080,6 +3705,23 @@ class WorldEngine:
                 pressure=pool.pressure,
             )
 
+        for queue in self.cfg.world.environment.operational_queues:
+            if queue.owner_org_id is not None and not state.registry.exists(queue.owner_org_id):
+                raise ValueError(f"Unknown owner_org_id for operational queue {queue.queue_id!r}: {queue.owner_org_id!r}")
+            if queue.zone_id is not None and queue.zone_id not in state.environment.zones:
+                raise ValueError(f"Unknown zone_id for operational queue {queue.queue_id!r}: {queue.zone_id!r}")
+            state.environment.operational_queues[queue.queue_id] = OperationalQueueState(
+                queue_id=queue.queue_id,
+                title=queue.title,
+                owner_org_id=queue.owner_org_id,
+                zone_id=queue.zone_id,
+                backlog=int(queue.backlog),
+                capacity_per_tick=int(queue.capacity_per_tick),
+                avg_delay_ticks=int(queue.avg_delay_ticks),
+                status=queue.status,
+                pressure=queue.pressure,
+            )
+
         info = self.cfg.world.environment.information_climate
         state.environment.information_climate = InformationClimateState(
             public_mood=info.public_mood,
@@ -2088,6 +3730,25 @@ class WorldEngine:
             narrative_temperature=info.narrative_temperature,
             active_signals=list(info.active_signals),
         )
+        configured_agent_ids = {agent.agent_id for agent in self.cfg.agents}
+        for link in self.cfg.world.environment.informal_links:
+            if link.agent_a_id not in configured_agent_ids:
+                raise ValueError(f"Unknown agent_a_id in informal_links: {link.agent_a_id!r}")
+            if link.agent_b_id not in configured_agent_ids:
+                raise ValueError(f"Unknown agent_b_id in informal_links: {link.agent_b_id!r}")
+            link_id = informal_link_key(link.agent_a_id, link.agent_b_id, link.link_type)
+            left, right = sorted([link.agent_a_id, link.agent_b_id])
+            state.environment.informal_links[link_id] = InformalLinkState(
+                link_id=link_id,
+                agent_a_id=left,
+                agent_b_id=right,
+                link_type=link.link_type,
+                strength=float(link.strength),
+                visibility=link.visibility,
+                pressure=link.pressure,
+                source=link.source,
+                last_updated_tick=0,
+            )
 
         for a in self.cfg.agents:
             agent_meta = {
@@ -2096,6 +3757,7 @@ class WorldEngine:
                 "capabilities": list(a.capabilities),
                 "org_id": a.org_id,
                 "zone_id": a.zone_id,
+                "spawn_source": "scenario",
             }
             state.registry.register(
                 EntityRecord(
@@ -2114,6 +3776,7 @@ class WorldEngine:
                 capabilities=list(a.capabilities),
                 org_id=a.org_id,
                 zone_id=a.zone_id,
+                spawn_source="scenario",
                 reputation=float(a.initial_reputation),
                 title=a.initial_title,
                 wants_promotion=a.wants_promotion,
@@ -2174,6 +3837,14 @@ class WorldEngine:
                 tags=list(artifact.tags),
             )
             event_log.extend(op.apply(state))
+
+        bootstrap_population_events = self._apply_population_blueprints(
+            state=state,
+            event_log=event_log,
+            activation="bootstrap",
+        )
+        if bootstrap_population_events:
+            logger.info("Bootstrapped %d blueprint-driven peripheral actors", len(bootstrap_population_events))
 
         return state
 
@@ -2353,6 +4024,18 @@ class WorldEngine:
                     for aid, agent in sorted(state.agents.items()):
                         if agent.org_id == pool.owner_org_id:
                             _push(aid)
+                continue
+
+            if event.event_type == "environment_operational_queue_updated":
+                queue_id = str(payload.get("queue_id") or "")
+                queue = state.environment.operational_queues.get(queue_id)
+                if queue is None:
+                    continue
+                for aid, agent in sorted(state.agents.items()):
+                    if queue.owner_org_id and agent.org_id == queue.owner_org_id:
+                        _push(aid)
+                    elif queue.zone_id and agent.zone_id == queue.zone_id:
+                        _push(aid)
                 continue
 
             if event.event_type == "environment_information_climate_updated":

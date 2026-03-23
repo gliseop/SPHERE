@@ -204,3 +204,40 @@ def test_graph_state_hides_reputation_for_external_agent_snapshot():
 
     nodes = {node["id"]: node for node in graph["nodes"]}
     assert nodes["agent:contractor"]["has_reputation"] is False
+
+
+def test_graph_state_tracks_environment_queue_and_signals():
+    graph = build_graph_state(
+        [
+            {
+                "tick": 1,
+                "event_type": "environment_operational_queue_updated",
+                "payload": {
+                    "queue_id": "queue:permits",
+                    "backlog": 7,
+                    "capacity_per_tick": 2,
+                    "avg_delay_ticks": 3,
+                    "status": "overloaded",
+                    "pressure": "Жалобы растут.",
+                    "owner_org_id": "org:city_hall",
+                },
+            },
+            {
+                "tick": 1,
+                "event_type": "environment_information_climate_updated",
+                "payload": {
+                    "active_signals": [
+                        "очередь queue:permits перегружена",
+                        "публичное давление по queue:permits",
+                    ]
+                },
+            },
+        ]
+    )
+
+    assert graph["environment"]["queues"][0]["queue_id"] == "queue:permits"
+    assert graph["environment"]["queues"][0]["status"] == "overloaded"
+    assert graph["environment"]["active_signals"] == [
+        "очередь queue:permits перегружена",
+        "публичное давление по queue:permits",
+    ]
