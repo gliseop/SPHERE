@@ -11,10 +11,17 @@ from magistry_lc.entities import EntityRegistry
 from magistry_lc.events import Event, EventLog
 from magistry_lc.fidelity import evaluate_fidelity
 from magistry_lc.ids import EntityKind
+from magistry_lc.ids import INTERNAL_AUDIENCE
 from magistry_lc.journal import WorldJournal
 from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
 from magistry_lc.persona import PersonaArtifact
-from magistry_lc.state import AgentState, WorldState
+from magistry_lc.state import (
+    AgentState,
+    InstitutionRegimeState,
+    ResourcePoolState,
+    WorldState,
+    ZoneState,
+)
 from magistry_lc.tracing import TraceLog
 from magistry_lc.worldgen import AgentDailyContext, SceneHook
 
@@ -179,6 +186,58 @@ class _DormantEcologyProvider(MockLLMProvider):
         return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
 
 
+class _EnvironmentUpdateProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сгенерируй действия на этот тик." in user:
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "idle"}]},
+                model="mock",
+            )
+        if '"phase": "post"' in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [],
+                    "spawns": [],
+                    "environment_updates": {
+                        "institutions": [
+                            {
+                                "org_id": "org:city_hall",
+                                "operating_mode": "crisis",
+                                "security_mode": "heightened",
+                            }
+                        ],
+                        "zones": [
+                            {
+                                "zone_id": "zone:city_hall",
+                                "access_mode": "restricted",
+                            }
+                        ],
+                        "resource_pools": [
+                            {
+                                "resource_id": "res:roads_budget",
+                                "quantity": 900,
+                                "status": "depleted",
+                                "pressure": "Подрядчики требуют срочного решения.",
+                            }
+                        ],
+                        "information_climate": {
+                            "public_mood": "Раздражение усиливается.",
+                            "media_pressure": "Журналисты готовят материал.",
+                            "active_signals": ["новая волна жалоб", "утечка сметы"],
+                        },
+                    },
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
 def test_runtime_config_simulated_datetime_respects_granularity() -> None:
     hourly = RuntimeConfig(start_date="2026-03-09", tick_granularity="hour", tick_duration_days=2)
     assert hourly.simulated_datetime(3).isoformat() == "2026-03-09T15:00:00"
@@ -235,6 +294,66 @@ def test_agent_prompt_includes_story_state_daily_context_and_soft_perform(tmp_pa
     assert "Лёгкие контакты не имеют typed-id" in prompt
     assert "если реальный шаг лучше описывается неформально" in prompt
     assert "ПРЕДПОЧИТАЙ структурированные действия" not in prompt
+
+
+def test_agent_prompt_includes_relevant_environment_brief(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Хочет удержать процесс под контролем."),
+        capabilities=["message", "work"],
+        org_id="org:city_hall",
+        zone_id="zone:city_hall",
+        title="начальник отдела",
+    )
+    state = WorldState(tick=0, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    state.environment.institutions["org:city_hall"] = InstitutionRegimeState(
+        org_id="org:city_hall",
+        operating_mode="strained",
+        transparency_mode="limited",
+        access_mode="restricted",
+        security_mode="heightened",
+        capture_risk="medium",
+    )
+    state.environment.zones["zone:city_hall"] = ZoneState(
+        zone_id="zone:city_hall",
+        title="Здание мэрии",
+        primary_org_id="org:city_hall",
+        access_mode="controlled",
+        transparency_mode="internal",
+        security_level="heightened",
+    )
+    state.environment.resource_pools["res:roads_budget"] = ResourcePoolState(
+        resource_id="res:roads_budget",
+        title="Бюджет дорожного ремонта",
+        owner_org_id="org:city_hall",
+        quantity=900,
+        unit="тыс. руб.",
+        status="depleted",
+        pressure="Подрядчики требуют срочного решения.",
+    )
+    state.environment.information_climate.public_mood = "Раздражение усиливается."
+    state.environment.information_climate.media_pressure = "Журналисты готовят материал."
+    state.environment.information_climate.active_signals = ["новая волна жалоб", "утечка сметы"]
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    prompt = runner._build_user(
+        agent=agent,
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    assert "Релевантная среда:" in prompt
+    assert "Организация org:city_hall" in prompt
+    assert "Зона zone:city_hall" in prompt
+    assert "Ресурс res:roads_budget" in prompt
+    assert "Активные сигналы среды: новая волна жалоб, утечка сметы" in prompt
 
 
 def test_engine_emits_scripted_events_before_agent_turn(tmp_path: Path) -> None:
@@ -369,6 +488,136 @@ def test_environment_layer_is_initialized_and_exposed_to_worldgen_snapshot(tmp_p
     assert journal_dict["entities"]["zones"] == 1
     assert journal_dict["entities"]["resource_pools"] == 1
     assert journal_dict["environment"]["institutions"][0]["org_id"] == "org:city_hall"
+
+
+def test_post_worldgen_can_update_environment_layer(tmp_path: Path) -> None:
+    provider = _EnvironmentUpdateProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "environment-updates",
+            "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_every_ticks": 1,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "Чиновник",
+                    "capabilities": ["message"],
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+                "environment": {
+                    "institution_modes": [
+                        {
+                            "org_id": "org:city_hall",
+                            "operating_mode": "strained",
+                            "security_mode": "routine",
+                        }
+                    ],
+                    "zones": [
+                        {
+                            "zone_id": "zone:city_hall",
+                            "title": "Здание мэрии",
+                            "primary_org_id": "org:city_hall",
+                        }
+                    ],
+                    "resource_pools": [
+                        {
+                            "resource_id": "res:roads_budget",
+                            "title": "Бюджет дорожного ремонта",
+                            "owner_org_id": "org:city_hall",
+                            "quantity": 1250,
+                            "unit": "тыс. руб.",
+                            "status": "stable",
+                        }
+                    ],
+                },
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    assert state.environment.institutions["org:city_hall"].operating_mode == "crisis"
+    assert state.environment.institutions["org:city_hall"].security_mode == "heightened"
+    assert state.environment.zones["zone:city_hall"].access_mode == "restricted"
+    assert state.environment.resource_pools["res:roads_budget"].quantity == 900
+    assert state.environment.resource_pools["res:roads_budget"].status == "depleted"
+    assert state.environment.information_climate.media_pressure == "Журналисты готовят материал."
+    assert state.environment.information_climate.active_signals == ["новая волна жалоб", "утечка сметы"]
+
+    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    event_types = {event["event_type"] for event in events}
+    assert "environment_institution_updated" in event_types
+    assert "environment_zone_updated" in event_types
+    assert "environment_resource_updated" in event_types
+    assert "environment_information_climate_updated" in event_types
+
+
+def test_environment_updates_activate_peripheral_agent(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "environment-activation",
+            "ticks": 1,
+            "agents": [
+                {
+                    "agent_id": "agent:core_1",
+                    "name": "Core 1",
+                    "internal": True,
+                    "persona": "Ключевой агент",
+                    "capabilities": ["message"],
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+                "environment": {
+                    "institution_modes": [{"org_id": "org:city_hall"}],
+                },
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider())
+    state = engine._init_state(event_log=EventLog(artifacts.events_path))
+    state.agents["agent:peripheral"] = AgentState(
+        agent_id="agent:peripheral",
+        name="Peripheral",
+        internal=True,
+        persona=PersonaArtifact(summary="Периферийный сотрудник"),
+        capabilities=["message"],
+        org_id="org:city_hall",
+    )
+    event = Event(
+        tick=0,
+        event_type="environment_institution_updated",
+        actor_id=None,
+        payload={"org_id": "org:city_hall", "operating_mode": "crisis"},
+        audience=[INTERNAL_AUDIENCE],
+    )
+
+    assert engine._should_activate_agent(
+        state=state,
+        agent_id="agent:peripheral",
+        events_history=[event],
+        daily_contexts=None,
+        scene_hooks_by_agent=None,
+    )
 
 
 def test_engine_pre_tick_worldgen_injects_daily_context(tmp_path: Path) -> None:

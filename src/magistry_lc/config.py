@@ -96,6 +96,10 @@ class MemoryConfig(BaseModel):
             "work_note_added": 5.0,
             "work_proposal_submitted": 5.0,
             "world_event": 5.0,
+            "environment_institution_updated": 5.0,
+            "environment_zone_updated": 5.0,
+            "environment_resource_updated": 5.0,
+            "environment_information_climate_updated": 5.0,
             "audit_flagged": 7.0,
             "audit_case_opened": 7.0,
             "audit_case_updated": 6.0,
@@ -432,6 +436,8 @@ class AgentConfig(BaseModel):
     internal: bool = True
     persona: PersonaArtifact = Field(default_factory=PersonaArtifact)
     capabilities: list[str] = Field(default_factory=list)
+    org_id: str | None = None
+    zone_id: str | None = None
     initial_reputation: float = 0.0
     initial_title: str = "специалист"
     wants_promotion: bool = True
@@ -450,6 +456,22 @@ class AgentConfig(BaseModel):
     @classmethod
     def _validate_agent_id(cls, v: str) -> str:
         ensure_kind(v, EntityKind.AGENT)
+        return v
+
+    @field_validator("org_id")
+    @classmethod
+    def _validate_org_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.ORG)
+        return v
+
+    @field_validator("zone_id")
+    @classmethod
+    def _validate_zone_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.ZONE)
         return v
 
     @field_validator("initial_reputation")

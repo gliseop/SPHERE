@@ -142,6 +142,8 @@ class AgentState:
     internal: bool
     persona: PersonaArtifact = field(default_factory=PersonaArtifact)
     capabilities: list[str] = field(default_factory=list)
+    org_id: str | None = None
+    zone_id: str | None = None
 
     reputation: float = 0.0  # clamp >= 0
     reputation_frozen: bool = False

@@ -55,6 +55,46 @@ class _SceneHookModel(BaseModel):
     mandatory: bool = False
 
 
+class _InstitutionUpdateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    org_id: str
+    operating_mode: str | None = None
+    transparency_mode: str | None = None
+    access_mode: str | None = None
+    security_mode: str | None = None
+    capture_risk: str | None = None
+    linked_zone_ids: list[str] | None = None
+
+
+class _ZoneUpdateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    zone_id: str
+    access_mode: str | None = None
+    transparency_mode: str | None = None
+    security_level: str | None = None
+
+
+class _ResourcePoolUpdateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resource_id: str
+    quantity: float | None = None
+    status: str | None = None
+    pressure: str | None = None
+
+
+class _InformationClimateUpdateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    public_mood: str | None = None
+    oversight_attention: str | None = None
+    media_pressure: str | None = None
+    narrative_temperature: str | None = None
+    active_signals: list[str] | None = None
+
+
 @dataclass(slots=True)
 class SpawnSuggestion:
     """Предложение worldgen создать нового агента."""
@@ -92,6 +132,60 @@ class SceneHook:
 
 
 @dataclass(slots=True)
+class InstitutionUpdate:
+    """Изменение режима организации в среде."""
+
+    org_id: str
+    operating_mode: str | None = None
+    transparency_mode: str | None = None
+    access_mode: str | None = None
+    security_mode: str | None = None
+    capture_risk: str | None = None
+    linked_zone_ids: list[str] | None = None
+
+
+@dataclass(slots=True)
+class ZoneUpdate:
+    """Изменение режима зоны."""
+
+    zone_id: str
+    access_mode: str | None = None
+    transparency_mode: str | None = None
+    security_level: str | None = None
+
+
+@dataclass(slots=True)
+class ResourcePoolUpdate:
+    """Изменение ресурсного контура."""
+
+    resource_id: str
+    quantity: float | None = None
+    status: str | None = None
+    pressure: str | None = None
+
+
+@dataclass(slots=True)
+class InformationClimateUpdate:
+    """Изменение глобального информационного климата."""
+
+    public_mood: str | None = None
+    oversight_attention: str | None = None
+    media_pressure: str | None = None
+    narrative_temperature: str | None = None
+    active_signals: list[str] | None = None
+
+
+@dataclass(slots=True)
+class EnvironmentUpdates:
+    """Пакет средовых изменений от worldgen."""
+
+    institutions: list[InstitutionUpdate] = field(default_factory=list)
+    zones: list[ZoneUpdate] = field(default_factory=list)
+    resource_pools: list[ResourcePoolUpdate] = field(default_factory=list)
+    information_climate: InformationClimateUpdate | None = None
+
+
+@dataclass(slots=True)
 class WorldgenOutput:
     """Нормализованный результат worldgen."""
 
@@ -99,6 +193,7 @@ class WorldgenOutput:
     spawns: list[SpawnSuggestion]
     agent_contexts: dict[str, AgentDailyContext] = field(default_factory=dict)
     scene_hooks: list[SceneHook] = field(default_factory=list)
+    environment_updates: EnvironmentUpdates = field(default_factory=EnvironmentUpdates)
 
 
 def _worldgen_schema(
@@ -140,6 +235,74 @@ def _worldgen_schema(
                         "reason": {"type": "string"},
                     },
                     "required": ["slug", "name", "internal", "persona_hint"],
+                },
+            },
+            "environment_updates": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "institutions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "org_id": {"type": "string"},
+                                "operating_mode": {"type": ["string", "null"]},
+                                "transparency_mode": {"type": ["string", "null"]},
+                                "access_mode": {"type": ["string", "null"]},
+                                "security_mode": {"type": ["string", "null"]},
+                                "capture_risk": {"type": ["string", "null"]},
+                                "linked_zone_ids": {
+                                    "type": ["array", "null"],
+                                    "items": {"type": "string"},
+                                },
+                            },
+                            "required": ["org_id"],
+                        },
+                    },
+                    "zones": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "zone_id": {"type": "string"},
+                                "access_mode": {"type": ["string", "null"]},
+                                "transparency_mode": {"type": ["string", "null"]},
+                                "security_level": {"type": ["string", "null"]},
+                            },
+                            "required": ["zone_id"],
+                        },
+                    },
+                    "resource_pools": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "resource_id": {"type": "string"},
+                                "quantity": {"type": ["number", "null"]},
+                                "status": {"type": ["string", "null"]},
+                                "pressure": {"type": ["string", "null"]},
+                            },
+                            "required": ["resource_id"],
+                        },
+                    },
+                    "information_climate": {
+                        "type": ["object", "null"],
+                        "additionalProperties": False,
+                        "properties": {
+                            "public_mood": {"type": ["string", "null"]},
+                            "oversight_attention": {"type": ["string", "null"]},
+                            "media_pressure": {"type": ["string", "null"]},
+                            "narrative_temperature": {"type": ["string", "null"]},
+                            "active_signals": {
+                                "type": ["array", "null"],
+                                "items": {"type": "string"},
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -258,6 +421,8 @@ def _build_system_prompt(*, phase: Literal["pre", "post"], language: str) -> str
             [
                 "Сгенерируй только внешние отклики на уже произошедшие процессы и, при необходимости, предложения новых акторов.",
                 "Не подменяй собой журнал мира и не рассказывай за существующих агентов.",
+                "Если состояние среды уже явно сдвинулось, можешь вернуть environment_updates только по существующим org:/zone:/res: из state_snapshot.",
+                "Environment updates не должны создавать новые сущности и не должны утверждать решения конкретного агента как факт.",
             ]
         )
     return "\n".join(base) + "\n"
@@ -328,11 +493,13 @@ class WorldGenerator:
             spawns_raw = []
             agent_contexts_raw: list[dict[str, Any]] | dict[str, Any] = []
             scene_hooks_raw: list[dict[str, Any]] = []
+            environment_updates_raw: dict[str, Any] = {}
         elif isinstance(resp.data, dict):
             events_raw = resp.data.get("events") or resp.data.get("global_events") or []
             spawns_raw = resp.data.get("spawns") or resp.data.get("spawn_suggestions") or []
             agent_contexts_raw = resp.data.get("agent_contexts") or []
             scene_hooks_raw = resp.data.get("scene_hooks") or []
+            environment_updates_raw = resp.data.get("environment_updates") or {}
         else:
             return WorldgenOutput(events=[], spawns=[])
 
@@ -429,9 +596,93 @@ class WorldGenerator:
                     )
                 )
 
+        environment_updates = EnvironmentUpdates()
+        if isinstance(environment_updates_raw, dict):
+            institutions_raw = environment_updates_raw.get("institutions") or []
+            if isinstance(institutions_raw, list):
+                for item in institutions_raw:
+                    try:
+                        raw = _InstitutionUpdateModel.model_validate(item)
+                    except Exception:
+                        continue
+                    org_id = raw.org_id.strip()
+                    if not org_id:
+                        continue
+                    linked_zone_ids = None
+                    if isinstance(raw.linked_zone_ids, list):
+                        linked_zone_ids = [str(zone_id).strip() for zone_id in raw.linked_zone_ids if str(zone_id).strip()]
+                    environment_updates.institutions.append(
+                        InstitutionUpdate(
+                            org_id=org_id,
+                            operating_mode=(raw.operating_mode or "").strip() or None,
+                            transparency_mode=(raw.transparency_mode or "").strip() or None,
+                            access_mode=(raw.access_mode or "").strip() or None,
+                            security_mode=(raw.security_mode or "").strip() or None,
+                            capture_risk=(raw.capture_risk or "").strip() or None,
+                            linked_zone_ids=linked_zone_ids,
+                        )
+                    )
+
+            zones_raw = environment_updates_raw.get("zones") or []
+            if isinstance(zones_raw, list):
+                for item in zones_raw:
+                    try:
+                        raw = _ZoneUpdateModel.model_validate(item)
+                    except Exception:
+                        continue
+                    zone_id = raw.zone_id.strip()
+                    if not zone_id:
+                        continue
+                    environment_updates.zones.append(
+                        ZoneUpdate(
+                            zone_id=zone_id,
+                            access_mode=(raw.access_mode or "").strip() or None,
+                            transparency_mode=(raw.transparency_mode or "").strip() or None,
+                            security_level=(raw.security_level or "").strip() or None,
+                        )
+                    )
+
+            resource_pools_raw = environment_updates_raw.get("resource_pools") or []
+            if isinstance(resource_pools_raw, list):
+                for item in resource_pools_raw:
+                    try:
+                        raw = _ResourcePoolUpdateModel.model_validate(item)
+                    except Exception:
+                        continue
+                    resource_id = raw.resource_id.strip()
+                    if not resource_id:
+                        continue
+                    environment_updates.resource_pools.append(
+                        ResourcePoolUpdate(
+                            resource_id=resource_id,
+                            quantity=float(raw.quantity) if raw.quantity is not None else None,
+                            status=(raw.status or "").strip() or None,
+                            pressure=(raw.pressure or "").strip() or None,
+                        )
+                    )
+
+            climate_raw = environment_updates_raw.get("information_climate")
+            if isinstance(climate_raw, dict):
+                try:
+                    raw_climate = _InformationClimateUpdateModel.model_validate(climate_raw)
+                except Exception:
+                    raw_climate = None
+                if raw_climate is not None:
+                    active_signals = None
+                    if isinstance(raw_climate.active_signals, list):
+                        active_signals = [str(item).strip() for item in raw_climate.active_signals if str(item).strip()]
+                    environment_updates.information_climate = InformationClimateUpdate(
+                        public_mood=(raw_climate.public_mood or "").strip() or None,
+                        oversight_attention=(raw_climate.oversight_attention or "").strip() or None,
+                        media_pressure=(raw_climate.media_pressure or "").strip() or None,
+                        narrative_temperature=(raw_climate.narrative_temperature or "").strip() or None,
+                        active_signals=active_signals,
+                    )
+
         return WorldgenOutput(
             events=out_events,
             spawns=spawns,
             agent_contexts=agent_contexts,
             scene_hooks=scene_hooks,
+            environment_updates=environment_updates,
         )

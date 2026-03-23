@@ -20,7 +20,17 @@ from .ids import (
     parse_typed_id,
 )
 from .persona import PersonaArtifact
-from .state import AgentState, AuditCase, Vote, WorkItem, WorldState
+from .state import (
+    AgentState,
+    AuditCase,
+    InformationClimateState,
+    InstitutionRegimeState,
+    ResourcePoolState,
+    Vote,
+    WorkItem,
+    WorldState,
+    ZoneState,
+)
 from .utils import normalize_agent_display_name
 
 
@@ -376,6 +386,180 @@ class SetReputationFreezeOp:
                 event_type="reputation_unfrozen",
                 actor_id=self.actor_id,
                 payload={"target_agent_id": self.target_agent_id, "reason": self.reason},
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateInstitutionRegimeOp:
+    """Обновить режим организации в environment-layer."""
+
+    org_id: str
+    operating_mode: str | None = None
+    transparency_mode: str | None = None
+    access_mode: str | None = None
+    security_mode: str | None = None
+    capture_risk: str | None = None
+    linked_zone_ids: list[str] | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        ensure_kind(self.org_id, EntityKind.ORG)
+        if not state.registry.exists(self.org_id):
+            raise ValueError(f"Unknown organization: {self.org_id!r}")
+        if self.linked_zone_ids is not None:
+            for zone_id in self.linked_zone_ids:
+                ensure_kind(zone_id, EntityKind.ZONE)
+                if zone_id not in state.environment.zones:
+                    raise ValueError(f"Unknown linked zone: {zone_id!r}")
+        current = state.environment.institutions.get(self.org_id) or InstitutionRegimeState(org_id=self.org_id)
+        linked_zone_ids = list(current.linked_zone_ids)
+        if self.linked_zone_ids is not None:
+            linked_zone_ids = list(self.linked_zone_ids)
+        updated = InstitutionRegimeState(
+            org_id=self.org_id,
+            operating_mode=self.operating_mode or current.operating_mode,
+            transparency_mode=self.transparency_mode or current.transparency_mode,
+            access_mode=self.access_mode or current.access_mode,
+            security_mode=self.security_mode or current.security_mode,
+            capture_risk=self.capture_risk or current.capture_risk,
+            linked_zone_ids=linked_zone_ids,
+        )
+        state.environment.institutions[self.org_id] = updated
+        return [
+            Event(
+                tick=state.tick,
+                event_type="environment_institution_updated",
+                actor_id=None,
+                payload={
+                    "org_id": updated.org_id,
+                    "operating_mode": updated.operating_mode,
+                    "transparency_mode": updated.transparency_mode,
+                    "access_mode": updated.access_mode,
+                    "security_mode": updated.security_mode,
+                    "capture_risk": updated.capture_risk,
+                    "linked_zone_ids": list(updated.linked_zone_ids),
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateZoneStateOp:
+    """Обновить режим зоны."""
+
+    zone_id: str
+    access_mode: str | None = None
+    transparency_mode: str | None = None
+    security_level: str | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        ensure_kind(self.zone_id, EntityKind.ZONE)
+        if not state.registry.exists(self.zone_id) or self.zone_id not in state.environment.zones:
+            raise ValueError(f"Unknown zone: {self.zone_id!r}")
+        current = state.environment.zones[self.zone_id]
+        updated = ZoneState(
+            zone_id=current.zone_id,
+            title=current.title,
+            zone_type=current.zone_type,
+            primary_org_id=current.primary_org_id,
+            access_mode=self.access_mode or current.access_mode,
+            transparency_mode=self.transparency_mode or current.transparency_mode,
+            security_level=self.security_level or current.security_level,
+        )
+        state.environment.zones[self.zone_id] = updated
+        return [
+            Event(
+                tick=state.tick,
+                event_type="environment_zone_updated",
+                actor_id=None,
+                payload={
+                    "zone_id": updated.zone_id,
+                    "access_mode": updated.access_mode,
+                    "transparency_mode": updated.transparency_mode,
+                    "security_level": updated.security_level,
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateResourcePoolOp:
+    """Обновить ресурсный контур среды."""
+
+    resource_id: str
+    quantity: float | None = None
+    status: str | None = None
+    pressure: str | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        ensure_kind(self.resource_id, EntityKind.RESOURCE)
+        if not state.registry.exists(self.resource_id) or self.resource_id not in state.environment.resource_pools:
+            raise ValueError(f"Unknown resource pool: {self.resource_id!r}")
+        current = state.environment.resource_pools[self.resource_id]
+        quantity = current.quantity if self.quantity is None else float(self.quantity)
+        if quantity < 0.0:
+            raise ValueError("Resource pool quantity must be >= 0")
+        updated = ResourcePoolState(
+            resource_id=current.resource_id,
+            title=current.title,
+            owner_org_id=current.owner_org_id,
+            quantity=quantity,
+            unit=current.unit,
+            status=self.status or current.status,
+            pressure=self.pressure or current.pressure,
+        )
+        state.environment.resource_pools[self.resource_id] = updated
+        return [
+            Event(
+                tick=state.tick,
+                event_type="environment_resource_updated",
+                actor_id=None,
+                payload={
+                    "resource_id": updated.resource_id,
+                    "quantity": updated.quantity,
+                    "status": updated.status,
+                    "pressure": updated.pressure,
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateInformationClimateOp:
+    """Обновить глобальный информационный климат."""
+
+    public_mood: str | None = None
+    oversight_attention: str | None = None
+    media_pressure: str | None = None
+    narrative_temperature: str | None = None
+    active_signals: list[str] | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        current = state.environment.information_climate
+        updated = InformationClimateState(
+            public_mood=self.public_mood or current.public_mood,
+            oversight_attention=self.oversight_attention or current.oversight_attention,
+            media_pressure=self.media_pressure or current.media_pressure,
+            narrative_temperature=self.narrative_temperature or current.narrative_temperature,
+            active_signals=list(self.active_signals) if self.active_signals is not None else list(current.active_signals),
+        )
+        state.environment.information_climate = updated
+        return [
+            Event(
+                tick=state.tick,
+                event_type="environment_information_climate_updated",
+                actor_id=None,
+                payload={
+                    "public_mood": updated.public_mood,
+                    "oversight_attention": updated.oversight_attention,
+                    "media_pressure": updated.media_pressure,
+                    "narrative_temperature": updated.narrative_temperature,
+                    "active_signals": list(updated.active_signals),
+                },
                 audience=[INTERNAL_AUDIENCE],
             )
         ]

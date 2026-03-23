@@ -40,7 +40,7 @@ MAGISTRY/
 │   ├── ids.py                  # Типизированные ID и аудитории (aud:*)
 │   ├── entities.py             # EntityRegistry + EntityRecord (антифантомы)
 │   ├── id_alloc.py             # Детерминированное выделение новых ID
-│   ├── state.py                # WorldState (agents/work_items/votes + environment-layer) + AgentState.story_state
+│   ├── state.py                # WorldState (agents/work_items/votes + environment-layer) + AgentState.story_state + org/zone binding
 │   ├── persona.py              # PersonaArtifact/Library/Generator + SocialGraphExtractor
 │   ├── memory.py               # Память агента (buffer + hybrid retrieval)
 │   ├── actions.py              # Action[] (structured + spawn_agent + perform)
@@ -50,7 +50,7 @@ MAGISTRY/
 │   ├── auditor.py              # RuntimeAuditor (LLM-first detection + deterministic audit actuator + collegial review)
 │   ├── dao.py                  # DAO vote closure + position policy
 │   ├── engine.py               # WorldEngine (environment init/snapshot, scripted events, pre/post worldgen, deterministic apply)
-│   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, agent contexts, scene hooks, spawns, safe environment snapshot)
+│   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, agent contexts, scene hooks, spawns, environment updates)
 │   ├── composer.py             # WorldComposer (LLM -> ScenarioConfig + persona enrichment)
 │   ├── oracle.py               # ViolationOracle + FreeformTruthRecorder (LLM post-hoc analysis)
 │   ├── truth.py                # TruthDetector + TruthLog (deterministic truth-layer sidecar)
@@ -298,7 +298,7 @@ cd web/frontend && npm run test:e2e
 - **Ecology activation**: при `runtime.ecology_activation_window_ticks > 0` не-core акторы ходят не каждый тик, а только когда недавно были затронуты событиями, hook-ами или собственным созданием. Это сохраняет богатую ecology без захвата сюжета внешними акторами.
 - **Имена новых агентов**: secondary-spawn, runtime-spawn и worldgen-spawn принимают только человеко-читаемые имена; role-alias и machine-like display-name отклоняются или маппятся на уже существующего актора.
 - **Scripted events + pre-tick worldgen**: сценарий может задавать `scripted_events`, а `runtime.worldgen_pre_tick=true` включает personal-ecology слой до хода агентов: `agent_daily_context`, `scene_hooks`, глобальные сигналы и `story_state` агента. Эти prompt-layer данные не подменяют детерминированный apply.
-- **Stateful environment layer**: `WorldState` теперь содержит отдельный `environment`-слой (`world.environment` в сценарии): режимы организаций, зоны, ресурсные пулы и информационный климат. На текущем этапе он инициализируется из конфига, отражается в YAML-журнале и safe `state_snapshot` для worldgen, но ещё не имеет самостоятельного богатого runtime-update контура.
+- **Stateful environment layer**: `WorldState` теперь содержит отдельный `environment`-слой (`world.environment` в сценарии): режимы организаций, зоны, ресурсные пулы и информационный климат. Он инициализируется из конфига, отражается в YAML-журнале и safe `state_snapshot` для worldgen; post-worldgen теперь также может детерминированно менять его через `environment_updates` и события `environment_*_updated`.
 - **Risky personal contexts**: `agent_daily_context` теперь может нести не только общий фон, но и richer pressure-поля (`private_pressure`, `opportunity`, `exposure_risk`). Это считается допустимым средовым давлением, а не прямой директивой агенту.
 - **`request_entity` по умолчанию внутренний**: при `runtime.request_entity_internal_only=true` внешние/ecology-акторы не могут бесконтрольно разворачивать публичную инфраструктуру (`chan:*`/`org:*`) через `request_entity`.
 - **Runtime-аудитор**: `RuntimeAuditor` существует только как отдельный runtime governance-layer, а не как narrative-agent. Он сочетает deterministic baseline rules с LLM-findings, нормализует `violation_type`, детерминированно привязывает `evidence_refs`, агрегирует повторяющиеся finding’и в стабильные `audit_case:*`, умеет ставить response-deadline на объяснения/документы и эскалировать просроченные кейсы в monitoring / collegial review.

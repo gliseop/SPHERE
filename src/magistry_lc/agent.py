@@ -117,6 +117,57 @@ def _format_daily_context(daily_context: AgentDailyContext | None, scene_hooks: 
     return "\n".join(lines) + "\n\n"
 
 
+def _format_environment_brief(*, agent: AgentState, state: WorldState) -> str:
+    if not agent.org_id and not agent.zone_id:
+        return ""
+
+    lines = ["Релевантная среда:"]
+    if agent.org_id:
+        inst = state.environment.institutions.get(agent.org_id)
+        if inst is not None:
+            lines.append(
+                f"- Организация {agent.org_id}: режим={inst.operating_mode}, прозрачность={inst.transparency_mode}, доступ={inst.access_mode}, безопасность={inst.security_mode}"
+            )
+            if inst.capture_risk:
+                lines.append(f"- Риск захвата/неформального влияния: {inst.capture_risk}")
+        owned_pools = [
+            pool for _, pool in sorted(state.environment.resource_pools.items()) if pool.owner_org_id == agent.org_id
+        ]
+        for pool in owned_pools[:3]:
+            pressure = f", давление={pool.pressure}" if pool.pressure else ""
+            unit = f" {pool.unit}" if pool.unit else ""
+            lines.append(
+                f"- Ресурс {pool.resource_id}: {pool.quantity}{unit}, статус={pool.status}{pressure}"
+            )
+
+    if agent.zone_id:
+        zone = state.environment.zones.get(agent.zone_id)
+        if zone is not None:
+            lines.append(
+                f"- Зона {agent.zone_id} ({zone.title}): доступ={zone.access_mode}, прозрачность={zone.transparency_mode}, безопасность={zone.security_level}"
+            )
+
+    climate = state.environment.information_climate
+    if any(
+        [
+            climate.public_mood,
+            climate.oversight_attention,
+            climate.media_pressure,
+            climate.narrative_temperature,
+            climate.active_signals,
+        ]
+    ):
+        lines.append(
+            f"- Общий фон: public_mood={climate.public_mood or '(не задано)'}, oversight={climate.oversight_attention or '(не задано)'}, media={climate.media_pressure or '(не задано)'}, narrative={climate.narrative_temperature or '(не задано)'}"
+        )
+        if climate.active_signals:
+            lines.append(f"- Активные сигналы среды: {', '.join(climate.active_signals[:4])}")
+
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines) + "\n\n"
+
+
 def _recent_rejection_hints(visible_events: list[Event]) -> list[str]:
     """Собрать краткие подсказки по недавним отклонённым действиям.
 
@@ -240,6 +291,7 @@ class AgentRunner:
         rejection_hints = _recent_rejection_hints(visible_events)
         rejection_hints_text = "\n".join(f"- {item}" for item in rejection_hints) if rejection_hints else "- (нет)"
         daily_context_text = _format_daily_context(daily_context, scene_hooks or [])
+        environment_brief = _format_environment_brief(agent=agent, state=state)
         motivation_block = _motivation_block(agent, visible_events)
 
         # Инструкция по действиям.
@@ -295,6 +347,7 @@ class AgentRunner:
             "Недавние недопустимые действия / ID:\n"
             f"{rejection_hints_text}\n\n"
             f"{daily_context_text}"
+            f"{environment_brief}"
             f"Память:\n{mem_text}\n\n"
             "Доступные типы действий:\n"
             f"{actions_block}\n\n"

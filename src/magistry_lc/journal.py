@@ -206,6 +206,16 @@ class WorldJournal:
                     changed = True
                 continue
 
+            if ev.event_type in (
+                "environment_institution_updated",
+                "environment_zone_updated",
+                "environment_resource_updated",
+                "environment_information_climate_updated",
+            ):
+                self.environment = state.environment.snapshot_dict()
+                changed = True
+                continue
+
         if changed:
             self._enforce_caps()
             self._dirty = True

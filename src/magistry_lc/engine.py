@@ -43,6 +43,10 @@ from .ops import (
     ModifyReputationOp,
     SetReputationFreezeOp,
     StateOp,
+    UpdateInformationClimateOp,
+    UpdateInstitutionRegimeOp,
+    UpdateResourcePoolOp,
+    UpdateZoneStateOp,
 )
 from .persona import (
     INTERVIEW_QUESTIONS_V2,
@@ -73,6 +77,7 @@ from .utils import (
 )
 from .worldgen import (
     AgentDailyContext,
+    EnvironmentUpdates,
     SceneHook,
     SpawnSuggestion,
     WorldGenerator,
@@ -352,6 +357,13 @@ class WorldEngine:
                 if generated_pre.events:
                     event_log.extend(generated_pre.events)
                     tick_events.extend(generated_pre.events)
+                env_events = self._apply_worldgen_environment_updates(
+                    state=state,
+                    updates=generated_pre.environment_updates,
+                    event_log=event_log,
+                )
+                if env_events:
+                    tick_events.extend(env_events)
                 scene_events = self._materialize_scene_hook_events(
                     tick=state.tick,
                     scene_hooks=generated_pre.scene_hooks,
@@ -475,6 +487,13 @@ class WorldEngine:
                 if generated.events:
                     event_log.extend(generated.events)
                     tick_events.extend(generated.events)
+                env_events = self._apply_worldgen_environment_updates(
+                    state=state,
+                    updates=generated.environment_updates,
+                    event_log=event_log,
+                )
+                if env_events:
+                    tick_events.extend(env_events)
                 scene_events = self._materialize_scene_hook_events(
                     tick=state.tick,
                     scene_hooks=generated.scene_hooks,
@@ -860,11 +879,37 @@ class WorldEngine:
             return True
 
         low_tick = max(0, int(state.tick) - window)
+        agent = state.agents.get(agent_id)
+        if agent is None:
+            return False
         for event in reversed(events_history):
             if int(event.tick) < low_tick:
                 break
             if self._event_mentions_agent(event=event, agent_id=agent_id):
                 return True
+            if self._event_touches_agent_environment(state=state, event=event, agent=agent):
+                return True
+        return False
+
+    @staticmethod
+    def _event_touches_agent_environment(*, state: WorldState, event: Event, agent: AgentState) -> bool:
+        payload = event.payload or {}
+        if not isinstance(payload, dict):
+            return False
+        if event.event_type == "environment_institution_updated":
+            return bool(agent.org_id) and str(payload.get("org_id") or "") == agent.org_id
+        if event.event_type == "environment_zone_updated":
+            return bool(agent.zone_id) and str(payload.get("zone_id") or "") == agent.zone_id
+        if event.event_type == "environment_resource_updated":
+            resource_id = str(payload.get("resource_id") or "")
+            if not resource_id:
+                return False
+            pool = state.environment.resource_pools.get(resource_id)
+            if pool is None:
+                return False
+            return bool(agent.org_id) and pool.owner_org_id == agent.org_id
+        if event.event_type == "environment_information_climate_updated":
+            return True
         return False
 
     def _build_worldgen_agent_briefs(self, *, state: WorldState, scope: str = "all") -> list[dict[str, Any]]:
@@ -880,6 +925,8 @@ class WorldEngine:
                     "name": agent.name,
                     "internal": bool(agent.internal),
                     "title": agent.title if agent.internal else "",
+                    "org_id": agent.org_id,
+                    "zone_id": agent.zone_id,
                     "capabilities": list(agent.capabilities),
                     "story_state": self._compact_text(agent.story_state, max_chars=320),
                 }
@@ -1599,6 +1646,65 @@ class WorldEngine:
             )
         return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_spawn")
 
+    def _apply_worldgen_environment_updates(
+        self,
+        *,
+        state: WorldState,
+        updates: EnvironmentUpdates,
+        event_log: EventLog,
+    ) -> list[Event]:
+        if (
+            not updates.institutions
+            and not updates.zones
+            and not updates.resource_pools
+            and updates.information_climate is None
+        ):
+            return []
+
+        ops: list[StateOp] = []
+        for item in updates.institutions:
+            ops.append(
+                UpdateInstitutionRegimeOp(
+                    org_id=item.org_id,
+                    operating_mode=item.operating_mode,
+                    transparency_mode=item.transparency_mode,
+                    access_mode=item.access_mode,
+                    security_mode=item.security_mode,
+                    capture_risk=item.capture_risk,
+                    linked_zone_ids=list(item.linked_zone_ids) if item.linked_zone_ids is not None else None,
+                )
+            )
+        for item in updates.zones:
+            ops.append(
+                UpdateZoneStateOp(
+                    zone_id=item.zone_id,
+                    access_mode=item.access_mode,
+                    transparency_mode=item.transparency_mode,
+                    security_level=item.security_level,
+                )
+            )
+        for item in updates.resource_pools:
+            ops.append(
+                UpdateResourcePoolOp(
+                    resource_id=item.resource_id,
+                    quantity=item.quantity,
+                    status=item.status,
+                    pressure=item.pressure,
+                )
+            )
+        climate = updates.information_climate
+        if climate is not None:
+            ops.append(
+                UpdateInformationClimateOp(
+                    public_mood=climate.public_mood,
+                    oversight_attention=climate.oversight_attention,
+                    media_pressure=climate.media_pressure,
+                    narrative_temperature=climate.narrative_temperature,
+                    active_signals=list(climate.active_signals) if climate.active_signals is not None else None,
+                )
+            )
+        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_environment")
+
     def _personas_cache_path(self) -> Path:
         return self.artifacts.out_dir / "personas.json"
 
@@ -1858,6 +1964,8 @@ class WorldEngine:
                 "name": a.name,
                 "internal": a.internal,
                 "capabilities": list(a.capabilities),
+                "org_id": a.org_id,
+                "zone_id": a.zone_id,
             }
             state.registry.register(
                 EntityRecord(
@@ -1874,6 +1982,8 @@ class WorldEngine:
                 internal=a.internal,
                 persona=a.persona,
                 capabilities=list(a.capabilities),
+                org_id=a.org_id,
+                zone_id=a.zone_id,
                 reputation=float(a.initial_reputation),
                 title=a.initial_title,
                 wants_promotion=a.wants_promotion,
