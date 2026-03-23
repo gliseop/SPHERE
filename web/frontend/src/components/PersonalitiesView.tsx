@@ -168,6 +168,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
   const [genSystemDirty, setGenSystemDirty] = useState(false)
   const [genUserDirty, setGenUserDirty] = useState(false)
   const [loadingInterviewId, setLoadingInterviewId] = useState<string | null>(null)
+  const [generatingInterviewId, setGeneratingInterviewId] = useState<string | null>(null)
   const [viewingInterviewId, setViewingInterviewId] = useState<string | null>(null)
   const [interviewData, setInterviewData] = useState<InterviewData | null>(null)
   const prevEditingIdRef = useRef<string | null>(null)
@@ -340,6 +341,28 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
     if (viewingInterviewId === personalityId) {
       setViewingInterviewId(null)
       setInterviewData(null)
+    }
+  }
+
+  async function handleGenerateInterview(personalityId: string) {
+    setGeneratingInterviewId(personalityId)
+    try {
+      const res = await apiClient.post(`/api/personalities/${personalityId}/interview/generate`, { role: 'чиновник' })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        window.alert(text || 'Не удалось сгенерировать интервью')
+        return
+      }
+      const data: InterviewData = await res.json()
+      setItems((prev) =>
+        Array.isArray(prev)
+          ? prev.map((p) => (p.id === personalityId ? { ...p, has_interview: true } : p))
+          : prev,
+      )
+      setInterviewData(data)
+      setViewingInterviewId(personalityId)
+    } finally {
+      setGeneratingInterviewId(null)
     }
   }
 
@@ -659,6 +682,16 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
                 )}
                 {user?.role === 'admin' && (
                   <>
+                    {p.id && (
+                      <button
+                        className="btn-clipped small"
+                        onClick={() => handleGenerateInterview(p.id!)}
+                        disabled={generatingInterviewId === p.id}
+                        title={p.has_interview ? 'Перегенерировать интервью' : 'Сгенерировать интервью'}
+                      >
+                        {generatingInterviewId === p.id ? '...' : '🧠'}
+                      </button>
+                    )}
                     <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_PERSONALITY, ...p })} title="Редактировать">✎</button>
                     {p.id && (
                       <button className="btn-clipped danger small" onClick={() => handleDelete(p.id!)} title="Удалить">✕</button>
@@ -675,14 +708,24 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
         <div className="hud-panel" style={{ marginTop: '1rem', padding: '1rem' }}>
           <div className="corner tl" /><div className="corner tr" />
           <div className="corner bl" /><div className="corner br" />
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
-              Интервью
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>
+                Интервью
               {interviewData.protocol_version === 'v2' && (
                 <span className="badge small" style={{ marginLeft: '0.5rem' }}>v2 (30 вопросов)</span>
               )}
             </span>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
+              {user?.role === 'admin' && (
+                <button
+                  className="btn-clipped small"
+                  onClick={() => handleGenerateInterview(viewingInterviewId)}
+                  disabled={generatingInterviewId === viewingInterviewId}
+                  title="Перегенерировать интервью"
+                >
+                  {generatingInterviewId === viewingInterviewId ? '...' : 'Обновить'}
+                </button>
+              )}
               {user?.role === 'admin' && (
                 <button
                   className="btn-clipped danger small"

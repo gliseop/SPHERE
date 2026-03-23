@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getToken } from '../utils/apiClient'
-import type { GraphEdge, GraphNode, RunInfo, SimEvent, SimMeta, WsMessage } from '../types'
+import type { GraphEdge, GraphNode, RunInfo, SimEnvironment, SimEvent, SimMeta, WsMessage } from '../types'
 
 export type SimMode = 'idle' | 'playback' | 'live'
 
@@ -10,6 +10,7 @@ export interface SimState {
   events: SimEvent[]
   nodes: GraphNode[]
   edges: GraphEdge[]
+  environment: SimEnvironment
   currentRound: number | null
   done: boolean
   error: string | null
@@ -21,6 +22,7 @@ const INITIAL_STATE: SimState = {
   events: [],
   nodes: [],
   edges: [],
+  environment: { queues: [], active_signals: [] },
   currentRound: null,
   done: false,
   error: null,
@@ -171,7 +173,12 @@ export function useSimulation() {
         return
       }
       if (msg.type === 'graph_state') {
-        setState((prev) => ({ ...prev, nodes: msg.nodes, edges: msg.edges }))
+        setState((prev) => ({
+          ...prev,
+          nodes: msg.nodes,
+          edges: msg.edges,
+          environment: msg.environment ?? prev.environment,
+        }))
         return
       }
       // ping / unknown

@@ -467,6 +467,62 @@ class _DeferredPendingReplyProvider(MockLLMProvider):
         )
 
 
+class _SameTickPendingFollowupProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сгенерируй действия на этот тик." not in user:
+            return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+        tick = 0
+        marker = "Раунд (tick): "
+        if marker in user:
+            tick = int(user.split(marker, 1)[1].split("\n", 1)[0])
+        if "(agent:core_1)." in user and tick == 0:
+            return StructuredLLMResponse(
+                data={
+                    "actions": [
+                        {
+                            "type": "send_message",
+                            "to_id": "agent:peripheral",
+                            "text": "Нужно быстро ответить в этом же тике.",
+                            "private": True,
+                            "justification": "Создаёт immediate follow-up obligation.",
+                        }
+                    ]
+                },
+                model="mock",
+            )
+        if "(agent:peripheral)." in user and tick == 0:
+            if "Ожидающие локальные обязательства и follow-up:" in user:
+                return StructuredLLMResponse(
+                    data={
+                        "actions": [
+                            {
+                                "type": "send_message",
+                                "to_id": "agent:core_1",
+                                "text": "Отвечаю сразу, не дожидаясь следующего тика.",
+                                "private": True,
+                                "justification": "Закрывает same-tick pending follow-up.",
+                            }
+                        ]
+                    },
+                    model="mock",
+                )
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "ждёт follow-up"}]},
+                model="mock",
+            )
+        return StructuredLLMResponse(
+            data={"actions": [{"type": "noop", "justification": "idle"}]},
+            model="mock",
+        )
+
+
 class _QueueRecoveryProvider(MockLLMProvider):
     def generate_structured(
         self,
@@ -1486,6 +1542,71 @@ def test_pending_interaction_can_reactivate_peripheral_agent_after_event_window(
         for row in event_rows
     )
     assert state.pending_interactions
+    assert any(item.status == "completed" for item in state.pending_interactions.values())
+
+
+def test_same_tick_pending_followup_can_close_without_waiting_next_tick(tmp_path: Path) -> None:
+    provider = _SameTickPendingFollowupProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "same-tick-followup",
+            "ticks": 1,
+            "runtime": {
+                "micro_reaction_rounds": 1,
+                "micro_reaction_max_agents_per_round": 3,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:core_1",
+                    "name": "Core 1",
+                    "internal": True,
+                    "persona": "Руководитель, который требует быстрый ответ.",
+                    "capabilities": ["message"],
+                },
+                {
+                    "agent_id": "agent:peripheral",
+                    "name": "Peripheral",
+                    "internal": True,
+                    "persona": "Исполнитель, способный закрыть локальный follow-up в этом же тике.",
+                    "capabilities": ["message"],
+                },
+            ],
+            "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    event_rows = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(
+        row.get("event_type") == "pending_interaction_due"
+        and row.get("payload", {}).get("category") == "reply"
+        and row.get("tick") == 0
+        for row in event_rows
+    )
+    assert any(
+        row.get("event_type") == "message_sent"
+        and row.get("actor_id") == "agent:core_1"
+        and row.get("tick") == 0
+        for row in event_rows
+    )
+    assert any(
+        row.get("event_type") == "message_sent"
+        and row.get("actor_id") == "agent:peripheral"
+        and row.get("tick") == 0
+        for row in event_rows
+    )
+    assert any(
+        row.get("event_type") == "pending_interaction_completed"
+        and row.get("payload", {}).get("category") == "reply"
+        for row in event_rows
+    )
     assert any(item.status == "completed" for item in state.pending_interactions.values())
 
 

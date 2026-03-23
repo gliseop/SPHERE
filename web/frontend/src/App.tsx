@@ -8,6 +8,7 @@ import { ActivityFeed } from './components/ActivityFeed'
 import { RunSelector } from './components/RunSelector'
 import { AgentList } from './components/AgentList'
 import { ScenarioPanel } from './components/ScenarioPanel'
+import { EnvironmentPanel } from './components/EnvironmentPanel'
 import { ScenariosView } from './components/ScenariosView'
 import { RunsView } from './components/RunsView'
 import { AgentTypesView } from './components/AgentTypesView'
@@ -72,7 +73,7 @@ export default function App() {
     external?: boolean
     stop_supported?: boolean
   }>>([])
-  const [rightTab, setRightTab] = useState<'activity' | 'scenario'>('activity')
+  const [rightTab, setRightTab] = useState<'activity' | 'scenario' | 'environment'>('activity')
   const [scenarioConfig, setScenarioConfig] = useState<Record<string, unknown> | null>(null)
   const [currentRunName, setCurrentRunName] = useState<string | null>(null)
 
@@ -286,6 +287,18 @@ export default function App() {
                 <span className="hud-header-stat-label">Агентов</span>
                 <span className="hud-header-stat-value">{state.nodes.length}</span>
               </div>
+              <div className="hud-header-stat">
+                <span className="hud-header-stat-label">Очереди</span>
+                <span className={`hud-header-stat-value${state.environment.queues.length > 0 ? ' accent' : ''}`}>
+                  {state.environment.queues.length}
+                </span>
+              </div>
+              <div className="hud-header-stat">
+                <span className="hud-header-stat-label">Сигналы</span>
+                <span className={`hud-header-stat-value${state.environment.active_signals.length > 0 ? ' danger' : ''}`}>
+                  {state.environment.active_signals.length}
+                </span>
+              </div>
 
               {state.done && <span className="badge success">✓ Завершено</span>}
               {state.error && <span className="badge danger">⚠ Ошибка</span>}
@@ -453,6 +466,23 @@ export default function App() {
                     >
                       Сценарий
                     </button>
+                    <button
+                      onClick={() => setRightTab('environment')}
+                      style={{
+                        flex: 1,
+                        padding: '0.35rem 0.5rem',
+                        fontSize: '0.65rem',
+                        fontWeight: rightTab === 'environment' ? 600 : 400,
+                        color: rightTab === 'environment' ? 'var(--accent)' : 'var(--text-secondary)',
+                        background: 'transparent',
+                        border: 'none',
+                        borderBottom: rightTab === 'environment' ? '2px solid var(--accent)' : '2px solid transparent',
+                        cursor: 'pointer',
+                        transition: 'color 0.15s, border-color 0.15s',
+                      }}
+                    >
+                      Среда
+                    </button>
                   </div>
                   {rightTab === 'activity' && (
                     <ActivityFeed
@@ -468,6 +498,9 @@ export default function App() {
                   )}
                   {rightTab === 'scenario' && (
                     <ScenarioPanel runName={currentRunName} />
+                  )}
+                  {rightTab === 'environment' && (
+                    <EnvironmentPanel environment={state.environment} />
                   )}
                 </>
               )}

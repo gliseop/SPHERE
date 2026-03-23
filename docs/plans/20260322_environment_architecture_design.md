@@ -46,6 +46,10 @@
 - deterministic bridge от queue-driven internal response obligations к runtime-auditor / governance escalation.
 - deterministic truth/evaluation bridge для queue-driven governance signals.
 - environment-sidecar observability (`environment_summary.json`, `environment_timeline.jsonl`) и graph-state environment slice для визуализации усиленной среды.
+- frontend-consumption этого environment slice через отдельный HUD-tab `Среда`.
+- устранение последних legacy `501` в web AI routes: интервью личности и secondary-agent generation теперь работают поверх текущего `magistry_lc`-контура.
+- stricter-but-more-robust post-hoc governance evaluation: normalised evidence matching + case-level metrics.
+- same-tick pending follow-up sweep, чтобы локальные obligations могли закрываться внутри текущего тика, а не только на следующем глобальном шаге.
 
 Следовательно, документ больше не описывает только далёкую цель: часть первого и второго слоя уже материализована в движке.
 

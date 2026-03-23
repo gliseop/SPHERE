@@ -92,6 +92,8 @@ flowchart TD
 
 Дополнительно движок поддерживает first-class очередь `pending_interactions`: короткие локальные обязательства, переживающие тик и доходящие до адресата как `pending_interaction_due`. Эта очередь пополняется детерминированно из самих событий мира (например, private message, документарный follow-up, ресурсное давление, audit-запрос), помогает будить периферию уже после выпадения исходного события из обычного activation-window и частично ослабляет жёсткость глобального тика без отказа от детерминированного apply.
 
+Если включены `runtime.micro_reaction_rounds`, часть локальных категорий `pending_interactions` теперь может доезжать до `pending_interaction_due` уже в том же тике. После основного apply движок делает same-tick follow-up sweep и даёт адресатам короткое окно закрыть reply / queue / artifact-follow-up без обязательного ожидания следующего глобального шага.
+
 Материальный слой среды теперь не ограничивается только `res:*`. Движок также поддерживает `environment.operational_queues`: backlog, задержки и пропускную способность локальных процессов. Ресурсное давление может детерминированно переводить такие очереди в `strained` / `overloaded`, эмитить `environment_operational_queue_updated`, создавать `queue_alert`-артефакты и через них давить на релевантных агентов.
 
 Поверх queue-layer добавлен и простой local-process контур: перегруженная очередь может детерминированно порождать `complaint_wave` и `publication` артефакты, дописывать service-degradation сигнал в `information_climate.active_signals` и эмитить публичные `world_event` о росте задержек и жалоб. Это делает backlog не только числом в состоянии, но и источником наблюдаемых последствий для внешней среды.
@@ -100,7 +102,7 @@ flowchart TD
 
 На следующем уровне этот же queue-process уже умеет materialize external actors: при тяжёлой service-degradation и включённом `runtime.allow_runtime_spawn` движок может детерминированно порождать внешнего complainant и/или reporter, привязанных к конкретной очереди и организации/зоне. Это превращает service-degradation из чисто средового сигнала в источник новой агентности мира.
 
-Спавн не остаётся пустым. Для таких акторов движок сразу seed’ит локальные `pending_interactions` (`queue_escalation`, `queue_publication_push`, `issue_coordination`) и неформальную связь `shared_issue`, поэтому уже на следующем тике они могут начать собственную action-chain: жалоба в организацию, координация между собой, публикация в публичный канал.
+Спавн не остаётся пустым. Для таких акторов движок сразу seed’ит локальные `pending_interactions` (`queue_escalation`, `queue_publication_push`, `issue_coordination`) и неформальную связь `shared_issue`, поэтому они могут начать собственную action-chain: жалоба в организацию, координация между собой, публикация в публичный канал. При включённых local reaction windows часть такого follow-up теперь может материализоваться уже в рамках того же тика.
 
 Этот контур теперь замыкается обратно в ядро организации. Когда complainant или reporter действительно совершают свои действия, движок детерминированно материализует:
 
@@ -231,9 +233,11 @@ flowchart TD
 - `f1`;
 - `semantic_true_positive` / `semantic_false_positive` / `semantic_false_negative`;
 - `semantic_precision` / `semantic_recall` / `semantic_f1`;
+- `case_true_positive` / `case_false_positive` / `case_false_negative`;
+- `case_precision` / `case_recall` / `case_f1`;
 - сводку `by_violation_type`.
 
-Строгая часть (`true_positive`, `precision`, `recall`) по-прежнему опирается на exact-match baseline, но exact-match теперь сравнивает уже нормализованный `violation_type` и richer `evidence_refs` / counterparty-поля. Semantic-часть использует finding matcher: subject/target/evidence overlap + `risk_tags` + similarity `summary/mechanism`.
+Строгая часть (`true_positive`, `precision`, `recall`) по-прежнему опирается на exact-match baseline, но exact-match теперь сравнивает уже нормализованный `violation_type`, counterparty-поля и core-signature evidence, а не полный сырой JSON `evidence_refs`. Semantic-часть использует finding matcher: subject/target/evidence overlap + `risk_tags` + similarity `summary/mechanism`. Поверх этого case-level слой схлопывает повторяющиеся эпизоды в кейс по `subject + violation_type + counterparty`, чтобы governance-eval был устойчивее к серии близких runtime/truth-эпизодов.
 
 ## Операции состояния (StateOp → Event)
 

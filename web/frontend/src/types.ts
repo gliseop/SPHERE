@@ -30,6 +30,22 @@ export interface GraphEdge {
   strength: number
 }
 
+export interface EnvironmentQueue {
+  queue_id: string
+  backlog: number
+  capacity_per_tick: number
+  avg_delay_ticks: number
+  status: string
+  pressure: string
+  owner_org_id: string
+  zone_id: string
+}
+
+export interface SimEnvironment {
+  queues: EnvironmentQueue[]
+  active_signals: string[]
+}
+
 export interface SimMeta {
   scenario: string
   governance: string
@@ -43,7 +59,7 @@ export type WsMessage =
   | ({ type: 'meta' } & SimMeta)
   | { type: 'event'; data: SimEvent }
   | { type: 'events'; data: SimEvent[] }
-  | { type: 'graph_state'; nodes: GraphNode[]; edges: GraphEdge[] }
+  | { type: 'graph_state'; nodes: GraphNode[]; edges: GraphEdge[]; environment?: SimEnvironment }
   | { type: 'done' }
   | { type: 'ping'; t?: number }
   | { type: 'error'; message: string }

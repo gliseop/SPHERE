@@ -101,6 +101,20 @@ from .llm import EmbeddingProvider, LLMProvider, create_embedding_provider
 
 logger = logging.getLogger(__name__)
 
+_SAME_TICK_PENDING_CATEGORIES = frozenset(
+    {
+        "reply",
+        "artifact_follow_up",
+        "resource_pressure",
+        "queue_pressure",
+        "queue_escalation",
+        "queue_publication_push",
+        "issue_coordination",
+        "external_queue_complaint_response",
+        "media_response",
+    }
+)
+
 
 @dataclass(slots=True)
 class RunArtifacts:
@@ -315,6 +329,7 @@ class WorldEngine:
                 tick_events.extend(pending_expired)
             daily_contexts: dict[str, AgentDailyContext] = {}
             scene_hooks_by_agent: dict[str, list[SceneHook]] = {}
+            already_acted: set[str] = set()
             current_date, current_time = self._world_time_labels(tick=state.tick)
 
             scripted_events = self._emit_scripted_events(
@@ -704,6 +719,16 @@ class WorldEngine:
             )
             if pending_update_events:
                 tick_events.extend(pending_update_events)
+            same_tick_followups = await self._run_same_tick_pending_followups(
+                state=state,
+                runners=runners,
+                arbiter=arbiter,
+                event_log=event_log,
+                events_history=events_history,
+                tick_events=tick_events,
+            )
+            if same_tick_followups:
+                tick_events.extend(same_tick_followups)
 
             self._refresh_story_states(state=state, tick_events=tick_events)
 
@@ -2638,12 +2663,11 @@ class WorldEngine:
                     if len(state.agents) + queued_agent_spawns >= self.cfg.runtime.max_agents:
                         break
 
-            earliest_tick = state.tick + 1
-            due_tick = self._pending_due_tick(earliest_tick=earliest_tick)
             complainant_id = queue_role_agent_ids.get((queue.queue_id, "complainant"))
             reporter_id = queue_role_agent_ids.get((queue.queue_id, "reporter"))
 
             if complaint_active and complainant_id:
+                earliest_tick, due_tick = self._pending_schedule_for_category(state=state, category="queue_escalation")
                 interaction_id = self._make_pending_interaction_id("queue_escalation", complainant_id, queue.queue_id)
                 ops.append(
                     UpsertPendingInteractionOp(
@@ -2665,6 +2689,10 @@ class WorldEngine:
                 )
 
             if publication_active and reporter_id:
+                earliest_tick, due_tick = self._pending_schedule_for_category(
+                    state=state,
+                    category="queue_publication_push",
+                )
                 interaction_id = self._make_pending_interaction_id("queue_publication_push", reporter_id, queue.queue_id)
                 ops.append(
                     UpsertPendingInteractionOp(
@@ -2698,7 +2726,10 @@ class WorldEngine:
                         source="queue_process",
                     )
                 )
-                coordination_due = self._pending_due_tick(earliest_tick=earliest_tick)
+                earliest_tick, coordination_due = self._pending_schedule_for_category(
+                    state=state,
+                    category="issue_coordination",
+                )
                 ops.append(
                     UpsertPendingInteractionOp(
                         actor_id=None,
@@ -2878,6 +2909,16 @@ class WorldEngine:
         horizon = max(0, int(self.cfg.runtime.pending_interaction_horizon_ticks))
         return int(earliest_tick) + max(0, horizon)
 
+    def _pending_schedule_for_category(
+        self,
+        *,
+        state: WorldState,
+        category: str,
+    ) -> tuple[int, int]:
+        same_tick_enabled = int(self.cfg.runtime.micro_reaction_rounds) > 0
+        earliest_tick = int(state.tick) if (same_tick_enabled and category in _SAME_TICK_PENDING_CATEGORIES) else int(state.tick) + 1
+        return earliest_tick, self._pending_due_tick(earliest_tick=earliest_tick)
+
     def _queue_process_context_for_agent(
         self,
         *,
@@ -2980,13 +3021,12 @@ class WorldEngine:
     ) -> list[StateOp]:
         payload = event.payload or {}
         ops: list[StateOp] = []
-        earliest_tick = int(state.tick) + 1
-        due_tick = self._pending_due_tick(earliest_tick=earliest_tick)
 
         if event.event_type == "message_sent" and bool(payload.get("private", True)):
             actor_id = str(event.actor_id or "").strip()
             target_id = str(payload.get("to_id") or "").strip()
             if actor_id in state.agents and target_id in state.agents and actor_id != target_id:
+                earliest_tick, due_tick = self._pending_schedule_for_category(state=state, category="reply")
                 interaction_id = self._make_pending_interaction_id("reply", target_id, actor_id)
                 ops.append(
                     UpsertPendingInteractionOp(
@@ -3026,6 +3066,7 @@ class WorldEngine:
                         target_ids.add(aid)
             target_ids.discard(str(event.actor_id or "").strip())
             priority = "high" if artifact.status in {"new", "revised", "urgent"} else "normal"
+            earliest_tick, due_tick = self._pending_schedule_for_category(state=state, category="artifact_follow_up")
             for target_id in sorted(target_ids):
                 interaction_id = self._make_pending_interaction_id("artifact", target_id, artifact_id)
                 ops.append(
@@ -3062,6 +3103,7 @@ class WorldEngine:
             if not is_pressure:
                 return ops
             priority = "high" if pool.quantity <= 0 or pool.status in {"critical", "depleted", "exhausted"} else "normal"
+            earliest_tick, due_tick = self._pending_schedule_for_category(state=state, category="resource_pressure")
             for aid, agent in sorted(state.agents.items()):
                 if agent.org_id != pool.owner_org_id or "work" not in agent.capabilities:
                     continue
@@ -3100,6 +3142,7 @@ class WorldEngine:
             if not is_pressure:
                 return ops
             priority = "high" if queue.status == "overloaded" or queue.avg_delay_ticks >= 2 else "normal"
+            earliest_tick, due_tick = self._pending_schedule_for_category(state=state, category="queue_pressure")
             for aid, agent in sorted(state.agents.items()):
                 if "work" not in agent.capabilities:
                     continue
@@ -3134,6 +3177,7 @@ class WorldEngine:
         if event.event_type in {"audit_explanation_requested", "audit_documents_requested"}:
             target_id = str(payload.get("subject_agent_id") or payload.get("target_agent_id") or "").strip()
             if target_id in state.agents:
+                earliest_tick, due_tick = self._pending_schedule_for_category(state=state, category="audit_response")
                 audit_due_tick = payload.get("response_due_tick")
                 interaction_id = self._make_pending_interaction_id("audit", target_id, str(payload.get("case_id") or event.event_type))
                 ops.append(
@@ -3170,6 +3214,10 @@ class WorldEngine:
             current_climate = state.environment.information_climate
 
             if actor.population_role == "queue_complainant" and not private and to_id.startswith("org:"):
+                earliest_tick, due_tick = self._pending_schedule_for_category(
+                    state=state,
+                    category="external_queue_complaint_response",
+                )
                 artifact_id = make_id(EntityKind.ARTIFACT, f"queue_external_complaint_{queue_slug}")
                 title = f"Внешняя жалоба по очереди: {queue.title}"
                 summary = f"{actor.name} направил жалобу по {queue.title}. {text}".strip()
@@ -3229,6 +3277,7 @@ class WorldEngine:
                 return ops
 
             if actor.population_role == "queue_reporter" and not private and (to_id.startswith("chan:") or to_id.startswith("org:")):
+                earliest_tick, due_tick = self._pending_schedule_for_category(state=state, category="media_response")
                 artifact_id = make_id(EntityKind.ARTIFACT, f"queue_press_inquiry_{queue_slug}")
                 title = f"Публичный запрос по очереди: {queue.title}"
                 summary = f"{actor.name} вынес тему задержек по {queue.title} в публичное поле. {text}".strip()
@@ -4003,6 +4052,10 @@ class WorldEngine:
                 _push(str(payload.get("target_agent_id") or payload.get("subject_agent_id") or ""))
                 continue
 
+            if event.event_type == "pending_interaction_due":
+                _push(str(payload.get("target_agent_id") or ""))
+                continue
+
             if event.event_type == "environment_institution_updated":
                 org_id = str(payload.get("org_id") or "")
                 for aid, agent in sorted(state.agents.items()):
@@ -4058,8 +4111,9 @@ class WorldEngine:
         events_history: list[Event],
         tick_events: list[Event],
         already_acted: set[str],
+        rounds_override: int | None = None,
     ) -> list[Event]:
-        rounds = int(self.cfg.runtime.micro_reaction_rounds)
+        rounds = int(self.cfg.runtime.micro_reaction_rounds if rounds_override is None else rounds_override)
         limit = int(self.cfg.runtime.micro_reaction_max_agents_per_round)
         if rounds <= 0 or limit <= 0:
             return []
@@ -4111,6 +4165,60 @@ class WorldEngine:
                 emitted.extend(reaction_events)
 
             already_acted.update([aid for aid, acts in proposed.items() if acts])
+
+        return emitted
+
+    async def _run_same_tick_pending_followups(
+        self,
+        *,
+        state: WorldState,
+        runners: dict[str, AgentRunner],
+        arbiter: Arbiter,
+        event_log: EventLog,
+        events_history: list[Event],
+        tick_events: list[Event],
+    ) -> list[Event]:
+        rounds = int(self.cfg.runtime.micro_reaction_rounds)
+        if rounds <= 0:
+            return []
+
+        emitted: list[Event] = []
+        for _ in range(rounds):
+            prior_emitted = list(emitted)
+            due_events = self._emit_pending_interaction_due_events(
+                state=state,
+                event_log=event_log,
+            )
+            if not due_events:
+                break
+            emitted.extend(due_events)
+
+            reaction_events = await self._run_micro_reaction_rounds(
+                state=state,
+                runners=runners,
+                arbiter=arbiter,
+                event_log=event_log,
+                events_history=list(events_history) + list(tick_events) + prior_emitted,
+                tick_events=due_events,
+                already_acted=set(),
+                rounds_override=1,
+            )
+            if reaction_events:
+                emitted.extend(reaction_events)
+                network_events = self._apply_interaction_network_updates(
+                    state=state,
+                    tick_events=reaction_events,
+                    event_log=event_log,
+                )
+                if network_events:
+                    emitted.extend(network_events)
+                pending_events = self._apply_pending_interaction_updates(
+                    state=state,
+                    tick_events=list(reaction_events) + list(network_events),
+                    event_log=event_log,
+                )
+                if pending_events:
+                    emitted.extend(pending_events)
 
         return emitted
 

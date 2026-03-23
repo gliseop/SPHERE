@@ -130,7 +130,7 @@ graph TB
 | Как пишется truth-layer | `truth.py` → deterministic truth records в `truth.jsonl` |
 | Как считается post-hoc evaluation | `evaluation.py` → precision/recall runtime-аудита vs truth |
 | Как считаются fidelity-метрики | `fidelity.py` → temporal/identity/phantom/bureaucratic sidecar |
-| Как собирается средовая телеметрия | `engine.py` → `environment_summary.json` / `environment_timeline.jsonl`, `web/backend/routes/runs.py` → REST/export |
+| Как собирается средовая телеметрия | `engine.py` → `environment_summary.json` / `environment_timeline.jsonl`, `web/backend/routes/runs.py` → REST/export, `web/frontend/src/components/EnvironmentPanel.tsx` → HUD-визуализация |
 | Как оракул и freeform truth анализируют нарушения | `oracle.py` → `ViolationOracle` + `FreeformTruthRecorder` |
 | Как устроена память агента | `memory.py` → working buffer + long-term hybrid index |
 | Как работает гибридный поиск | `memory.py` (retrieval) + `bm25.py` (лексический) + `embeddings.py` (векторный) |

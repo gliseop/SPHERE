@@ -282,6 +282,8 @@ scripted_events:
 - эмитить `pending_interaction_due`, когда локальное обязательство доходит до адресата;
 - закрывать его через `pending_interaction_completed` или `pending_interaction_expired`.
 
+Если `runtime.micro_reaction_rounds > 0`, часть локальных категорий (`reply`, `artifact_follow_up`, `resource_pressure`, `queue_pressure`, `queue_escalation`, `queue_publication_push`, `issue_coordination`, `external_queue_complaint_response`, `media_response`) может переходить в `pending_interaction_due` уже в том же тике и закрываться через same-tick follow-up без ожидания следующего глобального шага.
+
 ### Ключевые поля `memory`
 
 | Поле | Тип | Назначение |
@@ -837,13 +839,21 @@ JSON-файлы с результатами нарративных интерв�
   "semantic_precision": 0.75,
   "semantic_recall": 1.0,
   "semantic_f1": 0.8571,
+  "case_true_positive": 2,
+  "case_false_positive": 0,
+  "case_false_negative": 1,
+  "case_precision": 1.0,
+  "case_recall": 0.6667,
+  "case_f1": 0.8,
   "by_violation_type": {
     "self_reputation_award": {"truth": 1, "signals": 1, "tp": 1, "fp": 0, "fn": 0}
   }
 }
 ```
 
-При сопоставлении runtime-сигналов с truth-layer сохраняется strict baseline (exact match), но дополнительно считается semantic matching:
+При сопоставлении runtime-сигналов с truth-layer сохраняется strict baseline, но он теперь нормализует `evidence_refs` до core-signature и меньше зависит от шумовых полей внутри evidence. Поверх него дополнительно считаются:
+
+- semantic matching:
 
 - совпадение subject;
 - temporal proximity;
@@ -851,6 +861,11 @@ JSON-файлы с результатами нарративных интерв�
 - overlap по `evidence_refs`;
 - overlap по `risk_tags`;
 - similarity `summary + mechanism`.
+
+- case-level matching:
+
+- схлопывание повторяющихся episode-level finding’ов в кейс по `subject + violation_type + counterparty`;
+- отдельные `case_*` метрики для более устойчивой governance-оценки, когда один и тот же кейс даёт несколько близких runtime/truth-эпизодов.
 
 ### Fidelity sidecar (`fidelity.json`)
 

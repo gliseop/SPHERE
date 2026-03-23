@@ -41,6 +41,10 @@
 - [x] Увеличение плотности периферийной агентности вокруг core-акторов.
 - [x] Ослабление жёсткости глобального тика и переход к более живому temporal/runtime-контуру.
 - [x] Углубление материальных и документарных контуров среды.
+- [x] Вывод environment telemetry в web UI через отдельный HUD-tab `Среда`.
+- [x] Завершение web-миграции AI routes: устранены legacy `501` для генерации интервью и secondary agents.
+- [x] Усиление post-hoc governance-оценки: strict evidence normalization + case-level metrics в `evaluation.json`.
+- [x] Same-tick pending follow-up sweep для reply/queue/document локальных обязательств при включённых reaction windows.
 - [x] Расширение неформальных сетей и richer information climate.
 - [x] Новые средства наблюдаемости и визуализации усиленной среды.
 

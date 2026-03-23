@@ -102,7 +102,7 @@ MAGISTRY/
 │   │       ├── agent_types.py  # CRUD библиотек типов агентов
 │   │       ├── personalities.py # CRUD личностей и интервью
 │   │       ├── governance.py   # CRUD пользовательских governance modes
-│   │       └── ai.py           # LLM-генерация personality/agent-type + 501 legacy routes
+│   │       └── ai.py           # LLM-генерация personality/agent-type/secondary agents
 │   └── frontend/
 │       ├── package.json        # React/Vite/Playwright/Tailwind toolchain
 │       ├── playwright/
@@ -117,7 +117,8 @@ MAGISTRY/
 │           ├── types.ts        # Типы frontend
 │           ├── pages/
 │           │   └── LoginPage.tsx # Экран логина
-│           ├── components/     # SimGraph, RunsView, ScenarioPanel, ActivityFeed и др.
+│           ├── components/     # SimGraph, RunsView, ScenarioPanel, ActivityFeed, EnvironmentPanel и др.
+│           │   └── EnvironmentPanel.tsx # HUD-панель среды: очереди и активные сигналы
 │           ├── hooks/          # useAuth, useSimulation
 │           ├── utils/          # apiClient, payload, time
 │           └── styles/
@@ -287,7 +288,7 @@ cd web/frontend && npm run test:e2e
 
 ## Известные особенности
 
-- **Зависимость от OpenAI-совместимого API**: для запуска симуляции и LLM-генерации через работающие AI-эндпоинты (`generate-personality`, `generate-agent-type`) требуется `OPENAI_API_KEY` или совместимый эндпоинт. Тесты используют `MockLLMProvider` и не требуют ключа.
+- **Зависимость от OpenAI-совместимого API**: для запуска симуляции и LLM-генерации через работающие AI-эндпоинты (`generate-personality`, `generate-agent-type`, `interview/generate`, `secondary-agents`) требуется `OPENAI_API_KEY` или совместимый эндпоинт. Тесты используют `MockLLMProvider` и не требуют ключа.
 - **Стоимость LLM-вызовов**: в текущем исследовательском контуре стоимость считается приемлемой. При проектировании worldgen, вторичных агентов, enrichment и других когнитивных контуров не нужно по умолчанию поднимать вопрос цены или упрощать архитектуру ради экономии токенов; первичный критерий — исследовательская ценность и правдоподобие среды.
 - **Дешёвые модели и плотная ecology**: наличие очень дешёвых моделей делает допустимым большое количество мелких параллельных агентов. Неприемлемо не само масштабирование агентности, а замена потенциально полноценных акторов жёстко зашитыми суррогатами только ради упрощения рантайма.
 - **Эмбеддинги**: в обычных прогонах по умолчанию используются реальные embeddings через OpenAI-совместимый API; при отсутствии ключа движок деградирует в BM25-only retrieval. `MockEmbeddingProvider` и `embeddings_mock=true` оставлены для тестов и дешёвых smoke-прогонов.
@@ -304,7 +305,7 @@ cd web/frontend && npm run test:e2e
 - **Неформальные связи**: `environment.informal_links` теперь хранит латентные связи между агентами и может обновляться как из конфига/worldgen, так и детерминированно по самому ходу симуляции (например, через private contact и coordination).
 - **Population blueprints**: `world.environment.population_blueprints` позволяет систематически наращивать периферийную агентность вокруг `org:*` / `zone:*`. На текущем этапе поддерживаются bootstrap-заполнение среды и elastic-доращивание после `environment_change`.
 - **Local reaction windows**: поверх основного батча действий движок теперь может запускать локальные reaction windows внутри того же тика (`runtime.micro_reaction_rounds`). Они дают ограниченному набору агентов быстрый follow-up на события текущего тика и делают runtime менее жёстко синхронным даже без полной замены tick-engine.
-- **Pending follow-up queue**: `WorldState.pending_interactions` хранит короткие локальные обязательства и ожидающие ответы, переживающие один или несколько тиков. Движок умеет детерминированно создавать их из приватных сообщений, документарных и ресурсных сдвигов, эмитить `pending_interaction_due`, показывать их агенту в prompt и реактивировать периферию даже после выпадения исходного события из обычного activation-window.
+- **Pending follow-up queue**: `WorldState.pending_interactions` хранит короткие локальные обязательства и ожидающие ответы, переживающие один или несколько тиков. Движок умеет детерминированно создавать их из приватных сообщений, документарных и ресурсных сдвигов, эмитить `pending_interaction_due`, показывать их агенту в prompt и реактивировать периферию даже после выпадения исходного события из обычного activation-window. При включённых `micro_reaction_rounds` часть локальных категорий теперь может срабатывать и закрываться уже в том же тике через same-tick follow-up sweep.
 - **Risky personal contexts**: `agent_daily_context` теперь может нести не только общий фон, но и richer pressure-поля (`private_pressure`, `opportunity`, `exposure_risk`). Это считается допустимым средовым давлением, а не прямой директивой агенту.
 - **`request_entity` по умолчанию внутренний**: при `runtime.request_entity_internal_only=true` внешние/ecology-акторы не могут бесконтрольно разворачивать публичную инфраструктуру (`chan:*`/`org:*`) через `request_entity`.
 - **Runtime-аудитор**: `RuntimeAuditor` существует только как отдельный runtime governance-layer, а не как narrative-agent. Он сочетает deterministic baseline rules с LLM-findings, нормализует `violation_type`, детерминированно привязывает `evidence_refs`, агрегирует повторяющиеся finding’и в стабильные `audit_case:*`, умеет ставить response-deadline на объяснения/документы и эскалировать просроченные кейсы в monitoring / collegial review. Queue-driven external complaints и media-response obligations теперь тоже входят в baseline-аудит как `service_degradation_response_ignored`, так что service-degradation влияет уже и на governance/escalation path.
@@ -313,14 +314,15 @@ cd web/frontend && npm run test:e2e
 - **Deterministic truth + freeform truth**: `truth.jsonl` остаётся формальным baseline для evaluation, а `truth_freeform.jsonl` — отдельным LLM-sidecar для richer post-hoc записи нарушений в свободной форме по схеме. Эти два слоя не смешиваются.
 - **Unified findings**: runtime audit, deterministic truth и freeform truth постепенно приводятся к общей finding-структуре (`summary`, `mechanism`, `beneficiary`, `risk_tags`, `evidence_refs`). Exact `violation_type` больше не считается единственным носителем смысла.
 - **Tender-domain truth heuristics**: deterministic truth-layer теперь может фиксировать не только nomination/reputation-паттерны, но и некоторые доменные серые зоны вроде `preferential_treatment_for_connected_actor`, `non_escalation_under_pressure`, `partial_disclosure_under_deadline_pressure`.
-- **Semantic evaluation**: `evaluation.json` теперь содержит не только strict метрики exact-match, но и semantic matching (`semantic_true_positive`, `semantic_precision`, `semantic_recall`, `semantic_f1`) через finding matcher.
+- **Semantic + case-level evaluation**: `evaluation.json` теперь содержит не только strict метрики exact-match, но и semantic matching (`semantic_true_positive`, `semantic_precision`, `semantic_recall`, `semantic_f1`) через finding matcher, а также case-level слой (`case_true_positive`, `case_precision`, `case_recall`, `case_f1`), который схлопывает повторяющиеся эпизоды по `subject + violation_type + counterparty`.
 - **Status/truth/evaluation/fidelity sidecars**: каждый прогон может писать `status.json` (heartbeat и финальный статус `running`/`finished`/`failed`), `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина), `summary.json` (разделённая сводка), а также `environment_summary.json` и `environment_timeline.jsonl` для отдельной телеметрии усиленной среды.
 - **DAO по умолчанию**: self-nomination и self-vote цели отключены; нормальный путь для кандидата — `respond_nomination`, а `vote_closed` пишет детерминированную причину результата. `governance.position_policy` в v1 поддерживает только `dao`; `auto` отклоняется при валидации.
 - **Веб-launcher на `magistry_lc`**: `POST /api/scenarios/{id}/run` и `POST /api/runs/launch` запускают `magistry_lc` как subprocess, пишут артефакты в `results/{run_name}/` и показываются в `/api/runs/active` как обычные API-запуски.
 - **Built-in seed-сценарии**: `seed_s*_g*.json` используются только как backing-файлы для `/api/templates/scenarios/*` и уже хранятся как полноценный `ScenarioConfig`; backend не показывает их в CRUD-списке `/api/scenarios` и не позволяет менять/удалять через сценарные маршруты.
 - **Отказ от legacy web-сценариев**: старый формат JSON-карточек (`name/scenario/governance/agents` без полного `ScenarioConfig`) больше не поддерживается. Web backend сохраняет пользовательские сценарии только как полный `ScenarioConfig`; если `sim_config` пуст, при сохранении сначала материализуется выбранный шаблон `S/G`, а затем поверх него накладываются overrides из UI.
 - **Custom governance modes**: пользовательские `G*`-режимы должны содержать валидный `GovernanceConfig` (в поле `config` или в корне JSON); backend применяет их при подстановке шаблона и round-trip сценария, а не игнорирует как неизвестный `G4+`.
-- **Оставшиеся заглушки web API**: HTTP 501 сохраняется только для `POST /api/personalities/{personality_id}/interview/generate` и `POST /api/ai/secondary-agents`; web UI не должен показывать активные кнопки для этих маршрутов. Маршруты генерации personality/agent-type уже работают через `magistry_lc.llm`.
+- **AI-маршруты web API**: все основные AI-эндпоинты web backend теперь живые: генерация personality, agent-type, interview и secondary agents работает через текущий `magistry_lc.llm` без зависимости от удалённого `magistry_sim`.
+- **Environment telemetry в web UI**: правый HUD-tab `Среда` теперь показывает compact environment slice из `graph_state`: operational queues, их давление/задержки и `information_climate.active_signals`.
 - **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.
 - **Role-based visibility в web API/WS**: `viewer` получает только shared-события (`aud:public` / `aud:internal`); point-to-point private events скрываются, чувствительные payload'ы shared-событий редактируются, а `GET /api/artifacts/{doc_id}` доступен только `admin`. Audience-less legacy event-stream не считается поддерживаемым контрактом API.
 - **Локальные артефакты в рабочем дереве**: в репозитории могут присутствовать `results/`, `web/backend/users.db`, `web/frontend/dist/`, `web/frontend/node_modules/` и `__pycache__/`. Источником истины при чтении и редактировании считать `src/`, `web/backend/`, `web/frontend/src/`, `docs/`, `tests/`, `data/` и `scenarios/`.
@@ -332,8 +334,6 @@ cd web/frontend && npm run test:e2e
 | Область | Описание |
 |----------|---------|
 | Runtime latency в full-ecology прогонах | Реальные 20-50k-token prompts на `openai/gpt-oss-120b` через OpenRouter дают long-tail latency. Дополнительные факторы: `provider_order=["Groq"]` без latency-aware routing, отсутствие коротких per-role timeout/fallback, не трассируемые embeddings и последовательная `memory`-суммаризация. |
-| Strict audit evaluation | Даже после выравнивания payload/evidence strict exact-match в `evaluation.json` остаётся слишком хрупким на живых прогонах; semantic matching уже даёт сигнал, но exact всё ещё часто уходит в `0 TP`. Нужна дальнейшая нормализация target/evidence или case-level matching. |
-| Слишком синхронный temporal runtime | Локальные reaction windows и pending-follow-up queue уже появились, но мир всё ещё в основном живёт крупными глобальными тиками. Для richer full-ecology среды нужен ещё менее жёсткий temporal/runtime-контур с большим количеством мелких параллельных акторов, локальных очередей и неодновременных процессов без обязательной синхронизации всего мира на каждом шаге. |
 
 ### Завершённые миграции
 
@@ -341,4 +341,4 @@ cd web/frontend && npm run test:e2e
 |----------|---------|
 | Удаление `magistry_sim` | Старый движок удалён целиком. Все нужные модули (`bm25.py`, `llm/`) перенесены в `magistry_lc`. Зависимость через `deps.py` устранена. |
 | Веб-launcher на `magistry_lc` | Запуск и мониторинг прогонов переведены на `magistry_lc` и directory-based артефакты в `results/{run_name}/`, при сохранении совместимости с legacy sidecars. |
-| Веб-эндпоинты после миграции `magistry_sim` | Основные сценарные, runner-, template- и AI-маршруты переведены на `magistry_lc` или локальные библиотеки. Не мигрированы только генерация интервью и вторичных агентов, поэтому эти два маршрута сохраняют HTTP 501. |
+| Веб-эндпоинты после миграции `magistry_sim` | Основные сценарные, runner-, template- и AI-маршруты переведены на `magistry_lc` или локальные библиотеки. Legacy `501` для interview/secondary-agents устранён. |

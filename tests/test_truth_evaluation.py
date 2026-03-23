@@ -602,6 +602,122 @@ def test_evaluate_run_normalizes_equivalent_violation_labels(tmp_path: Path) -> 
     assert summary.semantic_false_negative == 0
 
 
+def test_evaluate_run_strict_match_ignores_non_core_evidence_noise(tmp_path: Path) -> None:
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.append(
+        TruthRecord(
+            tick=3,
+            subject_agent_id="agent:off_1",
+            target_agent_id="agent:off_2",
+            violation_type="nomination_after_private_contact",
+            evidence_refs=[
+                {
+                    "tick": 3,
+                    "event_type": "vote_opened",
+                    "actor_id": "agent:off_1",
+                    "target_agent_id": "agent:off_2",
+                    "timestamp": "2026-03-10T10:00:00+00:00",
+                    "note": "truth noise",
+                }
+            ],
+        )
+    )
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "tick": 3,
+                "event_type": "audit_flagged",
+                "payload": {
+                    "subject_agent_id": "agent:off_1",
+                    "related_target_agent_id": "agent:off_2",
+                    "violation_type": "nomination_after_private_contact",
+                    "evidence_refs": [
+                        {
+                            "tick": 3,
+                            "event_type": "vote_opened",
+                            "actor_id": "agent:off_1",
+                            "target_agent_id": "agent:off_2",
+                            "debug": "runtime noise",
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(events_path=tmp_path / "events.jsonl", truth_path=tmp_path / "truth.jsonl")
+
+    assert summary.true_positive == 1
+    assert summary.false_positive == 0
+    assert summary.false_negative == 0
+
+
+def test_evaluate_run_reports_case_level_match_for_repeated_signal_family(tmp_path: Path) -> None:
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.extend(
+        [
+            TruthRecord(
+                tick=4,
+                subject_agent_id="agent:off_1",
+                target_agent_id="agent:reporter_1",
+                violation_type="service_degradation_response_ignored",
+                evidence_refs=[{"tick": 4, "event_type": "pending_interaction_due"}],
+            ),
+            TruthRecord(
+                tick=5,
+                subject_agent_id="agent:off_1",
+                target_agent_id="agent:reporter_1",
+                violation_type="service_degradation_response_ignored",
+                evidence_refs=[{"tick": 5, "event_type": "pending_interaction_expired"}],
+            ),
+        ]
+    )
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "tick": 4,
+                        "event_type": "audit_flagged",
+                        "payload": {
+                            "subject_agent_id": "agent:off_1",
+                            "target_agent_id": "agent:reporter_1",
+                            "violation_type": "service_degradation_response_ignored",
+                            "evidence_refs": [{"tick": 4, "event_type": "pending_interaction_due"}],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "tick": 5,
+                        "event_type": "audit_flagged",
+                        "payload": {
+                            "subject_agent_id": "agent:off_1",
+                            "target_agent_id": "agent:reporter_1",
+                            "violation_type": "service_degradation_response_ignored",
+                            "evidence_refs": [{"tick": 5, "event_type": "pending_interaction_expired"}],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(events_path=tmp_path / "events.jsonl", truth_path=tmp_path / "truth.jsonl")
+
+    assert summary.true_positive == 2
+    assert summary.case_true_positive == 1
+    assert summary.case_false_positive == 0
+    assert summary.case_false_negative == 0
+
+
 def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     cfg = ScenarioConfig.model_validate(
         {

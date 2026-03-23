@@ -117,7 +117,7 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 | PUT | `/api/personalities/{id}` | Обновить архетип |
 | DELETE | `/api/personalities/{id}` | Удалить архетип |
 | GET | `/api/personalities/{id}/interview` | Получить интервью |
-| POST | `/api/personalities/{id}/interview/generate` | Маршрут временно возвращает `501`; web UI не показывает активную кнопку |
+| POST | `/api/personalities/{id}/interview/generate` | Сгенерировать и сохранить интервью через LLM |
 | DELETE | `/api/personalities/{id}/interview` | Удалить интервью |
 
 #### Режимы управления
@@ -137,7 +137,11 @@ Web launcher запускает `magistry_lc` как отдельный subproce
 |---|---|---|
 | POST | `/api/ai/generate-personality` | Сгенерировать личность через LLM |
 | POST | `/api/ai/generate-agent-type` | Сгенерировать тип агента через LLM |
-| POST | `/api/ai/secondary-agents` | Сгенерировать вспомогательных агентов (маршрут пока возвращает 501; web UI скрывает интерактивную кнопку) |
+| POST | `/api/ai/secondary-agents` | Сгенерировать secondary/family/society акторов и вернуть обновлённый scenario payload |
+
+`POST /api/personalities/{id}/interview/generate` читает профиль личности из `data/personalities/{id}.json`, генерирует полное интервью `v2` (30 вопросов) и сохраняет его в `data/interviews/{id}.json`. Ответ совпадает с сохранённым payload и сразу пригоден для отображения в `PersonalitiesView`.
+
+`POST /api/ai/secondary-agents` принимает `SecondaryAgentsPayload`, использует текущий `ScenarioConfig` (из `sim_config` или template `S/G`), просит LLM предложить concrete family/society actors и возвращает обычный web-scenario payload с обновлённым `sim_config`, списком `added_agents` и summary-блоком `secondary_generation`. Новые акторы получают typed id вида `agent:fam_*` / `agent:soc_*`, безопасные capabilities (`message`/`work`) и привязку к `org_id` / `zone_id` якорного агента, если она у него есть.
 
 #### Шаблоны и отладка
 
@@ -203,6 +207,7 @@ web/frontend/src/
 │   ├── PersonalitiesView.tsx   # Управление архетипами
 │   ├── AgentTypesView.tsx      # Управление типами агентов
 │   ├── ActivityFeed.tsx        # Лента активности
+│   ├── EnvironmentPanel.tsx    # Срез среды: очереди и активные сигналы
 │   ├── NodeTooltip.tsx         # Всплывающая подсказка на графе
 │   └── Markdown.tsx            # Отображение Markdown (react-markdown)
 ├── hooks/
@@ -226,8 +231,10 @@ web/frontend/src/
 
 **AgentPanel** — детальная карточка агента: профиль, полномочия, ресурсы, история действий, связи.
 
+**EnvironmentPanel** — отдельная вкладка HUD `Среда`, которая показывает compact environment slice из `graph_state`: operational queues, backlog/delay/capacity, давление очередей и активные сигналы информационного климата.
+
 ### Хуки
 
 **useAuth** — управление JWT-токеном: вход, выход, проверка авторизации, перехват 401-ответов.
 
-**useSimulation** — WebSocket-подключение к живой симуляции: получение событий, обновление графа, управление статусом. При потере авторизации активное соединение закрывается явно, а не только при unmount React-дерева.
+**useSimulation** — WebSocket-подключение к живой симуляции: получение событий, обновление графа, environment slice и управление статусом. При потере авторизации активное соединение закрывается явно, а не только при unmount React-дерева.
