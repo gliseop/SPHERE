@@ -63,6 +63,8 @@ flowchart TD
 - связанные ресурсные пулы организации;
 - текущий информационный климат.
 
+Если в мире есть релевантные `art:*`-артефакты (по `org_id`, `zone_id` или связанному `work item`), агент дополнительно видит краткий список документов и следов, относящихся к его локальной среде.
+
 Помимо списка ID, агент видит краткий shortlist существующих дел (`work_id + title + status`) и блок недавних отклонённых действий/ID. Это уменьшает вероятность phantom-ссылок на несуществующие `work_id` и повторного создания уже существующих задач.
 
 Если включён `runtime.worldgen_pre_tick`, агент дополнительно получает prompt-layer контекст начала дня:
@@ -78,6 +80,8 @@ flowchart TD
 Агент возвращает JSON-массив `Action[]` (до `max_actions_per_turn` действий за ход). Ответ парсится через Pydantic-модель с дискриминатором по полю `type`.
 
 Этап `propose_actions` может идти как последовательно, так и параллельно. Это задаётся через `runtime.parallel_agents`; при включённом режиме `runtime.parallel_workers` ограничивает число одновременных LLM-вызовов. Применение результатов к `WorldState` всё равно остаётся последовательным и детерминированным.
+
+Поверх основного батча действий движок теперь может запускать локальные reaction windows внутри того же тика (`runtime.micro_reaction_rounds`). Они выбирают ограниченный набор агентов, затронутых событиями текущего тика (например, приватным сообщением, `scene_occurred`, `environment_*_updated`) и дают им короткую реакцию до перехода к следующему глобальному тику. Это не отменяет общий tick-engine, но делает мир менее жёстко синхронным.
 
 Если `runtime.ecology_activation_window_ticks > 0`, не-core акторы (secondary/worldgen/runtime-spawned) не ходят автоматически каждый тик. Движок активирует их только если они недавно были затронуты событиями, hook-ами, созданием или прямым взаимодействием. Это уменьшает public-process capture со стороны ecology без отключения самой среды.
 
@@ -237,7 +241,7 @@ Agent prompt использует не один общий retrieval-блок, �
 
 При включении (`enable_worldgen`) генератор мира работает в одном или двух режимах:
 
-- **post-tick worldgen** — обратносуместимый режим по умолчанию: создаёт внешние `world_event`, `spawns` и при необходимости `environment_updates` по итогам уже совершённых действий;
+- **post-tick worldgen** — обратносуместимый режим по умолчанию: создаёт внешние `world_event`, `spawns`, при необходимости `environment_updates`, а также `artifact_creations` / `artifact_updates` по итогам уже совершённых действий;
 - **pre-tick worldgen** (`runtime.worldgen_pre_tick=true`) — запускается до `propose_actions`, создаёт:
   - `events` как глобальные/организационные сигналы текущего тика;
   - `agent_contexts` как персональные opening contexts;
@@ -246,7 +250,7 @@ Agent prompt использует не один общий retrieval-блок, �
 В обоих фазах worldgen получает только безопасный контекст:
 - public/internal события без текста приватных сообщений;
 - агрегированные сигналы закрытых private-контактов;
-- state snapshot (open work items, открытые votes, вторичные акторы и компактный срез `environment`-слоя: режимы организаций, зоны, ресурсные пулы, информационный климат);
+- state snapshot (open work items, открытые votes, вторичные акторы, компактный срез `environment`-слоя и список `art:*`-артефактов);
 - краткие `story_state` агентов;
 - temporal contract (`tick`, `tick_granularity`, канонические дата/время).
 
@@ -257,6 +261,8 @@ Agent prompt использует не один общий retrieval-блок, �
 Движок принимает `spawns` только если `runtime.allow_runtime_spawn=true`. Для совместимости worldgen по-прежнему понимает legacy-формат `list[world_event]` без блока `spawns`. Дополнительно движок требует человеко-читаемый display-name, отсекает role-only ярлыки и не принимает внутренних акторов от worldgen, если `runtime.worldgen_allow_internal_spawns=false`.
 
 Если worldgen возвращает `environment_updates`, движок применяет их детерминированно к уже существующим организациям, зонам, ресурсным пулам и информационному климату через отдельные события `environment_institution_updated`, `environment_zone_updated`, `environment_resource_updated`, `environment_information_climate_updated`. Этот контур не создаёт новые environment-сущности, а меняет уже материализованный `world.environment`.
+
+Если worldgen возвращает `artifact_creations` или `artifact_updates`, движок аналогично применяет их детерминированно через `artifact_created` и `artifact_updated`. Тем самым документарный слой становится самостоятельной поверхностью мира, а не только текстом в `world_event`.
 
 Для pre-tick material действует жёсткий negative contract: worldgen не должен утверждать решения существующего агента, закрывать `work item` текстом, раскрывать private-message content или подменять typed ontology строками `agent:*` / `work:*`.
 
@@ -326,7 +332,7 @@ Deterministic `TruthDetector` при этом расширяется остор�
 | `runtime` | `RuntimeConfig` | Язык, лимит действий, история тиков, LangGraph |
 | `governance` | `GovernanceConfig` | Политика должностей, голосование и настройки runtime-аудита |
 | `agents` | `AgentConfig[]` | Агенты: ID, имя, персона, полномочия, стартовая репутация, должность |
-| `world` | `WorldConfig` | Каналы, организации, рабочие элементы и стартовый stateful environment layer |
+| `world` | `WorldConfig` | Каналы, организации, рабочие элементы, `artifacts` и стартовый stateful environment layer |
 | `scripted_events` | `ScriptedEventConfig[]` | Предопределённые внешние события и развилки сценария |
 
 Ключевые поля `runtime`:

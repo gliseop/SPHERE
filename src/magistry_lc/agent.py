@@ -168,6 +168,42 @@ def _format_environment_brief(*, agent: AgentState, state: WorldState) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+def _format_relevant_artifacts(*, agent: AgentState, state: WorldState) -> str:
+    relevant: list[str] = []
+    for artifact_id, artifact in sorted(state.artifacts.items()):
+        if agent.org_id and artifact.owner_org_id == agent.org_id:
+            relevant.append(artifact_id)
+            continue
+        if agent.zone_id and artifact.zone_id == agent.zone_id:
+            relevant.append(artifact_id)
+            continue
+        if artifact.related_work_id:
+            work = state.work_items.get(artifact.related_work_id)
+            if work is not None and agent.agent_id in work.participants:
+                relevant.append(artifact_id)
+                continue
+    if not relevant:
+        return ""
+
+    lines = ["Релевантные документы и артефакты:"]
+    for artifact_id in relevant[:6]:
+        artifact = state.artifacts[artifact_id]
+        relation: list[str] = []
+        if artifact.related_work_id:
+            relation.append(f"work={artifact.related_work_id}")
+        if artifact.owner_org_id:
+            relation.append(f"org={artifact.owner_org_id}")
+        if artifact.zone_id:
+            relation.append(f"zone={artifact.zone_id}")
+        relation_text = f" | {'; '.join(relation)}" if relation else ""
+        summary = f" | {artifact.summary}" if artifact.summary else ""
+        tags = f" | tags={', '.join(artifact.tags[:4])}" if artifact.tags else ""
+        lines.append(
+            f"- {artifact.artifact_id}: {artifact.title} [{artifact.artifact_type}, {artifact.status}, {artifact.visibility}]{relation_text}{tags}{summary}"
+        )
+    return "\n".join(lines) + "\n\n"
+
+
 def _recent_rejection_hints(visible_events: list[Event]) -> list[str]:
     """Собрать краткие подсказки по недавним отклонённым действиям.
 
@@ -245,6 +281,8 @@ class AgentRunner:
         mem_text: str,
         daily_context: AgentDailyContext | None = None,
         scene_hooks: list[SceneHook] | None = None,
+        max_actions_override: int | None = None,
+        turn_note: str | None = None,
     ) -> str:
         # Антифантомы: показываем только те ID, которые агенту допустимо использовать напрямую.
         agent_ids = ", ".join(sorted(state.agents.keys())) or "(нет)"
@@ -292,10 +330,11 @@ class AgentRunner:
         rejection_hints_text = "\n".join(f"- {item}" for item in rejection_hints) if rejection_hints else "- (нет)"
         daily_context_text = _format_daily_context(daily_context, scene_hooks or [])
         environment_brief = _format_environment_brief(agent=agent, state=state)
+        artifacts_brief = _format_relevant_artifacts(agent=agent, state=state)
         motivation_block = _motivation_block(agent, visible_events)
 
         # Инструкция по действиям.
-        max_actions = self.runtime.max_actions_per_turn
+        max_actions = max(1, int(max_actions_override or self.runtime.max_actions_per_turn))
         votes_line = f"- Open votes: {vote_ids}\n"
 
         # Строим список доступных типов действий на основе capabilities.
@@ -348,9 +387,11 @@ class AgentRunner:
             f"{rejection_hints_text}\n\n"
             f"{daily_context_text}"
             f"{environment_brief}"
+            f"{artifacts_brief}"
             f"Память:\n{mem_text}\n\n"
             "Доступные типы действий:\n"
             f"{actions_block}\n\n"
+            f"{(turn_note.strip() + chr(10)) if turn_note else ''}"
             "Сгенерируй действия на этот тик.\n"
             f"Правила:\n"
             f"- максимум {max_actions} действий\n"
@@ -465,9 +506,12 @@ class AgentRunner:
         visible_events: list[Event],
         daily_context: AgentDailyContext | None = None,
         scene_hooks: list[SceneHook] | None = None,
+        max_actions_override: int | None = None,
+        turn_note: str | None = None,
     ) -> list[Action]:
         """Сгенерировать список действий агента на тик."""
-        schema = actions_json_schema(max_actions=self.runtime.max_actions_per_turn)
+        max_actions = max(1, int(max_actions_override or self.runtime.max_actions_per_turn))
+        schema = actions_json_schema(max_actions=max_actions)
         system = self._build_system(agent)
         mem_text = await self._render_memory(agent=agent, state=state, visible_events=visible_events)
         user = self._build_user(
@@ -477,6 +521,8 @@ class AgentRunner:
             mem_text=mem_text,
             daily_context=daily_context,
             scene_hooks=scene_hooks,
+            max_actions_override=max_actions,
+            turn_note=turn_note,
         )
 
         resp = await self.llm.generate_structured(
@@ -496,7 +542,7 @@ class AgentRunner:
             return []
 
         validated: list[Action] = []
-        for item in raw[: self.runtime.max_actions_per_turn]:
+        for item in raw[:max_actions]:
             try:
                 validated.append(_ACTION_ADAPTER.validate_python(item))
             except ValidationError:

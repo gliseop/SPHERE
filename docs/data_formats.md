@@ -30,6 +30,8 @@ runtime:
   parallel_window_seconds: 300
   temporal_past_slack_days: 1
   temporal_future_horizon_days: 120
+  micro_reaction_rounds: 0
+  micro_reaction_max_agents_per_round: 6
   max_actions_per_turn: 2
   tick_events_history: 200
   enable_worldgen: false
@@ -83,6 +85,8 @@ agents:
     internal: true
     persona: "Начальник отдела. Прагматик."
     capabilities: ["message", "work", "dao"]
+    org_id: "org:admin"
+    zone_id: "zone:main_office"
     initial_reputation: 4.5
     initial_title: "специалист"
     wants_promotion: true
@@ -100,6 +104,17 @@ world:
       title: "Найм в отдел"
       description: "Конкурс на вакансию."
       participants: ["agent:off_1"]
+  artifacts:
+    - artifact_id: "art:repair_report"
+      artifact_type: "report"
+      title: "Отчёт по ремонту"
+      summary: "Базовый внутренний отчёт по объекту."
+      owner_org_id: "org:admin"
+      zone_id: "zone:main_office"
+      related_work_id: "work:D-001"
+      visibility: "internal"
+      status: "active"
+      tags: ["repair", "report"]
   environment:
     institution_modes:
       - org_id: "org:admin"
@@ -149,7 +164,7 @@ scripted_events:
 | `governance` | Политика должностей, кворум, порог, голосование и runtime-аудит |
 | `memory` | Рабочий буфер, долгосрочный индекс, веса retrieval, эмбеддинги |
 | `agents` | Список агентов с ID, именем, персоной, полномочиями |
-| `world` | Каналы, организации, рабочие элементы и стартовый `environment`-слой |
+| `world` | Каналы, организации, рабочие элементы, `artifacts` и стартовый `environment`-слой |
 | `scripted_events` | Предопределённые внешние события / развилки сценария |
 
 Поле `agents[].initial_reputation` задаёт стартовую репутацию внутреннего агента. Движок применяет её при инициализации `WorldState`, а первый `reputation_snapshot` в `events.jsonl` отражает именно это значение.
@@ -171,6 +186,8 @@ scripted_events:
 | `parallel_window_seconds` | `float \| null` | Совместимый параметр окна батчирования для web launcher; в текущем tick-engine один тик образует один batch |
 | `temporal_past_slack_days` | `int` | Сколько дней назад арбитр ещё допускает абсолютную дату в действии |
 | `temporal_future_horizon_days` | `int` | Максимальный горизонт будущих абсолютных дат в структурированных действиях |
+| `micro_reaction_rounds` | `int` | Сколько локальных reaction windows движок запускает внутри одного тика после основного батча действий |
+| `micro_reaction_max_agents_per_round` | `int` | Верхняя граница числа агентов в одном локальном окне реакции |
 | `worldgen_every_ticks` | `int` | Положительный интервал запуска worldgen в тиках; `0` и отрицательные значения недопустимы |
 | `worldgen_pre_tick` | `bool` | Запускать ли pre-tick worldgen до `propose_actions`, чтобы подать агентам personal contexts |
 | `worldgen_event_budget_per_tick` | `int` | Верхняя граница числа `world_event` от worldgen за один запуск |
@@ -243,6 +260,29 @@ scripted_events:
 | Голосование | `vote:` | `vote:1` |
 | Зона | `zone:` | `zone:main_office` |
 | Ресурсный пул | `res:` | `res:roads_budget` |
+| Документ / артефакт | `art:` | `art:repair_report` |
+
+### `world.artifacts`
+
+`WorldConfig.artifacts` задаёт стартовые документы и артефакты мира как first-class сущности.
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `artifact_id` | `art:*` | Typed-id артефакта |
+| `artifact_type` | `str` | Тип (`report`, `memo`, `request`, `leak`, `publication` и т.п.) |
+| `title` | `str` | Заголовок |
+| `summary` | `str` | Краткое содержание |
+| `owner_org_id` | `org:* \| null` | Какая организация владеет артефактом |
+| `zone_id` | `zone:* \| null` | Какая зона связана с артефактом |
+| `related_work_id` | `work:* \| null` | Какое дело связано с артефактом |
+| `visibility` | `public` / `internal` | Видимость артефакта |
+| `status` | `str` | Текущее состояние (`active`, `revised`, `archived`, `new`) |
+| `tags` | `list[str]` | Короткие смысловые метки |
+
+Post-worldgen теперь также может возвращать:
+
+- `artifact_creations` — создание новых `art:*` сущностей;
+- `artifact_updates` — обновление уже существующих артефактов.
 
 ### `world.environment`
 
@@ -287,6 +327,12 @@ Post-worldgen может дополнительно вернуть `environment_
 Runtime-аудит реализован отдельным модулем `auditor.py` и не сводится к обычному `AgentRunner`. `governance.audit.actor_id` может быть `null` или служебным `agent:*`-ID для маркировки audit-событий, но такой ID не обязан соответствовать сюжетному агенту.
 
 Для `spawn_agent`, secondary-spawn и worldgen-spawn действует дополнительное правило: новый агент должен иметь человеко-читаемое имя, а не `agent:*`, slug или абстрактную должность. Role-alias ссылки либо переиспользуют уже существующего актора, либо отклоняются.
+
+Если новый агент порождается через runtime/worldgen и для него заданы `org_id` и/или `zone_id`, движок сохраняет эту привязку в `AgentState`. Это позволяет:
+
+- сразу встроить нового актора в локальную среду;
+- показывать ему релевантный environment-brief;
+- будить его по изменениям связанной организации, зоны, артефактов и ресурсных пулов.
 
 При `runtime.request_entity_internal_only=true` действие `request_entity` также ограничено внутренними акторами: external/ecology-персонажи не могут бесконтрольно развернуть публичную инфраструктуру мира (`chan:*`, `org:*`) через обычный агентный ход.
 

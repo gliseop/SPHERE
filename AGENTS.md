@@ -35,12 +35,12 @@ MAGISTRY/
 ├── src/magistry_lc/            # Движок симуляции (LangChain/LangGraph)
 │   ├── __init__.py             # Пакет
 │   ├── cli.py                  # CLI `magistry-lc`
-│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + world.environment + scripted events
+│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + world.environment + world.artifacts + scripted events
 │   ├── scenario.py             # Load/save YAML/JSON сценариев
 │   ├── ids.py                  # Типизированные ID и аудитории (aud:*)
 │   ├── entities.py             # EntityRegistry + EntityRecord (антифантомы)
 │   ├── id_alloc.py             # Детерминированное выделение новых ID
-│   ├── state.py                # WorldState (agents/work_items/votes + environment-layer) + AgentState.story_state + org/zone binding
+│   ├── state.py                # WorldState (agents/work_items/artifacts/votes + environment-layer) + AgentState.story_state + org/zone binding
 │   ├── persona.py              # PersonaArtifact/Library/Generator + SocialGraphExtractor
 │   ├── memory.py               # Память агента (buffer + hybrid retrieval)
 │   ├── actions.py              # Action[] (structured + spawn_agent + perform)
@@ -49,8 +49,8 @@ MAGISTRY/
 │   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM perform)
 │   ├── auditor.py              # RuntimeAuditor (LLM-first detection + deterministic audit actuator + collegial review)
 │   ├── dao.py                  # DAO vote closure + position policy
-│   ├── engine.py               # WorldEngine (environment init/snapshot, scripted events, pre/post worldgen, deterministic apply)
-│   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, agent contexts, scene hooks, spawns, environment updates)
+│   ├── engine.py               # WorldEngine (environment/artifact init, scripted events, micro-reactions, pre/post worldgen, deterministic apply)
+│   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, scene hooks, spawns, environment updates, artifact creations/updates)
 │   ├── composer.py             # WorldComposer (LLM -> ScenarioConfig + persona enrichment)
 │   ├── oracle.py               # ViolationOracle + FreeformTruthRecorder (LLM post-hoc analysis)
 │   ├── truth.py                # TruthDetector + TruthLog (deterministic truth-layer sidecar)
@@ -299,6 +299,8 @@ cd web/frontend && npm run test:e2e
 - **Имена новых агентов**: secondary-spawn, runtime-spawn и worldgen-spawn принимают только человеко-читаемые имена; role-alias и machine-like display-name отклоняются или маппятся на уже существующего актора.
 - **Scripted events + pre-tick worldgen**: сценарий может задавать `scripted_events`, а `runtime.worldgen_pre_tick=true` включает personal-ecology слой до хода агентов: `agent_daily_context`, `scene_hooks`, глобальные сигналы и `story_state` агента. Эти prompt-layer данные не подменяют детерминированный apply.
 - **Stateful environment layer**: `WorldState` теперь содержит отдельный `environment`-слой (`world.environment` в сценарии): режимы организаций, зоны, ресурсные пулы и информационный климат. Он инициализируется из конфига, отражается в YAML-журнале и safe `state_snapshot` для worldgen; post-worldgen теперь также может детерминированно менять его через `environment_updates` и события `environment_*_updated`.
+- **Документарный слой мира**: сценарий и runtime теперь поддерживают `art:*`-артефакты как first-class сущности (`world.artifacts`, `artifact_created`, `artifact_updated`). Они попадают в `WorldState`, журнал мира, worldgen snapshot и релевантный prompt агента.
+- **Local reaction windows**: поверх основного батча действий движок теперь может запускать локальные reaction windows внутри того же тика (`runtime.micro_reaction_rounds`). Они дают ограниченному набору агентов быстрый follow-up на события текущего тика и делают runtime менее жёстко синхронным даже без полной замены tick-engine.
 - **Risky personal contexts**: `agent_daily_context` теперь может нести не только общий фон, но и richer pressure-поля (`private_pressure`, `opportunity`, `exposure_risk`). Это считается допустимым средовым давлением, а не прямой директивой агенту.
 - **`request_entity` по умолчанию внутренний**: при `runtime.request_entity_internal_only=true` внешние/ecology-акторы не могут бесконтрольно разворачивать публичную инфраструктуру (`chan:*`/`org:*`) через `request_entity`.
 - **Runtime-аудитор**: `RuntimeAuditor` существует только как отдельный runtime governance-layer, а не как narrative-agent. Он сочетает deterministic baseline rules с LLM-findings, нормализует `violation_type`, детерминированно привязывает `evidence_refs`, агрегирует повторяющиеся finding’и в стабильные `audit_case:*`, умеет ставить response-deadline на объяснения/документы и эскалировать просроченные кейсы в monitoring / collegial review.

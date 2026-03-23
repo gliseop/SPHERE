@@ -5,11 +5,14 @@ import json
 from pathlib import Path
 
 from magistry_lc.agent import AgentRunner
+from magistry_lc.arbiter import Arbiter
 from magistry_lc.config import MemoryConfig, RuntimeConfig, ScenarioConfig
+from magistry_lc.dao import DaoEngine
 from magistry_lc.engine import RunArtifacts, WorldEngine
-from magistry_lc.entities import EntityRegistry
+from magistry_lc.entities import EntityRecord, EntityRegistry
 from magistry_lc.events import Event, EventLog
 from magistry_lc.fidelity import evaluate_fidelity
+from magistry_lc.id_alloc import IdAllocator
 from magistry_lc.ids import EntityKind
 from magistry_lc.ids import INTERNAL_AUDIENCE
 from magistry_lc.journal import WorldJournal
@@ -17,8 +20,10 @@ from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
 from magistry_lc.persona import PersonaArtifact
 from magistry_lc.state import (
     AgentState,
+    ArtifactState,
     InstitutionRegimeState,
     ResourcePoolState,
+    WorkItem,
     WorldState,
     ZoneState,
 )
@@ -238,6 +243,127 @@ class _EnvironmentUpdateProvider(MockLLMProvider):
         return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
 
 
+class _ArtifactWorldgenProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сгенерируй действия на этот тик." in user:
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "idle"}]},
+                model="mock",
+            )
+        if '"phase": "post"' in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [],
+                    "spawns": [],
+                    "artifact_creations": [
+                        {
+                            "artifact_id": "art:oversight_memo",
+                            "artifact_type": "memo",
+                            "title": "Служебная записка контрольного отдела",
+                            "summary": "Контрольный отдел просит срочно пояснить расходование средств.",
+                            "owner_org_id": "org:city_hall",
+                            "visibility": "internal",
+                            "status": "new",
+                            "tags": ["oversight", "budget"],
+                        }
+                    ],
+                    "artifact_updates": [
+                        {
+                            "artifact_id": "art:repair_report",
+                            "summary": "В отчёте появился новый спорный абзац о перерасходе.",
+                            "status": "revised",
+                            "tags": ["repair", "risk"],
+                        }
+                    ],
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
+class _BoundSpawnProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сгенерируй действия на этот тик." in user:
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "idle"}]},
+                model="mock",
+            )
+        if '"phase": "post"' in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [],
+                    "spawns": [
+                        {
+                            "slug": "district_reporter",
+                            "name": "Ирина Савельева",
+                            "internal": False,
+                            "persona_hint": "Местная журналистка, следит за работой мэрии.",
+                            "org_id": "org:city_hall",
+                            "zone_id": "zone:city_hall",
+                        }
+                    ],
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
+class _MicroReactionProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "agent:core_1" in user and "локальное окно реакции" not in user:
+            return StructuredLLMResponse(
+                data={
+                    "actions": [
+                        {
+                            "type": "send_message",
+                            "to_id": "agent:peripheral",
+                            "text": "Срочно посмотри на это.",
+                            "private": True,
+                            "justification": "Нужно быстpoе подтверждение.",
+                        }
+                    ]
+                },
+                model="mock",
+            )
+        if "agent:peripheral" in user and "локальное окно реакции" in user:
+            return StructuredLLMResponse(
+                data={
+                    "actions": [
+                        {
+                            "type": "send_message",
+                            "to_id": "agent:core_1",
+                            "text": "Принял, уже смотрю.",
+                            "private": True,
+                            "justification": "Реакция на сообщение того же тика.",
+                        }
+                    ]
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(
+            data={"actions": [{"type": "noop", "justification": "idle"}]},
+            model="mock",
+        )
+
+
 def test_runtime_config_simulated_datetime_respects_granularity() -> None:
     hourly = RuntimeConfig(start_date="2026-03-09", tick_granularity="hour", tick_duration_days=2)
     assert hourly.simulated_datetime(3).isoformat() == "2026-03-09T15:00:00"
@@ -354,6 +480,64 @@ def test_agent_prompt_includes_relevant_environment_brief(tmp_path: Path) -> Non
     assert "Зона zone:city_hall" in prompt
     assert "Ресурс res:roads_budget" in prompt
     assert "Активные сигналы среды: новая волна жалоб, утечка сметы" in prompt
+
+
+def test_agent_prompt_includes_relevant_artifacts(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Хочет удержать процесс под контролем."),
+        capabilities=["message", "work"],
+        org_id="org:city_hall",
+        zone_id="zone:city_hall",
+        title="начальник отдела",
+    )
+    state = WorldState(tick=0, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    state.work_items["work:repair"] = WorkItem(
+        work_id="work:repair",
+        work_type="repair",
+        title="Ремонт дороги",
+        participants=[agent.agent_id],
+    )
+    state.artifacts["art:oversight_memo"] = ArtifactState(
+        artifact_id="art:oversight_memo",
+        artifact_type="memo",
+        title="Служебная записка",
+        summary="Контрольный отдел просит пояснения.",
+        owner_org_id="org:city_hall",
+        visibility="internal",
+        status="new",
+        tags=["oversight"],
+    )
+    state.artifacts["art:repair_report"] = ArtifactState(
+        artifact_id="art:repair_report",
+        artifact_type="report",
+        title="Отчёт по ремонту",
+        summary="В отчёте отмечен спорный перерасход.",
+        zone_id="zone:city_hall",
+        related_work_id="work:repair",
+        visibility="internal",
+        status="revised",
+        tags=["repair", "risk"],
+    )
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    prompt = runner._build_user(
+        agent=agent,
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    assert "Релевантные документы и артефакты:" in prompt
+    assert "art:oversight_memo" in prompt
+    assert "art:repair_report" in prompt
+    assert "work=work:repair" in prompt
 
 
 def test_engine_emits_scripted_events_before_agent_turn(tmp_path: Path) -> None:
@@ -565,6 +749,62 @@ def test_post_worldgen_can_update_environment_layer(tmp_path: Path) -> None:
     assert "environment_information_climate_updated" in event_types
 
 
+def test_post_worldgen_can_create_and_update_artifacts(tmp_path: Path) -> None:
+    provider = _ArtifactWorldgenProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "artifact-updates",
+            "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_every_ticks": 1,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "Чиновник",
+                    "capabilities": ["message"],
+                    "org_id": "org:city_hall",
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+                "artifacts": [
+                    {
+                        "artifact_id": "art:repair_report",
+                        "artifact_type": "report",
+                        "title": "Отчёт по ремонту",
+                        "summary": "Базовый отчёт.",
+                        "owner_org_id": "org:city_hall",
+                        "visibility": "internal",
+                        "status": "active",
+                    }
+                ],
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    assert "art:oversight_memo" in state.artifacts
+    assert state.artifacts["art:oversight_memo"].artifact_type == "memo"
+    assert state.artifacts["art:repair_report"].status == "revised"
+    assert "risk" in state.artifacts["art:repair_report"].tags
+
+    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    event_types = {event["event_type"] for event in events}
+    assert "artifact_created" in event_types
+    assert "artifact_updated" in event_types
+
+
 def test_environment_updates_activate_peripheral_agent(tmp_path: Path) -> None:
     cfg = ScenarioConfig.model_validate(
         {
@@ -618,6 +858,176 @@ def test_environment_updates_activate_peripheral_agent(tmp_path: Path) -> None:
         daily_contexts=None,
         scene_hooks_by_agent=None,
     )
+
+
+def test_micro_reaction_window_allows_same_tick_reply(tmp_path: Path) -> None:
+    provider = _MicroReactionProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "micro-reaction",
+            "ticks": 1,
+            "runtime": {
+                "micro_reaction_rounds": 1,
+                "micro_reaction_max_agents_per_round": 3,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:core_1",
+                    "name": "Core 1",
+                    "internal": True,
+                    "persona": "Ключевой агент",
+                    "capabilities": ["message"],
+                }
+            ],
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider)
+    event_log = EventLog(artifacts.events_path)
+    state = engine._init_state(event_log=event_log)
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:peripheral",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "Peripheral", "internal": True, "capabilities": ["message"]},
+        )
+    )
+    state.agents["agent:peripheral"] = AgentState(
+        agent_id="agent:peripheral",
+        name="Peripheral",
+        internal=True,
+        persona=PersonaArtifact(summary="Периферийный агент"),
+        capabilities=["message"],
+    )
+
+    trace = TraceLog(artifacts.trace_path)
+    llm = LLMCaller(provider=provider, trace=trace)
+    runners: dict[str, AgentRunner] = {}
+    asyncio.run(
+        engine._register_agent_runner(
+            agent_id="agent:core_1",
+            state=state,
+            runners=runners,
+            llm=llm,
+            embedder=None,
+            embed_cache={},
+        )
+    )
+    asyncio.run(
+        engine._register_agent_runner(
+            agent_id="agent:peripheral",
+            state=state,
+            runners=runners,
+            llm=llm,
+            embedder=None,
+            embed_cache={},
+        )
+    )
+
+    proposed, gather_errors = asyncio.run(
+        engine._gather_actions(
+            state=state,
+            runners=runners,
+            events_history=[],
+            agent_order=["agent:core_1", "agent:peripheral"],
+        )
+    )
+    assert not gather_errors
+    assert "agent:peripheral" not in [aid for aid, acts in proposed.items() if acts]
+
+    arbiter = Arbiter(
+        llm=llm,
+        governance=cfg.governance,
+        id_alloc=IdAllocator(),
+        dao=DaoEngine(cfg=cfg.governance),
+        runtime=cfg.runtime,
+        temperature=cfg.llm.temperature,
+    )
+    tick_events = asyncio.run(
+        engine._apply_actions(
+            state=state,
+            arbiter=arbiter,
+            proposed=proposed,
+            event_log=event_log,
+            agent_order=["agent:core_1"],
+            journal_yaml=state.journal_yaml(),
+        )
+    )
+    assert any(ev.event_type == "message_sent" and ev.actor_id == "agent:core_1" for ev in tick_events)
+
+    reaction_events = asyncio.run(
+        engine._run_micro_reaction_rounds(
+            state=state,
+            runners=runners,
+            arbiter=arbiter,
+            event_log=event_log,
+            events_history=[],
+            tick_events=tick_events,
+            already_acted={"agent:core_1"},
+        )
+    )
+
+    assert any(
+        ev.event_type == "message_sent"
+        and ev.actor_id == "agent:peripheral"
+        and (ev.payload or {}).get("to_id") == "agent:core_1"
+        for ev in reaction_events
+    )
+
+
+def test_worldgen_spawn_can_bind_agent_to_org_and_zone(tmp_path: Path) -> None:
+    provider = _BoundSpawnProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "bound-spawn",
+            "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_every_ticks": 1,
+                "allow_runtime_spawn": True,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "Чиновник",
+                    "capabilities": ["message"],
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+                "environment": {
+                    "zones": [
+                        {
+                            "zone_id": "zone:city_hall",
+                            "title": "Здание мэрии",
+                            "primary_org_id": "org:city_hall",
+                        }
+                    ]
+                },
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    spawned = state.agents["agent:district_reporter"]
+    assert spawned.org_id == "org:city_hall"
+    assert spawned.zone_id == "zone:city_hall"
 
 
 def test_engine_pre_tick_worldgen_injects_daily_context(tmp_path: Path) -> None:

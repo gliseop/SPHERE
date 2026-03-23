@@ -654,6 +654,22 @@ class Arbiter:
             persona_hint = (action.persona_hint or "").strip()
             if not persona_hint:
                 return ActionResult(action_index, False, "spawn_requires_persona_hint", [])
+            org_id = str(getattr(action, "org_id", "") or "").strip() or None
+            zone_id = str(getattr(action, "zone_id", "") or "").strip() or None
+            if org_id:
+                try:
+                    ensure_kind(org_id, EntityKind.ORG)
+                except ValueError:
+                    return ActionResult(action_index, False, f"invalid_org_id:{org_id}", [])
+                if not state.registry.exists(org_id):
+                    return ActionResult(action_index, False, f"unknown_org_id:{org_id}", [])
+            if zone_id:
+                try:
+                    ensure_kind(zone_id, EntityKind.ZONE)
+                except ValueError:
+                    return ActionResult(action_index, False, f"invalid_zone_id:{zone_id}", [])
+                if not state.registry.exists(zone_id):
+                    return ActionResult(action_index, False, f"unknown_zone_id:{zone_id}", [])
             capabilities = self._sanitize_spawn_capabilities(
                 list(action.capabilities or []),
                 internal=bool(action.internal),
@@ -669,6 +685,8 @@ class Arbiter:
                         internal=bool(action.internal),
                         persona_hint=persona_hint,
                         capabilities=capabilities,
+                        org_id=org_id,
+                        zone_id=zone_id,
                         created_by=agent_id,
                         created_tick=state.tick,
                     )

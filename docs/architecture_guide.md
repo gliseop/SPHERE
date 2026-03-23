@@ -118,12 +118,12 @@ graph TB
 | Какие действия доступны агенту | `actions.py` → structured actions, `spawn_agent`, `perform` |
 | Как арбитр проверяет действия | `arbiter.py` → полномочия + антифантомы + LLM-perform |
 | Как runtime-аудитор выявляет сигналы риска | `auditor.py` → LLM-first detection + deterministic actuator + collegial review |
-| Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра, включая environment-layer |
+| Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра, включая environment-layer и `art:*`-артефакты |
 | Как устроено DAO-голосование | `dao.py` → кворум, порог, закрытие голосования |
 | Типизированные ID и антифантомы | `ids.py` + `entities.py` → `EntityRegistry` |
 | Детерминированный apply | `ops.py` → `StateOp` преобразуется в `Event` |
 | Как генерируется сценарий через LLM | `composer.py` → `WorldComposer.compose()` |
-| Как работает генератор мира | `worldgen.py` → pre/post tick worldgen, external events, `agent_daily_context`, `scene_hooks`, spawn suggestions, `environment_updates` и safe environment snapshot без приватных утечек |
+| Как работает генератор мира | `worldgen.py` → pre/post tick worldgen, external events, `agent_daily_context`, `scene_hooks`, spawn suggestions, `environment_updates`, `artifact_creations` / `artifact_updates` и safe snapshot без приватных утечек |
 | Как пишется truth-layer | `truth.py` → deterministic truth records в `truth.jsonl` |
 | Как считается post-hoc evaluation | `evaluation.py` → precision/recall runtime-аудита vs truth |
 | Как считаются fidelity-метрики | `fidelity.py` → temporal/identity/phantom/bureaucratic sidecar |

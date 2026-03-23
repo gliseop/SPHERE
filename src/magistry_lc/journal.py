@@ -37,8 +37,10 @@ class WorldJournal:
     """
 
     max_work_items: int = 20
+    max_artifacts: int = 20
     max_votes: int = 20
     store_max_work_items: int = 200
+    store_max_artifacts: int = 200
     store_max_votes: int = 200
     history_max_entries: int = 60
 
@@ -50,6 +52,9 @@ class WorldJournal:
 
     work_item_order: list[str] = field(default_factory=list)
     work_items: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    artifact_order: list[str] = field(default_factory=list)
+    artifacts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     vote_order: list[str] = field(default_factory=list)
     votes: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -66,15 +71,19 @@ class WorldJournal:
         *,
         state: WorldState,
         max_work_items: int = 20,
+        max_artifacts: int = 20,
         max_votes: int = 20,
         store_max_work_items: int = 200,
+        store_max_artifacts: int = 200,
         store_max_votes: int = 200,
         history_max_entries: int = 60,
     ) -> "WorldJournal":
         j = cls(
             max_work_items=max_work_items,
+            max_artifacts=max_artifacts,
             max_votes=max_votes,
             store_max_work_items=store_max_work_items,
+            store_max_artifacts=store_max_artifacts,
             store_max_votes=store_max_votes,
             history_max_entries=history_max_entries,
         )
@@ -97,6 +106,10 @@ class WorldJournal:
         j.work_item_order = sorted(state.work_items.keys())
         for wid in j.work_item_order:
             j.work_items[wid] = j._work_item_entry(state, wid)
+
+        j.artifact_order = sorted(state.artifacts.keys())
+        for artifact_id in j.artifact_order:
+            j.artifacts[artifact_id] = j._artifact_entry(state, artifact_id)
 
         j.vote_order = sorted(state.votes.keys())
         for vid in j.vote_order:
@@ -216,6 +229,27 @@ class WorldJournal:
                 changed = True
                 continue
 
+            if ev.event_type == "artifact_created":
+                self.entity_counts["artifacts"] = int(self.entity_counts.get("artifacts", 0)) + 1
+                artifact_id = str((ev.payload or {}).get("artifact_id") or "").strip()
+                if artifact_id and artifact_id in state.artifacts:
+                    if artifact_id not in self.artifacts:
+                        self.artifact_order.insert(0, artifact_id)
+                    self._touch(self.artifact_order, artifact_id)
+                    self.artifacts[artifact_id] = self._artifact_entry(state, artifact_id)
+                changed = True
+                continue
+
+            if ev.event_type == "artifact_updated":
+                artifact_id = str((ev.payload or {}).get("artifact_id") or "").strip()
+                if artifact_id and artifact_id in state.artifacts:
+                    if artifact_id not in self.artifacts:
+                        self.artifact_order.insert(0, artifact_id)
+                    self._touch(self.artifact_order, artifact_id)
+                    self.artifacts[artifact_id] = self._artifact_entry(state, artifact_id)
+                    changed = True
+                continue
+
         if changed:
             self._enforce_caps()
             self._dirty = True
@@ -239,6 +273,11 @@ class WorldJournal:
                 self.work_items[wid]
                 for wid in self.work_item_order[: self.max_work_items]
                 if wid in self.work_items
+            ],
+            "artifacts": [
+                self.artifacts[artifact_id]
+                for artifact_id in self.artifact_order[: self.max_artifacts]
+                if artifact_id in self.artifacts
             ],
             "votes": [
                 self.votes[vid]
@@ -277,6 +316,10 @@ class WorldJournal:
             while len(self.work_items) > self.store_max_work_items and self.work_item_order:
                 self._evict_one_work_item()
 
+        if self.store_max_artifacts > 0:
+            while len(self.artifacts) > self.store_max_artifacts and self.artifact_order:
+                self._evict_one_artifact()
+
         if self.store_max_votes > 0:
             while len(self.votes) > self.store_max_votes and self.vote_order:
                 self._evict_one_vote()
@@ -310,6 +353,21 @@ class WorldJournal:
             idx = len(self.work_item_order) - 1
         wid = self.work_item_order.pop(idx)
         self.work_items.pop(wid, None)
+
+    def _evict_one_artifact(self) -> None:
+        if not self.artifact_order:
+            return
+        idx: int | None = None
+        for i in range(len(self.artifact_order) - 1, -1, -1):
+            artifact_id = self.artifact_order[i]
+            status = (self.artifacts.get(artifact_id) or {}).get("status")
+            if status and status != "active":
+                idx = i
+                break
+        if idx is None:
+            idx = len(self.artifact_order) - 1
+        artifact_id = self.artifact_order.pop(idx)
+        self.artifacts.pop(artifact_id, None)
 
     @staticmethod
     def _truncate(text: str, max_chars: int) -> str:
@@ -384,6 +442,17 @@ class WorldJournal:
                 "actor_id": ev.actor_id,
                 "work_id": str(p.get("work_id") or ""),
                 "text": self._truncate(str(p.get("text") or ""), 240),
+            }
+
+        if t in ("artifact_created", "artifact_updated"):
+            return {
+                "tick": int(ev.tick),
+                "type": t,
+                "actor_id": ev.actor_id,
+                "artifact_id": str(p.get("artifact_id") or ""),
+                "title": self._truncate(str(p.get("title") or ""), 120),
+                "status": self._truncate(str(p.get("status") or ""), 60),
+                "visibility": self._truncate(str(p.get("visibility") or ""), 32),
             }
 
         if t in ("vote_opened", "vote_cast", "vote_closed"):
@@ -502,4 +571,20 @@ class WorldJournal:
             "target_consented": v.target_consented,
             "votes": dict(v.votes),
             "result": v.result,
+        }
+
+    @staticmethod
+    def _artifact_entry(state: WorldState, artifact_id: str) -> dict[str, Any]:
+        artifact = state.artifacts[artifact_id]
+        return {
+            "id": artifact.artifact_id,
+            "type": artifact.artifact_type,
+            "title": artifact.title,
+            "summary": WorldJournal._truncate(artifact.summary, 220),
+            "owner_org_id": artifact.owner_org_id,
+            "zone_id": artifact.zone_id,
+            "related_work_id": artifact.related_work_id,
+            "visibility": artifact.visibility,
+            "status": artifact.status,
+            "tags": list(artifact.tags),
         }

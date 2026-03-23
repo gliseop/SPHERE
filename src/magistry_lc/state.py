@@ -174,6 +174,22 @@ class WorkItem:
 
 
 @dataclass(slots=True)
+class ArtifactState:
+    """Документ или артефакт как отдельная сущность мира."""
+
+    artifact_id: str
+    artifact_type: str
+    title: str
+    summary: str = ""
+    owner_org_id: str | None = None
+    zone_id: str | None = None
+    related_work_id: str | None = None
+    visibility: str = "internal"
+    status: str = "active"
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class Vote:
     """Голосование DAO."""
 
@@ -237,6 +253,7 @@ class WorldState:
     environment: EnvironmentState = field(default_factory=EnvironmentState)
     agents: dict[str, AgentState] = field(default_factory=dict)
     work_items: dict[str, WorkItem] = field(default_factory=dict)
+    artifacts: dict[str, ArtifactState] = field(default_factory=dict)
     votes: dict[str, Vote] = field(default_factory=dict)
     audit_cases: dict[str, AuditCase] = field(default_factory=dict)
 
@@ -250,7 +267,13 @@ class WorldState:
             if a.reputation < 0:
                 a.reputation = 0.0
 
-    def journal_dict(self, *, max_work_items: int = 20, max_votes: int = 20) -> dict[str, Any]:
+    def journal_dict(
+        self,
+        *,
+        max_work_items: int = 20,
+        max_artifacts: int = 20,
+        max_votes: int = 20,
+    ) -> dict[str, Any]:
         """Собрать компактный YAML-журнал мира (как словарь).
 
         Журнал должен быть достаточно компактным, чтобы помещаться в промпт арбитра,
@@ -307,6 +330,24 @@ class WorldState:
                 }
             )
 
+        artifacts = []
+        for art_id in sorted(self.artifacts.keys())[:max_artifacts]:
+            artifact = self.artifacts[art_id]
+            artifacts.append(
+                {
+                    "id": artifact.artifact_id,
+                    "type": artifact.artifact_type,
+                    "title": artifact.title,
+                    "summary": artifact.summary,
+                    "owner_org_id": artifact.owner_org_id,
+                    "zone_id": artifact.zone_id,
+                    "related_work_id": artifact.related_work_id,
+                    "visibility": artifact.visibility,
+                    "status": artifact.status,
+                    "tags": list(artifact.tags),
+                }
+            )
+
         audit_cases = []
         for cid in sorted(self.audit_cases.keys())[:max_votes]:
             c = self.audit_cases[cid]
@@ -347,6 +388,7 @@ class WorldState:
             "environment": self.environment.snapshot_dict(),
             "agents": agents,
             "work_items": work_items,
+            "artifacts": artifacts,
             "votes": votes,
             "audit_cases": audit_cases,
         }

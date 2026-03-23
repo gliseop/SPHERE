@@ -9,3 +9,6 @@ results/
 screenshots/
 test-screenshots
 lc_results
+.tmp_pytest/
+pytest_tmp/
+pytest_temp_run_*/

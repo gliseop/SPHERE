@@ -95,6 +95,8 @@ class MemoryConfig(BaseModel):
             "work_item_created": 5.0,
             "work_note_added": 5.0,
             "work_proposal_submitted": 5.0,
+            "artifact_created": 5.0,
+            "artifact_updated": 5.0,
             "world_event": 5.0,
             "environment_institution_updated": 5.0,
             "environment_zone_updated": 5.0,
@@ -196,6 +198,8 @@ class RuntimeConfig(BaseModel):
     worldgen_allow_internal_spawns: bool = False
     freeform_truth_enabled: bool = False
     freeform_truth_window_ticks: int = 5
+    micro_reaction_rounds: int = 0
+    micro_reaction_max_agents_per_round: int = 6
     parallel_agents: bool = True
     parallel_workers: int | None = None
     parallel_window_seconds: float | None = None
@@ -226,6 +230,8 @@ class RuntimeConfig(BaseModel):
         "max_new_actors_per_window",
         "ecology_activation_window_ticks",
         "freeform_truth_window_ticks",
+        "micro_reaction_rounds",
+        "micro_reaction_max_agents_per_round",
     )
     @classmethod
     def _validate_non_negative_runtime_budget(cls, v: int) -> int:
@@ -624,6 +630,63 @@ class ResourcePoolConfig(BaseModel):
         return float(v)
 
 
+class ArtifactConfig(BaseModel):
+    """Стартовый документ/артефакт мира."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    artifact_type: str
+    title: str
+    summary: str = ""
+    owner_org_id: str | None = None
+    zone_id: str | None = None
+    related_work_id: str | None = None
+    visibility: Literal["public", "internal"] = "internal"
+    status: str = "active"
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("artifact_id")
+    @classmethod
+    def _validate_artifact_id(cls, v: str) -> str:
+        ensure_kind(v, EntityKind.ARTIFACT)
+        return v
+
+    @field_validator("owner_org_id")
+    @classmethod
+    def _validate_owner_org_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.ORG)
+        return v
+
+    @field_validator("zone_id")
+    @classmethod
+    def _validate_zone_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.ZONE)
+        return v
+
+    @field_validator("related_work_id")
+    @classmethod
+    def _validate_related_work_id(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        ensure_kind(v, EntityKind.WORK_ITEM)
+        return v
+
+    @field_validator("tags")
+    @classmethod
+    def _normalize_tags(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for item in v or []:
+            value = str(item or "").strip()
+            if value:
+                out.append(value)
+        return out
+
+
 class InformationClimateConfig(BaseModel):
     """Начальный информационный фон среды."""
 
@@ -692,6 +755,7 @@ class WorldConfig(BaseModel):
     channels: list[ChannelConfig] = Field(default_factory=list)
     orgs: list[OrgConfig] = Field(default_factory=list)
     work_items: list[WorkItemConfig] = Field(default_factory=list)
+    artifacts: list[ArtifactConfig] = Field(default_factory=list)
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
 
 

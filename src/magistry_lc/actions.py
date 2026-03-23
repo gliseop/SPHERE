@@ -126,6 +126,8 @@ class SpawnAgentAction(_BaseAction):
     name: str
     internal: bool
     persona_hint: str
+    org_id: str = ""
+    zone_id: str = ""
     capabilities: list[str] = Field(default_factory=lambda: ["message", "work"])
 
 
@@ -267,6 +269,8 @@ def actions_json_schema(*, max_actions: int) -> dict[str, Any]:
                 "name": {"type": "string"},
                 "internal": {"type": "boolean"},
                 "persona_hint": {"type": "string"},
+                "org_id": {"type": "string"},
+                "zone_id": {"type": "string"},
                 "capabilities": {"type": "array", "items": {"type": "string"}},
             },
             ["type", "slug", "name", "internal", "persona_hint"],

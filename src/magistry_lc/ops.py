@@ -22,6 +22,7 @@ from .ids import (
 from .persona import PersonaArtifact
 from .state import (
     AgentState,
+    ArtifactState,
     AuditCase,
     InformationClimateState,
     InstitutionRegimeState,
@@ -89,6 +90,8 @@ class CreateAgentOp:
     capabilities: list[str]
     created_by: str | None
     created_tick: int
+    org_id: str | None = None
+    zone_id: str | None = None
 
     def apply(self, state: WorldState) -> list[Event]:
         ensure_kind(self.entity_id, EntityKind.AGENT)
@@ -97,11 +100,21 @@ class CreateAgentOp:
         display_name = normalize_agent_display_name(self.name, fallback=self.entity_id)
         if not display_name:
             raise ValueError("Agent name must be human-readable")
+        if self.org_id is not None:
+            ensure_kind(self.org_id, EntityKind.ORG)
+            if not state.registry.exists(self.org_id):
+                raise ValueError(f"Unknown org_id: {self.org_id!r}")
+        if self.zone_id is not None:
+            ensure_kind(self.zone_id, EntityKind.ZONE)
+            if not state.registry.exists(self.zone_id):
+                raise ValueError(f"Unknown zone_id: {self.zone_id!r}")
 
         meta = {
             "name": display_name,
             "internal": bool(self.internal),
             "capabilities": list(self.capabilities),
+            "org_id": self.org_id,
+            "zone_id": self.zone_id,
         }
         state.registry.register(
             EntityRecord(
@@ -118,6 +131,8 @@ class CreateAgentOp:
             internal=bool(self.internal),
             persona=PersonaArtifact(summary=(self.persona_hint or "").strip()),
             capabilities=list(self.capabilities),
+            org_id=self.org_id,
+            zone_id=self.zone_id,
             wants_promotion=False,
         )
         return [
@@ -387,6 +402,143 @@ class SetReputationFreezeOp:
                 actor_id=self.actor_id,
                 payload={"target_agent_id": self.target_agent_id, "reason": self.reason},
                 audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class CreateArtifactOp:
+    """Создать документ/артефакт мира."""
+
+    created_by: str | None
+    artifact_id: str
+    artifact_type: str
+    title: str
+    summary: str = ""
+    owner_org_id: str | None = None
+    zone_id: str | None = None
+    related_work_id: str | None = None
+    visibility: str = "internal"
+    status: str = "active"
+    tags: list[str] | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        ensure_kind(self.artifact_id, EntityKind.ARTIFACT)
+        if state.registry.exists(self.artifact_id) or self.artifact_id in state.artifacts:
+            raise ValueError(f"Artifact already exists: {self.artifact_id!r}")
+        if self.owner_org_id is not None:
+            ensure_kind(self.owner_org_id, EntityKind.ORG)
+            if not state.registry.exists(self.owner_org_id):
+                raise ValueError(f"Unknown owner_org_id: {self.owner_org_id!r}")
+        if self.zone_id is not None:
+            ensure_kind(self.zone_id, EntityKind.ZONE)
+            if not state.registry.exists(self.zone_id):
+                raise ValueError(f"Unknown zone_id: {self.zone_id!r}")
+        if self.related_work_id is not None:
+            ensure_kind(self.related_work_id, EntityKind.WORK_ITEM)
+            if self.related_work_id not in state.work_items:
+                raise ValueError(f"Unknown related_work_id: {self.related_work_id!r}")
+
+        meta = {
+            "artifact_type": self.artifact_type,
+            "title": self.title,
+            "owner_org_id": self.owner_org_id,
+            "zone_id": self.zone_id,
+            "related_work_id": self.related_work_id,
+            "visibility": self.visibility,
+            "status": self.status,
+            "tags": list(self.tags or []),
+        }
+        state.registry.register(
+            EntityRecord(
+                entity_id=self.artifact_id,
+                kind=EntityKind.ARTIFACT,
+                created_by=self.created_by,
+                created_tick=state.tick,
+                meta=meta,
+            )
+        )
+        state.artifacts[self.artifact_id] = ArtifactState(
+            artifact_id=self.artifact_id,
+            artifact_type=self.artifact_type,
+            title=self.title,
+            summary=self.summary,
+            owner_org_id=self.owner_org_id,
+            zone_id=self.zone_id,
+            related_work_id=self.related_work_id,
+            visibility=self.visibility,
+            status=self.status,
+            tags=list(self.tags or []),
+        )
+        return [
+            Event(
+                tick=state.tick,
+                event_type="artifact_created",
+                actor_id=self.created_by,
+                payload={
+                    "artifact_id": self.artifact_id,
+                    "artifact_type": self.artifact_type,
+                    "title": self.title,
+                    "summary": self.summary,
+                    "owner_org_id": self.owner_org_id,
+                    "zone_id": self.zone_id,
+                    "related_work_id": self.related_work_id,
+                    "visibility": self.visibility,
+                    "status": self.status,
+                    "tags": list(self.tags or []),
+                },
+                audience=[PUBLIC_AUDIENCE] if self.visibility == "public" else [INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateArtifactOp:
+    """Обновить документ/артефакт мира."""
+
+    actor_id: str | None
+    artifact_id: str
+    title: str | None = None
+    summary: str | None = None
+    status: str | None = None
+    visibility: str | None = None
+    tags: list[str] | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        ensure_kind(self.artifact_id, EntityKind.ARTIFACT)
+        artifact = state.artifacts.get(self.artifact_id)
+        if artifact is None:
+            raise ValueError(f"Unknown artifact: {self.artifact_id!r}")
+        artifact.title = self.title or artifact.title
+        artifact.summary = self.summary or artifact.summary
+        artifact.status = self.status or artifact.status
+        artifact.visibility = self.visibility or artifact.visibility
+        if self.tags is not None:
+            artifact.tags = list(self.tags)
+        record = state.registry.get(self.artifact_id)
+        if record is not None:
+            record.meta.update(
+                {
+                    "title": artifact.title,
+                    "visibility": artifact.visibility,
+                    "status": artifact.status,
+                    "tags": list(artifact.tags),
+                }
+            )
+        return [
+            Event(
+                tick=state.tick,
+                event_type="artifact_updated",
+                actor_id=self.actor_id,
+                payload={
+                    "artifact_id": artifact.artifact_id,
+                    "title": artifact.title,
+                    "summary": artifact.summary,
+                    "visibility": artifact.visibility,
+                    "status": artifact.status,
+                    "tags": list(artifact.tags),
+                },
+                audience=[PUBLIC_AUDIENCE] if artifact.visibility == "public" else [INTERNAL_AUDIENCE],
             )
         ]
 

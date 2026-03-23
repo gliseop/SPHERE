@@ -37,6 +37,7 @@ from .journal import WorldJournal
 from .llm import LLMCaller, create_llm_provider
 from .oracle import FreeformTruthRecorder, save_freeform_truth
 from .ops import (
+    CreateArtifactOp,
     CreateAgentOp,
     CreateEntityOp,
     CreateWorkItemOp,
@@ -46,6 +47,7 @@ from .ops import (
     UpdateInformationClimateOp,
     UpdateInstitutionRegimeOp,
     UpdateResourcePoolOp,
+    UpdateArtifactOp,
     UpdateZoneStateOp,
 )
 from .persona import (
@@ -418,6 +420,19 @@ class WorldEngine:
                     )
                 )
 
+                already_acted = {aid for aid, acts in proposed.items() if acts}
+                tick_events.extend(
+                    await self._run_micro_reaction_rounds(
+                        state=state,
+                        runners=runners,
+                        arbiter=arbiter,
+                        event_log=event_log,
+                        events_history=events_history,
+                        tick_events=tick_events,
+                        already_acted=already_acted,
+                    )
+                )
+
             new_agents = self._detect_new_agents(state=state, runners=runners)
             if new_agents:
                 await self._register_new_agents(
@@ -494,6 +509,38 @@ class WorldEngine:
                 )
                 if env_events:
                     tick_events.extend(env_events)
+                artifact_events = self._apply_worldgen_artifact_changes(
+                    state=state,
+                    creations=[
+                        {
+                            "artifact_id": item.artifact_id,
+                            "artifact_type": item.artifact_type,
+                            "title": item.title,
+                            "summary": item.summary,
+                            "owner_org_id": item.owner_org_id,
+                            "zone_id": item.zone_id,
+                            "related_work_id": item.related_work_id,
+                            "visibility": item.visibility,
+                            "status": item.status,
+                            "tags": list(item.tags or []),
+                        }
+                        for item in generated.artifact_creations
+                    ],
+                    updates=[
+                        {
+                            "artifact_id": item.artifact_id,
+                            "title": item.title,
+                            "summary": item.summary,
+                            "visibility": item.visibility,
+                            "status": item.status,
+                            "tags": list(item.tags or []) if item.tags is not None else None,
+                        }
+                        for item in generated.artifact_updates
+                    ],
+                    event_log=event_log,
+                )
+                if artifact_events:
+                    tick_events.extend(artifact_events)
                 scene_events = self._materialize_scene_hook_events(
                     tick=state.tick,
                     scene_hooks=generated.scene_hooks,
@@ -796,6 +843,23 @@ class WorldEngine:
                     "participants": list(work.participants[:6]),
                 }
             )
+        artifacts = []
+        for artifact_id in sorted(state.artifacts.keys())[:12]:
+            artifact = state.artifacts[artifact_id]
+            artifacts.append(
+                {
+                    "artifact_id": artifact_id,
+                    "artifact_type": artifact.artifact_type,
+                    "title": artifact.title,
+                    "summary": self._compact_text(artifact.summary, max_chars=180),
+                    "owner_org_id": artifact.owner_org_id,
+                    "zone_id": artifact.zone_id,
+                    "related_work_id": artifact.related_work_id,
+                    "visibility": artifact.visibility,
+                    "status": artifact.status,
+                    "tags": list(artifact.tags[:4]),
+                }
+            )
         votes = []
         for vid, vote in sorted(state.votes.items()):
             if vote.status != "open":
@@ -828,6 +892,7 @@ class WorldEngine:
                 max_resource_pools=10,
             ),
             "open_work_items": work_items,
+            "artifacts": artifacts,
             "open_votes": votes,
             "secondary_agents": secondary_agents[:20],
             "agent_count": len(state.agents),
@@ -1633,6 +1698,12 @@ class WorldEngine:
             existing_ids.add(entity_id)
             if display_name_key:
                 reserved_name_keys.add(display_name_key)
+            org_id = str(spawn.org_id or "").strip() or None
+            zone_id = str(spawn.zone_id or "").strip() or None
+            if org_id and not state.registry.exists(org_id):
+                continue
+            if zone_id and not state.registry.exists(zone_id):
+                continue
             ops.append(
                 CreateAgentOp(
                     entity_id=entity_id,
@@ -1640,6 +1711,8 @@ class WorldEngine:
                     internal=bool(spawn.internal),
                     persona_hint=spawn.persona_hint,
                     capabilities=Arbiter._sanitize_spawn_capabilities([], internal=bool(spawn.internal)),
+                    org_id=org_id,
+                    zone_id=zone_id,
                     created_by=None,
                     created_tick=state.tick,
                 )
@@ -1704,6 +1777,63 @@ class WorldEngine:
                 )
             )
         return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_environment")
+
+    def _apply_worldgen_artifact_changes(
+        self,
+        *,
+        state: WorldState,
+        creations: list[dict[str, Any]],
+        updates: list[dict[str, Any]],
+        event_log: EventLog,
+    ) -> list[Event]:
+        if not creations and not updates:
+            return []
+
+        ops: list[StateOp] = []
+        existing_ids = set(state.registry.list_ids()) | set(state.artifacts.keys())
+        for item in creations:
+            artifact_id = str(item.get("artifact_id") or "").strip()
+            artifact_type = str(item.get("artifact_type") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if not artifact_id or not artifact_type or not title or artifact_id in existing_ids:
+                continue
+            existing_ids.add(artifact_id)
+            ops.append(
+                CreateArtifactOp(
+                    created_by=None,
+                    artifact_id=artifact_id,
+                    artifact_type=artifact_type,
+                    title=title,
+                    summary=str(item.get("summary") or "").strip(),
+                    owner_org_id=str(item.get("owner_org_id") or "").strip() or None,
+                    zone_id=str(item.get("zone_id") or "").strip() or None,
+                    related_work_id=str(item.get("related_work_id") or "").strip() or None,
+                    visibility=str(item.get("visibility") or "internal").strip() or "internal",
+                    status=str(item.get("status") or "active").strip() or "active",
+                    tags=[str(tag).strip() for tag in item.get("tags") or [] if str(tag).strip()],
+                )
+            )
+
+        for item in updates:
+            artifact_id = str(item.get("artifact_id") or "").strip()
+            if not artifact_id or artifact_id not in state.artifacts:
+                continue
+            ops.append(
+                UpdateArtifactOp(
+                    actor_id=None,
+                    artifact_id=artifact_id,
+                    title=str(item.get("title") or "").strip() or None,
+                    summary=str(item.get("summary") or "").strip() or None,
+                    status=str(item.get("status") or "").strip() or None,
+                    visibility=str(item.get("visibility") or "").strip() or None,
+                    tags=(
+                        [str(tag).strip() for tag in item.get("tags") or [] if str(tag).strip()]
+                        if item.get("tags") is not None
+                        else None
+                    ),
+                )
+            )
+        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_artifact")
 
     def _personas_cache_path(self) -> Path:
         return self.artifacts.out_dir / "personas.json"
@@ -2029,6 +2159,22 @@ class WorldEngine:
             )
             event_log.extend(op.apply(state))
 
+        for artifact in self.cfg.world.artifacts:
+            op = CreateArtifactOp(
+                created_by=None,
+                artifact_id=artifact.artifact_id,
+                artifact_type=artifact.artifact_type,
+                title=artifact.title,
+                summary=artifact.summary,
+                owner_org_id=artifact.owner_org_id,
+                zone_id=artifact.zone_id,
+                related_work_id=artifact.related_work_id,
+                visibility=artifact.visibility,
+                status=artifact.status,
+                tags=list(artifact.tags),
+            )
+            event_log.extend(op.apply(state))
+
         return state
 
     async def _gather_actions(
@@ -2040,6 +2186,9 @@ class WorldEngine:
         agent_order: list[str],
         daily_contexts: dict[str, AgentDailyContext] | None = None,
         scene_hooks_by_agent: dict[str, list[SceneHook]] | None = None,
+        agent_filter: list[str] | None = None,
+        max_actions_override: int | None = None,
+        turn_note: str | None = None,
     ) -> tuple[dict[str, list[Action]], list[Event]]:
         async def _one(aid: str) -> tuple[str, list[Action], Event | None]:
             agent = state.agents[aid]
@@ -2051,6 +2200,8 @@ class WorldEngine:
                     visible_events=visible,
                     daily_context=(daily_contexts or {}).get(aid),
                     scene_hooks=(scene_hooks_by_agent or {}).get(aid, []),
+                    max_actions_override=max_actions_override,
+                    turn_note=turn_note,
                 )
                 return aid, acts, None
             except Exception as exc:
@@ -2067,18 +2218,21 @@ class WorldEngine:
                     ),
                 )
 
-        order = list(agent_order) if agent_order else sorted(state.agents.keys())
-        order = [
-            aid
-            for aid in order
-            if self._should_activate_agent(
-                state=state,
-                agent_id=aid,
-                events_history=events_history,
-                daily_contexts=daily_contexts,
-                scene_hooks_by_agent=scene_hooks_by_agent,
-            )
-        ]
+        if agent_filter is not None:
+            order = [aid for aid in agent_filter if aid in state.agents]
+        else:
+            order = list(agent_order) if agent_order else sorted(state.agents.keys())
+            order = [
+                aid
+                for aid in order
+                if self._should_activate_agent(
+                    state=state,
+                    agent_id=aid,
+                    events_history=events_history,
+                    daily_contexts=daily_contexts,
+                    scene_hooks_by_agent=scene_hooks_by_agent,
+                )
+            ]
         if not self.cfg.runtime.parallel_agents or len(order) <= 1:
             pairs = []
             for aid in order:
@@ -2103,6 +2257,179 @@ class WorldEngine:
             if err is not None:
                 errors.append(err)
         return gathered, errors
+
+    def _select_reactive_agent_ids(
+        self,
+        *,
+        state: WorldState,
+        tick_events: list[Event],
+        already_acted: set[str],
+        limit: int,
+    ) -> list[str]:
+        if limit <= 0:
+            return []
+
+        ordered: list[str] = []
+        seen: set[str] = set(already_acted)
+
+        def _push(aid: str) -> None:
+            if not aid or aid in seen or aid not in state.agents:
+                return
+            seen.add(aid)
+            ordered.append(aid)
+
+        for event in tick_events:
+            payload = event.payload or {}
+            if event.event_type == "message_sent":
+                to_id = str(payload.get("to_id") or "")
+                if bool(payload.get("private", True)):
+                    _push(to_id)
+                elif to_id and to_id.startswith("org:"):
+                    for aid, agent in sorted(state.agents.items()):
+                        if agent.org_id == to_id:
+                            _push(aid)
+                continue
+
+            if event.event_type == "scene_occurred":
+                for aid in payload.get("agents") or []:
+                    _push(str(aid))
+                continue
+
+            if event.event_type == "work_item_created":
+                for aid in payload.get("participants") or []:
+                    _push(str(aid))
+                continue
+
+            if event.event_type in {"work_note_added", "work_proposal_submitted"}:
+                work_id = str(payload.get("work_id") or "")
+                work = state.work_items.get(work_id)
+                if work is not None:
+                    for aid in work.participants:
+                        _push(str(aid))
+                continue
+
+            if event.event_type in {"artifact_created", "artifact_updated"}:
+                artifact_id = str(payload.get("artifact_id") or "")
+                artifact = state.artifacts.get(artifact_id)
+                if artifact is None:
+                    continue
+                if artifact.owner_org_id:
+                    for aid, agent in sorted(state.agents.items()):
+                        if agent.org_id == artifact.owner_org_id:
+                            _push(aid)
+                if artifact.zone_id:
+                    for aid, agent in sorted(state.agents.items()):
+                        if agent.zone_id == artifact.zone_id:
+                            _push(aid)
+                if artifact.related_work_id:
+                    work = state.work_items.get(artifact.related_work_id)
+                    if work is not None:
+                        for aid in work.participants:
+                            _push(str(aid))
+                continue
+
+            if event.event_type in {"vote_opened", "audit_case_opened", "audit_case_updated", "reputation_frozen"}:
+                _push(str(payload.get("target_agent_id") or payload.get("subject_agent_id") or ""))
+                continue
+
+            if event.event_type == "environment_institution_updated":
+                org_id = str(payload.get("org_id") or "")
+                for aid, agent in sorted(state.agents.items()):
+                    if agent.org_id == org_id:
+                        _push(aid)
+                continue
+
+            if event.event_type == "environment_zone_updated":
+                zone_id = str(payload.get("zone_id") or "")
+                for aid, agent in sorted(state.agents.items()):
+                    if agent.zone_id == zone_id:
+                        _push(aid)
+                continue
+
+            if event.event_type == "environment_resource_updated":
+                resource_id = str(payload.get("resource_id") or "")
+                pool = state.environment.resource_pools.get(resource_id)
+                if pool is not None and pool.owner_org_id:
+                    for aid, agent in sorted(state.agents.items()):
+                        if agent.org_id == pool.owner_org_id:
+                            _push(aid)
+                continue
+
+            if event.event_type == "environment_information_climate_updated":
+                for aid, agent in sorted(state.agents.items()):
+                    if agent.org_id or agent.zone_id:
+                        _push(aid)
+
+            if len(ordered) >= limit:
+                break
+
+        return ordered[:limit]
+
+    async def _run_micro_reaction_rounds(
+        self,
+        *,
+        state: WorldState,
+        runners: dict[str, AgentRunner],
+        arbiter: Arbiter,
+        event_log: EventLog,
+        events_history: list[Event],
+        tick_events: list[Event],
+        already_acted: set[str],
+    ) -> list[Event]:
+        rounds = int(self.cfg.runtime.micro_reaction_rounds)
+        limit = int(self.cfg.runtime.micro_reaction_max_agents_per_round)
+        if rounds <= 0 or limit <= 0:
+            return []
+
+        emitted: list[Event] = []
+        for round_index in range(rounds):
+            candidates = self._select_reactive_agent_ids(
+                state=state,
+                tick_events=tick_events,
+                already_acted=already_acted,
+                limit=limit,
+            )
+            if not candidates:
+                break
+
+            visible_history = list(events_history) + list(tick_events)
+            proposed, gather_errors = await self._gather_actions(
+                state=state,
+                runners=runners,
+                events_history=visible_history,
+                agent_order=candidates,
+                agent_filter=candidates,
+                max_actions_override=1,
+                turn_note=(
+                    f"Это локальное окно реакции внутри того же тика. "
+                    f"Ты реагируешь на уже произошедшие события текущего тика. "
+                    f"Сделай не больше одного короткого уместного шага. Раунд реакции: {round_index + 1}."
+                ),
+            )
+            if gather_errors:
+                event_log.extend(gather_errors)
+                tick_events.extend(gather_errors)
+                emitted.extend(gather_errors)
+
+            if not any(proposed.get(aid) for aid in candidates):
+                already_acted.update(candidates)
+                continue
+
+            reaction_events = await self._apply_actions(
+                state=state,
+                arbiter=arbiter,
+                proposed=proposed,
+                event_log=event_log,
+                agent_order=candidates,
+                journal_yaml=WorldJournal.from_state(state=state).to_yaml(),
+            )
+            if reaction_events:
+                tick_events.extend(reaction_events)
+                emitted.extend(reaction_events)
+
+            already_acted.update([aid for aid, acts in proposed.items() if acts])
+
+        return emitted
 
     async def _apply_actions(
         self,

@@ -28,6 +28,8 @@ class _SpawnSuggestionModel(BaseModel):
     name: str
     internal: bool
     persona_hint: str
+    org_id: str = ""
+    zone_id: str = ""
     reason: str = ""
 
 
@@ -95,6 +97,32 @@ class _InformationClimateUpdateModel(BaseModel):
     active_signals: list[str] | None = None
 
 
+class _ArtifactCreationModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    artifact_type: str
+    title: str
+    summary: str = ""
+    owner_org_id: str | None = None
+    zone_id: str | None = None
+    related_work_id: str | None = None
+    visibility: str | None = None
+    status: str | None = None
+    tags: list[str] | None = None
+
+
+class _ArtifactUpdateModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    title: str | None = None
+    summary: str | None = None
+    visibility: str | None = None
+    status: str | None = None
+    tags: list[str] | None = None
+
+
 @dataclass(slots=True)
 class SpawnSuggestion:
     """Предложение worldgen создать нового агента."""
@@ -103,6 +131,8 @@ class SpawnSuggestion:
     name: str
     internal: bool
     persona_hint: str
+    org_id: str | None = None
+    zone_id: str | None = None
     reason: str = ""
 
 
@@ -186,6 +216,34 @@ class EnvironmentUpdates:
 
 
 @dataclass(slots=True)
+class ArtifactCreation:
+    """Предложение создать новый документ/артефакт."""
+
+    artifact_id: str
+    artifact_type: str
+    title: str
+    summary: str = ""
+    owner_org_id: str | None = None
+    zone_id: str | None = None
+    related_work_id: str | None = None
+    visibility: str | None = None
+    status: str | None = None
+    tags: list[str] | None = None
+
+
+@dataclass(slots=True)
+class ArtifactUpdate:
+    """Предложение обновить существующий документ/артефакт."""
+
+    artifact_id: str
+    title: str | None = None
+    summary: str | None = None
+    visibility: str | None = None
+    status: str | None = None
+    tags: list[str] | None = None
+
+
+@dataclass(slots=True)
 class WorldgenOutput:
     """Нормализованный результат worldgen."""
 
@@ -194,6 +252,8 @@ class WorldgenOutput:
     agent_contexts: dict[str, AgentDailyContext] = field(default_factory=dict)
     scene_hooks: list[SceneHook] = field(default_factory=list)
     environment_updates: EnvironmentUpdates = field(default_factory=EnvironmentUpdates)
+    artifact_creations: list[ArtifactCreation] = field(default_factory=list)
+    artifact_updates: list[ArtifactUpdate] = field(default_factory=list)
 
 
 def _worldgen_schema(
@@ -232,6 +292,8 @@ def _worldgen_schema(
                         "name": {"type": "string"},
                         "internal": {"type": "boolean"},
                         "persona_hint": {"type": "string"},
+                        "org_id": {"type": "string"},
+                        "zone_id": {"type": "string"},
                         "reason": {"type": "string"},
                     },
                     "required": ["slug", "name", "internal", "persona_hint"],
@@ -303,6 +365,42 @@ def _worldgen_schema(
                             },
                         },
                     },
+                },
+            },
+            "artifact_creations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "artifact_id": {"type": "string"},
+                        "artifact_type": {"type": "string"},
+                        "title": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "owner_org_id": {"type": ["string", "null"]},
+                        "zone_id": {"type": ["string", "null"]},
+                        "related_work_id": {"type": ["string", "null"]},
+                        "visibility": {"type": ["string", "null"]},
+                        "status": {"type": ["string", "null"]},
+                        "tags": {"type": ["array", "null"], "items": {"type": "string"}},
+                    },
+                    "required": ["artifact_id", "artifact_type", "title"],
+                },
+            },
+            "artifact_updates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "artifact_id": {"type": "string"},
+                        "title": {"type": ["string", "null"]},
+                        "summary": {"type": ["string", "null"]},
+                        "visibility": {"type": ["string", "null"]},
+                        "status": {"type": ["string", "null"]},
+                        "tags": {"type": ["array", "null"], "items": {"type": "string"}},
+                    },
+                    "required": ["artifact_id"],
                 },
             },
         },
@@ -423,6 +521,7 @@ def _build_system_prompt(*, phase: Literal["pre", "post"], language: str) -> str
                 "Не подменяй собой журнал мира и не рассказывай за существующих агентов.",
                 "Если состояние среды уже явно сдвинулось, можешь вернуть environment_updates только по существующим org:/zone:/res: из state_snapshot.",
                 "Environment updates не должны создавать новые сущности и не должны утверждать решения конкретного агента как факт.",
+                "Artifact creations/updates можно использовать для документов, публикаций, служебных следов, утечек, отчётов и запросов, если это правдоподобное внешнее последствие уже произошедших процессов.",
             ]
         )
     return "\n".join(base) + "\n"
@@ -494,12 +593,16 @@ class WorldGenerator:
             agent_contexts_raw: list[dict[str, Any]] | dict[str, Any] = []
             scene_hooks_raw: list[dict[str, Any]] = []
             environment_updates_raw: dict[str, Any] = {}
+            artifact_creations_raw: list[dict[str, Any]] = []
+            artifact_updates_raw: list[dict[str, Any]] = []
         elif isinstance(resp.data, dict):
             events_raw = resp.data.get("events") or resp.data.get("global_events") or []
             spawns_raw = resp.data.get("spawns") or resp.data.get("spawn_suggestions") or []
             agent_contexts_raw = resp.data.get("agent_contexts") or []
             scene_hooks_raw = resp.data.get("scene_hooks") or []
             environment_updates_raw = resp.data.get("environment_updates") or {}
+            artifact_creations_raw = resp.data.get("artifact_creations") or []
+            artifact_updates_raw = resp.data.get("artifact_updates") or []
         else:
             return WorldgenOutput(events=[], spawns=[])
 
@@ -537,6 +640,8 @@ class WorldGenerator:
                     name=display_name,
                     internal=bool(spawn.internal),
                     persona_hint=spawn.persona_hint.strip(),
+                    org_id=(spawn.org_id or "").strip() or None,
+                    zone_id=(spawn.zone_id or "").strip() or None,
                     reason=spawn.reason.strip(),
                 )
             )
@@ -679,10 +784,60 @@ class WorldGenerator:
                         active_signals=active_signals,
                     )
 
+        artifact_creations: list[ArtifactCreation] = []
+        if isinstance(artifact_creations_raw, list):
+            for item in artifact_creations_raw:
+                try:
+                    raw = _ArtifactCreationModel.model_validate(item)
+                except Exception:
+                    continue
+                artifact_id = raw.artifact_id.strip()
+                artifact_type = raw.artifact_type.strip()
+                title = raw.title.strip()
+                if not artifact_id or not artifact_type or not title:
+                    continue
+                artifact_creations.append(
+                    ArtifactCreation(
+                        artifact_id=artifact_id,
+                        artifact_type=artifact_type,
+                        title=title,
+                        summary=(raw.summary or "").strip(),
+                        owner_org_id=(raw.owner_org_id or "").strip() or None,
+                        zone_id=(raw.zone_id or "").strip() or None,
+                        related_work_id=(raw.related_work_id or "").strip() or None,
+                        visibility=(raw.visibility or "").strip() or None,
+                        status=(raw.status or "").strip() or None,
+                        tags=[str(tag).strip() for tag in raw.tags or [] if str(tag).strip()] if raw.tags is not None else None,
+                    )
+                )
+
+        artifact_updates: list[ArtifactUpdate] = []
+        if isinstance(artifact_updates_raw, list):
+            for item in artifact_updates_raw:
+                try:
+                    raw = _ArtifactUpdateModel.model_validate(item)
+                except Exception:
+                    continue
+                artifact_id = raw.artifact_id.strip()
+                if not artifact_id:
+                    continue
+                artifact_updates.append(
+                    ArtifactUpdate(
+                        artifact_id=artifact_id,
+                        title=(raw.title or "").strip() or None,
+                        summary=(raw.summary or "").strip() or None,
+                        visibility=(raw.visibility or "").strip() or None,
+                        status=(raw.status or "").strip() or None,
+                        tags=[str(tag).strip() for tag in raw.tags or [] if str(tag).strip()] if raw.tags is not None else None,
+                    )
+                )
+
         return WorldgenOutput(
             events=out_events,
             spawns=spawns,
             agent_contexts=agent_contexts,
             scene_hooks=scene_hooks,
             environment_updates=environment_updates,
+            artifact_creations=artifact_creations,
+            artifact_updates=artifact_updates,
         )
