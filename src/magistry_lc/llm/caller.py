@@ -16,7 +16,11 @@ from typing import Any
 
 from ..config import LLMConfig
 from .protocols import LLMProvider, LLMResponse, StructuredLLMResponse
-from .providers import OpenAICompatibleProvider
+from .providers import (
+    OpenAICompatibleProvider,
+    _normalize_provider_order,
+    _provider_order_from_env,
+)
 from ..tracing import TraceLog, TraceSpan
 
 
@@ -44,11 +48,14 @@ def create_llm_provider(cfg: LLMConfig) -> LLMProvider:
     if not api_key:
         raise RuntimeError(f"{cfg.api_key_env} is not set")
     base_url = cfg.base_url or os.getenv("OPENAI_BASE_URL")
+    provider_order = _normalize_provider_order(list(cfg.provider_order) if cfg.provider_order else None)
+    if provider_order is None:
+        provider_order = _provider_order_from_env()
     return OpenAICompatibleProvider(
         model=cfg.model,
         api_key=api_key,
         base_url=base_url,
-        provider_order=list(cfg.provider_order) if cfg.provider_order else None,
+        provider_order=provider_order,
         use_tool_calls=cfg.use_tool_calls,
     )
 

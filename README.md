@@ -28,8 +28,9 @@ pip install -e ".[lc,dev]"
 
 ```bash
 cp .env.example .env
-# Отредактировать .env: указать OPENAI_API_KEY; при OpenRouter/OpenAI-compatible
-# можно также задать OPENAI_BASE_URL, и runtime подхватит его по умолчанию
+# Отредактировать .env: указать OPENAI_API_KEY.
+# Для OpenRouter задайте OPENAI_BASE_URL=https://openrouter.ai/api/v1
+# и при необходимости OPENROUTER_PROVIDER_ORDER=Groq
 ```
 
 ### Запуск симуляции

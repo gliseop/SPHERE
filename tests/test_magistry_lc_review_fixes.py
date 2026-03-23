@@ -47,7 +47,7 @@ from magistry_lc.ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from magistry_lc.journal import WorldJournal
 from magistry_lc.llm import LLMCaller
 from magistry_lc.llm.caller import create_llm_provider
-from magistry_lc.llm.providers import OpenAICompatibleProvider
+from magistry_lc.llm.providers import OpenAICompatibleProvider, create_provider
 from magistry_lc.memory import AgentMemory
 from magistry_lc.ops import CreateAgentOp
 from magistry_lc.state import AgentState, Vote, WorkItem, WorldState
@@ -920,6 +920,40 @@ def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) 
     _ = create_llm_provider(LLMConfig(model="gpt-4o-mini", base_url=None))
     assert captured["base_url"] == "https://example.test/v1"
     assert captured["provider_order"] is None
+
+
+def test_create_llm_provider_uses_env_provider_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProvider:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("magistry_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("OPENROUTER_PROVIDER_ORDER", "Groq, OpenAI,Groq")
+
+    _ = create_llm_provider(LLMConfig(model="gpt-4o-mini", base_url=None))
+
+    assert captured["provider_order"] == ["Groq", "OpenAI"]
+
+
+def test_create_provider_uses_env_provider_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeProvider:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("magistry_lc.llm.providers.OpenAICompatibleProvider", _FakeProvider)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("OPENROUTER_PROVIDER_ORDER", "Groq, OpenAI,Groq")
+
+    _ = create_provider(mock=False, model="gpt-4o-mini")
+
+    assert captured["provider_order"] == ["Groq", "OpenAI"]
 
 
 def test_create_llm_provider_loads_dotenv_from_cwd(

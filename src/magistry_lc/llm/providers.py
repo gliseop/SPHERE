@@ -9,6 +9,7 @@ import threading
 import time
 import traceback
 import uuid
+from pathlib import Path
 from typing import Any, Callable
 
 from .protocols import LLMProvider, LLMResponse, StructuredLLMResponse
@@ -32,6 +33,47 @@ from ._debug_logger import _LLMDebugLogger
 def _supports_provider_routing(base_url: str | None) -> bool:
     """Проверить, что backend понимает OpenRouter provider routing."""
     return "openrouter" in (base_url or "").lower()
+
+
+def _load_dotenv_if_available() -> None:
+    """Подгрузить `.env`, если библиотека доступна."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    cwd_env = Path.cwd() / ".env"
+    if cwd_env.exists():
+        load_dotenv(dotenv_path=cwd_env)
+        return
+    load_dotenv()
+
+
+def _normalize_provider_order(values: list[str] | None) -> list[str] | None:
+    """Нормализовать список provider routing backend'ов."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(value)
+    return normalized or None
+
+
+def _provider_order_from_env() -> list[str] | None:
+    """Прочитать provider routing order из переменных окружения."""
+    raw = (
+        os.getenv("OPENROUTER_PROVIDER_ORDER")
+        or os.getenv("OPENAI_PROVIDER_ORDER")
+        or ""
+    ).strip()
+    if not raw:
+        return None
+    return _normalize_provider_order(raw.split(","))
 
 
 class MockLLMProvider:
@@ -639,11 +681,11 @@ def create_provider(
     if mock:
         return MockLLMProvider()
 
-    import os
-
+    _load_dotenv_if_available()
     resolved_model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
     resolved_key = api_key or os.getenv("OPENAI_API_KEY")
     resolved_url = base_url or os.getenv("OPENAI_BASE_URL")
+    resolved_provider_order = _normalize_provider_order(provider_order) or _provider_order_from_env()
 
     resolved_use_tool_calls = use_tool_calls
     if not resolved_use_tool_calls:
@@ -655,6 +697,6 @@ def create_provider(
         api_key=resolved_key,
         base_url=resolved_url,
         cache_path=cache_path,
-        provider_order=provider_order,
+        provider_order=resolved_provider_order,
         use_tool_calls=resolved_use_tool_calls,
     )

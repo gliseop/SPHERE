@@ -47,6 +47,8 @@ cp .env.example .env
 | Переменная | Обязательна | Описание |
 |---|---|---|
 | `OPENAI_API_KEY` | Да (для симуляций) | Ключ OpenAI API (или совместимого провайдера, например OpenRouter) |
+| `OPENAI_BASE_URL` | Нет | Базовый URL OpenAI-compatible API. Для OpenRouter обычно `https://openrouter.ai/api/v1` |
+| `OPENROUTER_PROVIDER_ORDER` | Нет | Порядок OpenRouter provider routing через запятую, например `Groq,OpenAI` |
 | `JWT_SECRET` | Да (для веб) | Секрет для JWT-токенов длиной не менее 32 байт, генерируется: `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `JWT_EXPIRE_HOURS` | Нет | Время жизни токена, по умолчанию 24 часа |
 | `MAGISTRY_DEV` | Нет | `1` для режима разработки (если `JWT_SECRET` не задан, backend создаёт одноразовый секрет на текущий процесс) |

@@ -43,8 +43,8 @@ magistry-lc compose --description <текст> --out <путь> [опции]
 | `--seed` | целое | `42` | Зерно генератора |
 | `--language` | строка | `ru` | Язык генерации |
 | `--model` | строка | из LLMConfig | Модель LLM |
-| `--base-url` | строка | — | Базовый URL API |
-| `--provider-order` | строка | — | Опциональный приоритет провайдеров через запятую для OpenRouter (например, `Groq,OpenAI`) |
+| `--base-url` | строка | — | Базовый URL API; если не указан, берётся из `OPENAI_BASE_URL` |
+| `--provider-order` | строка | — | Опциональный приоритет провайдеров через запятую для OpenRouter (например, `Groq,OpenAI`); если не указан, берётся из `OPENROUTER_PROVIDER_ORDER` |
 | `--temperature` | дробное | из LLMConfig | Температура генерации |
 | `--trace` | путь | `results/compose_trace.jsonl` | Путь к файлу трассировки |
 
@@ -60,8 +60,8 @@ magistry-lc oracle --events <путь> --out <путь> [опции]
 | `--out` | путь | (обязательный) | Выходной JSON с нарушениями |
 | `--window` | целое | `5` | Размер окна в тиках |
 | `--model` | строка | из LLMConfig | Модель LLM |
-| `--base-url` | строка | — | Базовый URL API |
-| `--provider-order` | строка | — | Опциональный приоритет провайдеров через запятую для OpenRouter |
+| `--base-url` | строка | — | Базовый URL API; если не указан, берётся из `OPENAI_BASE_URL` |
+| `--provider-order` | строка | — | Опциональный приоритет провайдеров через запятую для OpenRouter; если не указан, берётся из `OPENROUTER_PROVIDER_ORDER` |
 | `--temperature` | дробное | из LLMConfig | Температура генерации |
 | `--trace` | путь | `<out>.trace.jsonl` | Путь к файлу трассировки |
 
