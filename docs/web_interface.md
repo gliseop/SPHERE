@@ -4,6 +4,16 @@
 
 ## Серверная часть
 
+### Предпочтительный запуск
+
+Для текущей среды web UI рекомендуется запускать контейнером:
+
+```bash
+docker compose up --build -d web
+```
+
+Контейнерный launcher собирает фронтенд в image, затем запускает FastAPI, который раздаёт и API, и готовую статику. Bootstrap-пользователь для логина создаётся из `MAGISTRY_ADMIN_USERNAME` / `MAGISTRY_ADMIN_PASSWORD`; по умолчанию это `magistry_admin` / `MagistryDocker123!`.
+
 ### Структура
 
 ```

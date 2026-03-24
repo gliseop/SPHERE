@@ -32,6 +32,8 @@ MAGISTRY — мета-двигатель для агентной симуляц�
 
 ```text
 MAGISTRY/
+├── docker/                    # Контейнерные entrypoint/служебные скрипты
+│   └── web-entrypoint.sh      # Bootstrap admin-пользователя и запуск uvicorn в Docker
 ├── src/magistry_lc/            # Движок симуляции (LangChain/LangGraph)
 │   ├── __init__.py             # Пакет
 │   ├── cli.py                  # CLI `magistry-lc`
@@ -161,6 +163,9 @@ MAGISTRY/
 │   └── 2411.10109v1.pdf        # Ключевая научная статья
 ├── scripts/
 │   └── collect_for_chatgpt.py  # Сборка контекста репозитория в один файл
+├── .dockerignore              # Исключения для Docker build context
+├── Dockerfile.web             # Мультистейдж-образ web UI: сборка React + запуск FastAPI
+├── docker-compose.yml         # Контейнерный launcher web-стека MAGISTRY
 ├── .env.example                # Пример переменных окружения
 ├── AGENTS.md                   # Главная карта проекта для AI-агентов
 ├── chapter_1.md                # Теоретическая глава ВКР
@@ -321,8 +326,10 @@ cd web/frontend && npm run test:e2e
 - **Memory summarization policy**: рабочая память больше не суммаризируется при минимальном overflow. Перед LLM-вызовом движок ждёт, пока переполнение `working` превысит порог `working_summary_min_overflow`, и детерминированно схлопывает серийные технические записи перед отправкой batch в суммаризатор.
 - **Provider timeout contract**: один модельный ответ теперь ограничен жёстким deadline (`MAGISTRY_LLM_CALL_DEADLINE_S`, по умолчанию 30 секунд), а timeout-ошибки не растягиваются длинной retry-цепочкой тем же провайдером.
 - **Persistent persona cache**: fingerprint-cache enrichment теперь живёт не только в локальном `{out_dir}/personas.json`, но и рядом с директориями прогонов, так что одинаковые benchmark-runs могут переиспользовать персоны между разными `out_dir`.
+- **Docker web-launcher**: для этой среды web UI предпочтительно поднимать через `docker compose up web`: контейнер сам собирает фронтенд, поднимает FastAPI, создаёт bootstrap `admin` из env (`MAGISTRY_ADMIN_USERNAME` / `MAGISTRY_ADMIN_PASSWORD`) и работает поверх bind-mounted `results/`, `scenarios/`, `data/`.
 - **DAO по умолчанию**: self-nomination и self-vote цели отключены; нормальный путь для кандидата — `respond_nomination`, а `vote_closed` пишет детерминированную причину результата. `governance.position_policy` в v1 поддерживает только `dao`; `auto` отклоняется при валидации.
 - **Веб-launcher на `magistry_lc`**: `POST /api/scenarios/{id}/run` и `POST /api/runs/launch` запускают `magistry_lc` как subprocess, пишут артефакты в `results/{run_name}/` и показываются в `/api/runs/active` как обычные API-запуски.
+- **Предпочтительный способ запуска среды**: в этой рабочей среде по умолчанию считать Docker основным способом подъёма backend/frontend и сопутствующих сервисов. Если контейнерный путь доступен, сначала использовать его; прямой локальный запуск через `start.sh`, `uvicorn`, `npm` и аналогичные команды рассматривать как запасной вариант для случаев, когда Docker-конфигурации или образов ещё нет.
 - **Built-in seed-сценарии**: `seed_s*_g*.json` используются только как backing-файлы для `/api/templates/scenarios/*` и уже хранятся как полноценный `ScenarioConfig`; backend не показывает их в CRUD-списке `/api/scenarios` и не позволяет менять/удалять через сценарные маршруты.
 - **Отказ от legacy web-сценариев**: старый формат JSON-карточек (`name/scenario/governance/agents` без полного `ScenarioConfig`) больше не поддерживается. Web backend сохраняет пользовательские сценарии только как полный `ScenarioConfig`; если `sim_config` пуст, при сохранении сначала материализуется выбранный шаблон `S/G`, а затем поверх него накладываются overrides из UI.
 - **Custom governance modes**: пользовательские `G*`-режимы должны содержать валидный `GovernanceConfig` (в поле `config` или в корне JSON); backend применяет их при подстановке шаблона и round-trip сценария, а не игнорирует как неизвестный `G4+`.

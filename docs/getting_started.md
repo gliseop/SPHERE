@@ -104,6 +104,40 @@ magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc
 
 ## Запуск веб-интерфейса
 
+### Предпочтительный запуск через Docker
+
+Для этой среды рекомендуется контейнерный подъём web-стека:
+
+```bash
+docker compose up --build -d web
+```
+
+Контейнер:
+- собирает React-фронтенд внутри образа;
+- поднимает FastAPI на `http://localhost:8765`;
+- по умолчанию создаёт bootstrap-пользователя `admin` из env;
+- использует bind-mount для `results/`, `scenarios/`, `data/`, поэтому уже существующие прогоны сразу видны в UI.
+
+Локальные dev-учётные данные по умолчанию:
+- логин: `magistry_admin`
+- пароль: `MagistryDocker123!`
+
+Переопределение перед запуском:
+
+```bash
+export MAGISTRY_ADMIN_USERNAME=my_admin
+export MAGISTRY_ADMIN_PASSWORD='StrongPassword123!'
+docker compose up --build -d web
+```
+
+Остановка:
+
+```bash
+docker compose down
+```
+
+### Локальный fallback без Docker
+
 Скрипт `web/start.sh` собирает фронтенд и запускает FastAPI-сервер. Он автоматически ищет Python как в `.venv/bin`, так и в `.venv/Scripts`, поэтому подходит и для Windows-окружения с Git Bash.
 
 ```bash

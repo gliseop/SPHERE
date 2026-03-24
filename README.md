@@ -59,6 +59,21 @@ magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc
 
 ### Запуск веб-интерфейса
 
+Предпочтительный путь для этой среды:
+
+```bash
+docker compose up --build -d web
+```
+
+После старта UI доступен по адресу `http://localhost:8765`. По умолчанию контейнер создаёт dev-пользователя:
+
+- логин: `magistry_admin`
+- пароль: `MagistryDocker123!`
+
+При необходимости переопределите `MAGISTRY_ADMIN_USERNAME` и `MAGISTRY_ADMIN_PASSWORD` через окружение или `.env` до запуска `docker compose`.
+
+Локальный fallback без Docker:
+
 ```bash
 cd web && bash start.sh
 ```
