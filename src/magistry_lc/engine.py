@@ -8,7 +8,8 @@ import json
 import logging
 import os
 import random
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -55,6 +56,7 @@ from .ops import (
     UpdateArtifactOp,
     UpdateZoneStateOp,
     UpdateOperationalQueueOp,
+    UpsertOperationalQueueOp,
 )
 from .persona import (
     INTERVIEW_QUESTIONS_V2,
@@ -133,6 +135,7 @@ class RunArtifacts:
     summary_path: Path | None = None
     environment_summary_path: Path | None = None
     environment_timeline_path: Path | None = None
+    perf_summary_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -142,6 +145,7 @@ class WorldEngine:
     cfg: ScenarioConfig
     artifacts: RunArtifacts
     provider_override: LLMProvider | None = None
+    _local_perf_events: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.artifacts.out_dir.mkdir(parents=True, exist_ok=True)
@@ -165,6 +169,8 @@ class WorldEngine:
             self.artifacts.environment_summary_path = self.artifacts.out_dir / "environment_summary.json"
         if self.artifacts.environment_timeline_path is None:
             self.artifacts.environment_timeline_path = self.artifacts.out_dir / "environment_timeline.jsonl"
+        if self.artifacts.perf_summary_path is None:
+            self.artifacts.perf_summary_path = self.artifacts.out_dir / "perf_summary.json"
 
     async def run(self) -> WorldState:
         """Запустить симуляцию и вернуть финальный WorldState."""
@@ -785,6 +791,7 @@ class WorldEngine:
                 encoding="utf-8",
             )
         self._write_environment_summary(state=state)
+        self._write_perf_summary()
         self._write_names_sidecar(state=state)
         self._write_status_sidecar(state="finished", tick=state.tick)
         return state
@@ -872,6 +879,263 @@ class WorldEngine:
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    def _write_perf_summary(self) -> None:
+        if self.artifacts.perf_summary_path is None:
+            return
+        payload = self._build_perf_summary()
+        self.artifacts.perf_summary_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def _record_local_perf_call(
+        self,
+        phase: str,
+        tick: int | None,
+        duration_ms: float,
+        input_count: int,
+        input_chars: int,
+    ) -> None:
+        self._local_perf_events.append(
+            {
+                "phase": phase,
+                "tick": tick,
+                "duration_ms": float(duration_ms),
+                "input_count": int(input_count),
+                "input_chars": int(input_chars),
+            }
+        )
+
+    @staticmethod
+    def _percentile(values: list[float], q: float) -> float:
+        if not values:
+            return 0.0
+        if len(values) == 1:
+            return float(values[0])
+        ordered = sorted(float(v) for v in values)
+        idx = max(0.0, min(float(len(ordered) - 1), (len(ordered) - 1) * q))
+        lo = int(idx)
+        hi = min(len(ordered) - 1, lo + 1)
+        frac = idx - lo
+        return ordered[lo] * (1.0 - frac) + ordered[hi] * frac
+
+    def _build_perf_summary(self) -> dict[str, Any]:
+        role_stats: dict[str, dict[str, Any]] = {}
+        tick_stats: dict[int, dict[str, Any]] = {}
+        local_phase_stats: dict[str, dict[str, Any]] = {}
+        first_ts: datetime | None = None
+        last_ts: datetime | None = None
+        slow_calls: list[dict[str, Any]] = []
+
+        def _touch(container: dict[Any, dict[str, Any]], key: Any) -> dict[str, Any]:
+            bucket = container.get(key)
+            if bucket is None:
+                bucket = {
+                    "calls": 0,
+                    "duration_ms": 0.0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "durations_ms": [],
+                    "retries_used": 0,
+                    "timeout_count": 0,
+                    "error_count": 0,
+                }
+                container[key] = bucket
+            return bucket
+
+        if self.artifacts.trace_path.exists():
+            for line in self.artifacts.trace_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                role = str(row.get("role") or "unknown")
+                tick = row.get("tick")
+                duration_ms = float(row.get("duration_ms") or 0.0)
+                usage = row.get("usage") or {}
+                meta = row.get("meta") or {}
+                error = row.get("error") or {}
+                prompt_tokens = int(usage.get("prompt_tokens") or 0)
+                completion_tokens = int(usage.get("completion_tokens") or 0)
+
+                role_bucket = _touch(role_stats, role)
+                role_bucket["calls"] = int(role_bucket["calls"]) + 1
+                role_bucket["duration_ms"] = float(role_bucket["duration_ms"]) + duration_ms
+                role_bucket["prompt_tokens"] = int(role_bucket["prompt_tokens"]) + prompt_tokens
+                role_bucket["completion_tokens"] = int(role_bucket["completion_tokens"]) + completion_tokens
+                role_bucket["durations_ms"].append(duration_ms)
+                role_bucket["retries_used"] = int(role_bucket["retries_used"]) + int(meta.get("retries_used") or 0)
+                if error:
+                    role_bucket["error_count"] = int(role_bucket["error_count"]) + 1
+                    if str(error.get("type") or "") == "TimeoutError":
+                        role_bucket["timeout_count"] = int(role_bucket["timeout_count"]) + 1
+
+                if tick is not None:
+                    tick_bucket = _touch(tick_stats, int(tick))
+                    tick_bucket["calls"] = int(tick_bucket["calls"]) + 1
+                    tick_bucket["duration_ms"] = float(tick_bucket["duration_ms"]) + duration_ms
+                    tick_bucket["prompt_tokens"] = int(tick_bucket["prompt_tokens"]) + prompt_tokens
+                    tick_bucket["completion_tokens"] = int(tick_bucket["completion_tokens"]) + completion_tokens
+                    tick_bucket["durations_ms"].append(duration_ms)
+                    tick_bucket["retries_used"] = int(tick_bucket["retries_used"]) + int(meta.get("retries_used") or 0)
+                    if error:
+                        tick_bucket["error_count"] = int(tick_bucket["error_count"]) + 1
+                        if str(error.get("type") or "") == "TimeoutError":
+                            tick_bucket["timeout_count"] = int(tick_bucket["timeout_count"]) + 1
+
+                raw_ts = str(row.get("timestamp") or "").strip()
+                if raw_ts:
+                    try:
+                        parsed_ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+                    except ValueError:
+                        parsed_ts = None
+                    if parsed_ts is not None:
+                        first_ts = parsed_ts if first_ts is None or parsed_ts < first_ts else first_ts
+                        last_ts = parsed_ts if last_ts is None or parsed_ts > last_ts else last_ts
+                slow_calls.append(
+                    {
+                        "kind": "llm",
+                        "phase": role,
+                        "name": str(row.get("name") or ""),
+                        "tick": tick,
+                        "duration_ms": round(duration_ms, 3),
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens,
+                        "retries_used": int(meta.get("retries_used") or 0),
+                        "error_type": str(error.get("type") or "") or None,
+                    }
+                )
+
+        for row in self._local_perf_events:
+            phase = str(row.get("phase") or "unknown")
+            tick = row.get("tick")
+            duration_ms = float(row.get("duration_ms") or 0.0)
+            bucket = local_phase_stats.get(phase)
+            if bucket is None:
+                bucket = {
+                    "calls": 0,
+                    "duration_ms": 0.0,
+                    "input_count": 0,
+                    "input_chars": 0,
+                    "durations_ms": [],
+                }
+                local_phase_stats[phase] = bucket
+            bucket["calls"] = int(bucket["calls"]) + 1
+            bucket["duration_ms"] = float(bucket["duration_ms"]) + duration_ms
+            bucket["input_count"] = int(bucket["input_count"]) + int(row.get("input_count") or 0)
+            bucket["input_chars"] = int(bucket["input_chars"]) + int(row.get("input_chars") or 0)
+            bucket["durations_ms"].append(duration_ms)
+            slow_calls.append(
+                {
+                    "kind": "local",
+                    "phase": phase,
+                    "name": phase,
+                    "tick": tick,
+                    "duration_ms": round(duration_ms, 3),
+                    "input_count": int(row.get("input_count") or 0),
+                    "input_chars": int(row.get("input_chars") or 0),
+                }
+            )
+
+        total_prompt = sum(int(bucket["prompt_tokens"]) for bucket in role_stats.values())
+        total_completion = sum(int(bucket["completion_tokens"]) for bucket in role_stats.values())
+        sum_duration_ms = sum(float(bucket["duration_ms"]) for bucket in role_stats.values())
+        total_retries = sum(int(bucket["retries_used"]) for bucket in role_stats.values())
+        total_timeouts = sum(int(bucket["timeout_count"]) for bucket in role_stats.values())
+        total_errors = sum(int(bucket["error_count"]) for bucket in role_stats.values())
+        trace_span_seconds = (
+            max(0.0, (last_ts - first_ts).total_seconds())
+            if first_ts is not None and last_ts is not None
+            else 0.0
+        )
+
+        def _format_bucket(bucket: dict[str, Any]) -> dict[str, float | int | None]:
+            total_tokens = int(bucket["prompt_tokens"]) + int(bucket["completion_tokens"])
+            duration_ms = float(bucket["duration_ms"])
+            duration_s = duration_ms / 1000.0
+            durations = [float(item) for item in bucket.get("durations_ms", [])]
+            return {
+                "calls": int(bucket["calls"]),
+                "duration_ms": round(duration_ms, 3),
+                "duration_s": round(duration_s, 3),
+                "prompt_tokens": int(bucket["prompt_tokens"]),
+                "completion_tokens": int(bucket["completion_tokens"]),
+                "total_tokens": total_tokens,
+                "avg_duration_ms": round(duration_ms / max(int(bucket["calls"]), 1), 3),
+                "avg_total_tokens": round(total_tokens / max(int(bucket["calls"]), 1), 3),
+                "tokens_per_second": round(total_tokens / duration_s, 3) if duration_s > 0 else None,
+                "p50_duration_ms": round(self._percentile(durations, 0.5), 3) if durations else None,
+                "p95_duration_ms": round(self._percentile(durations, 0.95), 3) if durations else None,
+                "max_duration_ms": round(max(durations), 3) if durations else None,
+                "retries_used_total": int(bucket.get("retries_used") or 0),
+                "timeout_count": int(bucket.get("timeout_count") or 0),
+                "error_count": int(bucket.get("error_count") or 0),
+            }
+
+        def _format_local_bucket(bucket: dict[str, Any]) -> dict[str, float | int | None]:
+            duration_ms = float(bucket["duration_ms"])
+            duration_s = duration_ms / 1000.0
+            durations = [float(item) for item in bucket.get("durations_ms", [])]
+            return {
+                "calls": int(bucket["calls"]),
+                "duration_ms": round(duration_ms, 3),
+                "duration_s": round(duration_s, 3),
+                "avg_duration_ms": round(duration_ms / max(int(bucket["calls"]), 1), 3),
+                "p50_duration_ms": round(self._percentile(durations, 0.5), 3) if durations else None,
+                "p95_duration_ms": round(self._percentile(durations, 0.95), 3) if durations else None,
+                "max_duration_ms": round(max(durations), 3) if durations else None,
+                "input_count": int(bucket["input_count"]),
+                "input_chars": int(bucket["input_chars"]),
+            }
+
+        slow_calls.sort(key=lambda item: float(item.get("duration_ms") or 0.0), reverse=True)
+
+        return {
+            "overall": {
+                "prompt_tokens": total_prompt,
+                "completion_tokens": total_completion,
+                "total_tokens": total_prompt + total_completion,
+                "sum_llm_duration_ms": round(sum_duration_ms, 3),
+                "sum_llm_duration_s": round(sum_duration_ms / 1000.0, 3),
+                "trace_span_s": round(trace_span_seconds, 3),
+                "retries_used_total": total_retries,
+                "timeout_count": total_timeouts,
+                "error_count": total_errors,
+                "local_phase_duration_s": round(
+                    sum(float(bucket["duration_ms"]) for bucket in local_phase_stats.values()) / 1000.0,
+                    3,
+                ),
+                "overlap_ratio": round((sum_duration_ms / 1000.0) / trace_span_seconds, 3)
+                if trace_span_seconds > 0
+                else None,
+            },
+            "by_phase": {
+                role: _format_bucket(bucket)
+                for role, bucket in sorted(
+                    role_stats.items(),
+                    key=lambda item: float(item[1]["duration_ms"]),
+                    reverse=True,
+                )
+            },
+            "by_local_phase": {
+                phase: _format_local_bucket(bucket)
+                for phase, bucket in sorted(
+                    local_phase_stats.items(),
+                    key=lambda item: float(item[1]["duration_ms"]),
+                    reverse=True,
+                )
+            },
+            "by_tick": {
+                str(tick): _format_bucket(bucket)
+                for tick, bucket in sorted(tick_stats.items())
+            },
+            "slowest_calls": slow_calls[:20],
+        }
 
     def _write_status_sidecar(
         self,
@@ -1470,11 +1734,19 @@ class WorldEngine:
         texts = [t for _, _, t, _ in docs_to_add]
         embeddings = [[] for _ in texts]
         if embedder is not None:
+            started = time.monotonic()
             embeddings = await embed_texts_cached(
                 embedder,
                 texts,
                 cache=embed_cache,
                 batch_size=self.cfg.memory.embeddings_batch_size,
+            )
+            self._record_local_perf_call(
+                "embeddings_bootstrap",
+                tick,
+                (time.monotonic() - started) * 1000.0,
+                len(texts),
+                sum(len(text) for text in texts),
             )
         for (kind, importance, text, meta), emb in zip(docs_to_add, embeddings, strict=False):
             agent.memory.add_doc(
@@ -1512,6 +1784,7 @@ class WorldEngine:
             memory=self.cfg.memory,
             embedder=embedder,
             temperature=self.cfg.llm.temperature,
+            perf_hook=self._record_local_perf_call,
         )
 
     @staticmethod
@@ -2125,8 +2398,9 @@ class WorldEngine:
             )
         for item in updates.operational_queues:
             ops.append(
-                UpdateOperationalQueueOp(
+                UpsertOperationalQueueOp(
                     queue_id=item.queue_id,
+                    title=item.queue_id,
                     backlog=item.backlog,
                     capacity_per_tick=item.capacity_per_tick,
                     avg_delay_ticks=item.avg_delay_ticks,
@@ -2173,8 +2447,24 @@ class WorldEngine:
 
         ops: list[StateOp] = []
         existing_ids = set(state.registry.list_ids()) | set(state.artifacts.keys())
+
+        def _normalize_worldgen_artifact_id(raw_id: Any) -> str:
+            artifact_id = str(raw_id or "").strip()
+            if not artifact_id:
+                return ""
+            if artifact_id.startswith("artifact:"):
+                artifact_id = f"art:{artifact_id.split(':', 1)[1]}"
+            try:
+                parsed = parse_typed_id(artifact_id)
+            except ValueError:
+                slug = artifact_id.split(":", 1)[1] if ":" in artifact_id else artifact_id
+                return make_id(EntityKind.ARTIFACT, normalize_slug(slug, fallback="artifact"))
+            if parsed.kind == EntityKind.ARTIFACT:
+                return artifact_id
+            return make_id(EntityKind.ARTIFACT, normalize_slug(parsed.slug, fallback="artifact"))
+
         for item in creations:
-            artifact_id = str(item.get("artifact_id") or "").strip()
+            artifact_id = _normalize_worldgen_artifact_id(item.get("artifact_id"))
             artifact_type = str(item.get("artifact_type") or "").strip()
             title = str(item.get("title") or "").strip()
             if not artifact_id or not artifact_type or not title or artifact_id in existing_ids:
@@ -2197,7 +2487,7 @@ class WorldEngine:
             )
 
         for item in updates:
-            artifact_id = str(item.get("artifact_id") or "").strip()
+            artifact_id = _normalize_worldgen_artifact_id(item.get("artifact_id"))
             if not artifact_id or artifact_id not in state.artifacts:
                 continue
             ops.append(
@@ -3512,6 +3802,10 @@ class WorldEngine:
     def _personas_cache_path(self) -> Path:
         return self.artifacts.out_dir / "personas.json"
 
+    def _personas_global_cache_path(self, *, cache_input: dict[str, Any]) -> Path:
+        fingerprint = self._personas_cache_fingerprint(cache_input)
+        return self.artifacts.out_dir.parent / "_persona_cache" / f"{fingerprint}.json"
+
     def _personas_cache_input(self, *, state: WorldState) -> dict[str, Any]:
         agents = []
         for aid in sorted(state.agents.keys()):
@@ -3555,41 +3849,44 @@ class WorldEngine:
     def _load_personas_cache(
         self, *, state: WorldState, cache_input: dict[str, Any]
     ) -> dict[str, PersonaArtifact]:
-        path = self._personas_cache_path()
-        if not path.exists():
-            return {}
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-        if not isinstance(raw, dict):
-            return {}
-        meta = raw.get("meta")
-        personas_raw = raw.get("personas")
-        if not isinstance(meta, dict) or not isinstance(personas_raw, dict):
-            return {}
         expected = self._personas_cache_fingerprint(cache_input)
-        if str(meta.get("fingerprint") or "") != expected:
-            return {}
+        cache_paths = [self._personas_cache_path(), self._personas_global_cache_path(cache_input=cache_input)]
 
-        loaded: dict[str, PersonaArtifact] = {}
-        for aid in sorted(state.agents.keys()):
-            item = personas_raw.get(aid)
-            if item is None:
+        for path in cache_paths:
+            if not path.exists():
                 continue
             try:
-                persona = PersonaArtifact.model_validate(item)
+                raw = json.loads(path.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            if not self._persona_is_cache_complete(persona):
+            if not isinstance(raw, dict):
                 continue
-            loaded[aid] = persona
-        return loaded
+            meta = raw.get("meta")
+            personas_raw = raw.get("personas")
+            if not isinstance(meta, dict) or not isinstance(personas_raw, dict):
+                continue
+            if str(meta.get("fingerprint") or "") != expected:
+                continue
+
+            loaded: dict[str, PersonaArtifact] = {}
+            for aid in sorted(state.agents.keys()):
+                item = personas_raw.get(aid)
+                if item is None:
+                    continue
+                try:
+                    persona = PersonaArtifact.model_validate(item)
+                except Exception:
+                    continue
+                if not self._persona_is_cache_complete(persona):
+                    continue
+                loaded[aid] = persona
+            if loaded:
+                return loaded
+        return {}
 
     def _save_personas_cache(
         self, *, cache_input: dict[str, Any], personas: dict[str, PersonaArtifact]
     ) -> None:
-        path = self._personas_cache_path()
         payload = {
             "meta": {
                 "version": 1,
@@ -3601,7 +3898,9 @@ class WorldEngine:
                 for aid, persona in sorted(personas.items())
             },
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        for path in (self._personas_cache_path(), self._personas_global_cache_path(cache_input=cache_input)):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     async def _enrich_personas(self, *, state: WorldState, llm: LLMCaller) -> None:
         to_enrich_ids = [
@@ -3625,7 +3924,7 @@ class WorldEngine:
             logger.info(
                 "Loaded persona cache for %d agents from %s",
                 len(to_enrich_ids),
-                self._personas_cache_path(),
+                self._personas_global_cache_path(cache_input=cache_input),
             )
             return
 
@@ -4306,6 +4605,9 @@ class WorldEngine:
                 event_log.extend(applied)
                 events.extend(applied)
             except Exception as exc:
+                if self._should_ignore_op_failure(origin=origin, op=op, exc=exc):
+                    logger.info("Ignoring idempotent op failure (%s): %s", origin, exc)
+                    continue
                 ev = Event(
                     tick=state.tick,
                     event_type="arbiter_op_failed",
@@ -4316,6 +4618,25 @@ class WorldEngine:
                 event_log.append(ev)
                 events.append(ev)
         return events
+
+    @staticmethod
+    def _should_ignore_op_failure(*, origin: str, op: StateOp, exc: Exception) -> bool:
+        if origin != "runtime_audit":
+            return False
+        name = type(op).__name__
+        message = str(exc)
+        if name == "OpenAuditCaseOp" and message.startswith("Audit case already exists:"):
+            return True
+        if name == "UpdateAuditCaseOp" and (
+            message.startswith("Audit case already closed:")
+            or message.startswith("Audit case not found:")
+        ):
+            return True
+        if name == "CloseAuditCaseOp" and message.startswith("Audit case already closed:"):
+            return True
+        if name == "OpenVoteOp" and message.startswith("Vote already exists:"):
+            return True
+        return False
 
     def _apply_reputation_consequences(
         self,
@@ -4535,11 +4856,19 @@ class WorldEngine:
             embeddings = [[] for _ in texts]
             if embedder is not None:
                 try:
+                    started = time.monotonic()
                     embeddings = await embed_texts_cached(
                         embedder,
                         texts,
                         cache=embed_cache,
                         batch_size=self.cfg.memory.embeddings_batch_size,
+                    )
+                    self._record_local_perf_call(
+                        "embeddings_memory",
+                        state.tick,
+                        (time.monotonic() - started) * 1000.0,
+                        len(texts),
+                        sum(len(text) for text in texts),
                     )
                 except Exception as exc:
                     logger.warning("Memory embeddings failed on tick %s: %s", state.tick, exc)
@@ -4568,10 +4897,13 @@ class WorldEngine:
                     meta=meta,
                 )
 
-        for agent in state.agents.values():
-            if agent.memory is None:
-                continue
-            try:
+        summarize_targets = [agent for agent in state.agents.values() if agent.memory is not None]
+        sem: asyncio.Semaphore | None = None
+        if self.cfg.runtime.parallel_workers is not None:
+            sem = asyncio.Semaphore(self.cfg.runtime.parallel_workers)
+
+        async def _summarize(agent: AgentState) -> Event | None:
+            async def _run_once() -> None:
                 await agent.memory.maybe_summarize_working(
                     llm=llm,
                     language=self.cfg.runtime.language,
@@ -4579,17 +4911,30 @@ class WorldEngine:
                     tick=state.tick,
                     temperature=self.cfg.llm.temperature,
                 )
+
+            try:
+                if sem is not None:
+                    async with sem:
+                        await _run_once()
+                else:
+                    await _run_once()
+                return None
             except Exception as exc:
                 logger.warning("Memory summarization failed for %s on tick %s: %s", agent.agent_id, state.tick, exc)
-                ev = Event(
+                return Event(
                     tick=state.tick,
                     event_type="memory_llm_error",
                     actor_id=agent.agent_id,
                     payload={"stage": "summarize_working", "error": {"type": exc.__class__.__name__, "message": str(exc)}},
                     audience=[INTERNAL_AUDIENCE],
                 )
-                event_log.append(ev)
-                errors.append(ev)
+
+        summary_errors = await asyncio.gather(*[_summarize(agent) for agent in summarize_targets])
+        for ev in summary_errors:
+            if ev is None:
+                continue
+            event_log.append(ev)
+            errors.append(ev)
 
         return errors
 
@@ -4605,4 +4950,5 @@ def default_artifacts(out_dir: str | Path) -> RunArtifacts:
         truth_path=d / "truth.jsonl",
         truth_freeform_path=d / "truth_freeform.jsonl",
         evaluation_path=d / "evaluation.json",
+        perf_summary_path=d / "perf_summary.json",
     )

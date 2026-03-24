@@ -67,6 +67,7 @@ class MemoryConfig(BaseModel):
     # Working buffer (аналог ConversationSummaryBufferMemory).
     working_max_entries: int = 40
     working_summarize_batch: int = 20
+    working_summary_min_overflow: int = 8
 
     # Long-term hybrid index.
     long_term_max_docs: int = 800
@@ -124,7 +125,13 @@ class MemoryConfig(BaseModel):
     embeddings_api_key_env: str = "OPENAI_API_KEY"
     embeddings_batch_size: int = 64
 
-    @field_validator("working_max_entries", "working_summarize_batch", "long_term_max_docs", "retrieval_top_k")
+    @field_validator(
+        "working_max_entries",
+        "working_summarize_batch",
+        "working_summary_min_overflow",
+        "long_term_max_docs",
+        "retrieval_top_k",
+    )
     @classmethod
     def _validate_positive_int(cls, v: int) -> int:
         if v <= 0:

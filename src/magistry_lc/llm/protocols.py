@@ -13,6 +13,7 @@ class LLMResponse:
     text: str
     model: str = "mock"
     usage: dict = field(default_factory=dict)
+    meta: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -28,6 +29,7 @@ class StructuredLLMResponse:
     data: dict
     model: str = "mock"
     usage: dict = field(default_factory=dict)
+    meta: dict = field(default_factory=dict)
 
 
 @runtime_checkable

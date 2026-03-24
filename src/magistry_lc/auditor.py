@@ -338,7 +338,9 @@ class RuntimeAuditor:
                 "current_tick_events": self._sanitize_events(state=state, events=tick_events),
                 "recent_events": self._sanitize_events(
                     state=state,
-                    events=recent_events[-self.cfg.lookback_events :],
+                    events=self._compact_recent_events_for_llm(
+                        events=recent_events[-self.cfg.lookback_events :]
+                    ),
                 ),
                 "private_contact_pairs": self._private_contact_pairs(
                     recent_events=recent_events,
@@ -770,9 +772,18 @@ class RuntimeAuditor:
 
     def _open_cases_snapshot(self, state: WorldState) -> list[dict[str, Any]]:
         rows = []
-        for cid, case in sorted(state.audit_cases.items()):
-            if case.status == "closed":
-                continue
+        open_cases = [
+            (cid, case)
+            for cid, case in sorted(
+                state.audit_cases.items(),
+                key=lambda item: (
+                    -int(item[1].updated_tick if item[1].updated_tick is not None else item[1].created_tick),
+                    item[0],
+                ),
+            )
+            if case.status != "closed"
+        ]
+        for cid, case in open_cases[:16]:
             rows.append(
                 {
                     "case_id": cid,
@@ -780,8 +791,8 @@ class RuntimeAuditor:
                     "target_agent_id": case.target_agent_id,
                     "risk_family": case.risk_family,
                     "violation_type": case.violation_type,
-                    "summary": case.summary,
-                    "recommended_action": case.recommended_action,
+                    "summary": _truncate(case.summary, 220),
+                    "recommended_action": _truncate(case.recommended_action, 120),
                     "episode_count": case.episode_count,
                     "updated_tick": case.updated_tick,
                     "response_due_tick": case.response_due_tick,
@@ -847,6 +858,52 @@ class RuntimeAuditor:
                 }
             )
         return rows
+
+    def _compact_recent_events_for_llm(self, *, events: list[Event]) -> list[Event]:
+        noisy_caps = {
+            "arbiter_approved": 8,
+            "pending_interaction_due": 6,
+            "pending_interaction_completed": 4,
+            "pending_interaction_updated": 4,
+            "environment_informal_link_updated": 6,
+            "audit_case_updated": 6,
+        }
+        keep_all = {
+            "message_sent",
+            "work_note_added",
+            "work_item_created",
+            "vote_opened",
+            "vote_closed",
+            "audit_flagged",
+            "audit_case_opened",
+            "audit_case_closed",
+            "audit_escalated",
+            "audit_explanation_requested",
+            "audit_monitoring_enabled",
+            "review_case_opened",
+            "review_case_closed",
+            "reputation_frozen",
+            "reputation_unfrozen",
+            "world_event",
+            "artifact_created",
+            "artifact_updated",
+        }
+        per_type: dict[str, int] = {}
+        kept_reversed: list[Event] = []
+        for event in reversed(events):
+            event_type = str(event.event_type or "")
+            if event_type in keep_all:
+                kept_reversed.append(event)
+                continue
+            cap = noisy_caps.get(event_type, 3)
+            used = per_type.get(event_type, 0)
+            if used >= cap:
+                continue
+            per_type[event_type] = used + 1
+            kept_reversed.append(event)
+            if len(kept_reversed) >= 80:
+                break
+        return list(reversed(kept_reversed))
 
     def _postprocess_finding(
         self,

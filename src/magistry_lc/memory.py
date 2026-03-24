@@ -29,6 +29,16 @@ MemoryKind = Literal[
 
 
 _WS_RE = re.compile(r"\s+")
+_NOISY_WORKING_PREFIXES = (
+    "environment_informal_link_updated:",
+    "pending_interaction_due:",
+    "pending_interaction_completed:",
+    "pending_interaction_updated:",
+    "arbiter_approved:",
+    "arbiter_rejected:",
+    "audit_flagged:",
+    "audit_case_updated:",
+)
 
 
 def _norm_text(text: str) -> str:
@@ -37,6 +47,15 @@ def _norm_text(text: str) -> str:
 
 def _tokenize(text: str) -> list[str]:
     return [t for t in re.split(r"[^A-Za-zА-Яа-я0-9_]+", text.lower()) if t]
+
+
+def _working_signature(text: str) -> str:
+    normalized = _norm_text(text)
+    lowered = normalized.lower()
+    for prefix in _NOISY_WORKING_PREFIXES:
+        if lowered.startswith(prefix):
+            return prefix
+    return normalized
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -158,6 +177,35 @@ class AgentMemory:
             self.bm25 = build_bm25(self.bm25_corpus)
             self.bm25_dirty = False
 
+    def _compact_working_batch(self, batch: list[WorkingEntry]) -> list[str]:
+        if not batch:
+            return []
+
+        groups: list[list[WorkingEntry]] = []
+        current_group: list[WorkingEntry] = [batch[0]]
+        current_sig = _working_signature(batch[0].text)
+        for entry in batch[1:]:
+            sig = _working_signature(entry.text)
+            if sig == current_sig:
+                current_group.append(entry)
+                continue
+            groups.append(current_group)
+            current_group = [entry]
+            current_sig = sig
+        groups.append(current_group)
+
+        lines: list[str] = []
+        for group in groups:
+            first = group[0]
+            last = group[-1]
+            text = _norm_text(first.text)
+            if len(group) == 1:
+                lines.append(f"- (t{first.tick}) {text}")
+                continue
+            tick_label = f"t{first.tick}" if first.tick == last.tick else f"t{first.tick}-t{last.tick}"
+            lines.append(f"- ({tick_label}, x{len(group)}) {text}")
+        return lines
+
     async def maybe_summarize_working(
         self,
         *,
@@ -168,7 +216,10 @@ class AgentMemory:
         temperature: float,
     ) -> None:
         """Суммаризировать старую часть working buffer в `summary`."""
-        if len(self.working) <= cfg.working_max_entries:
+        overflow = len(self.working) - cfg.working_max_entries
+        if overflow <= 0:
+            return
+        if overflow < cfg.working_summary_min_overflow:
             return
 
         batch_size = min(cfg.working_summarize_batch, len(self.working))
@@ -177,7 +228,7 @@ class AgentMemory:
         batch = self.working[:batch_size]
 
         prev = self.summary.strip()
-        lines = "\n".join(f"- (t{e.tick}) {e.text}" for e in batch)
+        lines = "\n".join(self._compact_working_batch(batch))
         user = (
             "Обнови сводку рабочей памяти агента.\n"
             "Требования:\n"

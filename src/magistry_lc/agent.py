@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Callable, Iterable
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -348,6 +348,7 @@ class AgentRunner:
     memory: MemoryConfig
     embedder: EmbeddingProvider | None = None
     temperature: float = 0.0
+    perf_hook: Callable[[str, int | None, float, int, int], None] | None = None
 
     def _build_system(self, agent: AgentState) -> str:
         lang = self.runtime.language
@@ -526,11 +527,22 @@ class AgentRunner:
         )
         query_embedding: list[float] | None = None
         if self.embedder is not None and query_text.strip():
+            started = asyncio.get_running_loop().time()
             try:
                 vecs = await asyncio.to_thread(self.embedder.embed_batch, [query_text])
                 query_embedding = list(vecs[0]) if vecs else []
             except Exception:
                 query_embedding = None
+            finally:
+                if self.perf_hook is not None:
+                    duration_ms = (asyncio.get_running_loop().time() - started) * 1000.0
+                    self.perf_hook(
+                        "embeddings_query",
+                        state.tick,
+                        duration_ms,
+                        1,
+                        len(query_text),
+                    )
         persona_anchors = mem.retrieve(
             query_text=query_text,
             query_embedding=query_embedding,

@@ -43,6 +43,24 @@ def _mk_state() -> WorldState:
     return state
 
 
+def test_runtime_auditor_compacts_noisy_recent_events_for_llm() -> None:
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True))
+    events = [
+        Event(
+            tick=idx,
+            event_type="environment_informal_link_updated",
+            actor_id=None,
+            payload={"link_id": f"link:{idx}"},
+        )
+        for idx in range(12)
+    ]
+
+    compact = auditor._compact_recent_events_for_llm(events=events)
+
+    assert len(compact) == 6
+    assert compact[-1].payload["link_id"] == "link:11"
+
+
 class _TickOneAuditorProvider(MockLLMProvider):
     def generate_structured(
         self,

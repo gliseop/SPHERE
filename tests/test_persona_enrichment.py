@@ -110,6 +110,39 @@ def test_engine_uses_persona_cache_without_persona_llm_calls(tmp_path: Path) -> 
     assert not any(span.get("role") == "persona" for span in spans)
 
 
+def test_engine_uses_global_persona_cache_across_run_directories(tmp_path: Path) -> None:
+    cfg = _mk_cfg(enrich_personas=True)
+    first_dir = tmp_path / "run_a"
+    second_dir = tmp_path / "run_b"
+    first_artifacts = RunArtifacts(
+        out_dir=first_dir,
+        events_path=first_dir / "events.jsonl",
+        trace_path=first_dir / "trace.jsonl",
+    )
+    asyncio.run(WorldEngine(cfg=cfg, artifacts=first_artifacts, provider_override=MockLLMProvider()).run())
+
+    second_artifacts = RunArtifacts(
+        out_dir=second_dir,
+        events_path=second_dir / "events.jsonl",
+        trace_path=second_dir / "trace.jsonl",
+    )
+    state = asyncio.run(
+        WorldEngine(
+            cfg=cfg,
+            artifacts=second_artifacts,
+            provider_override=_FailOnPersonaCallsProvider(),
+        ).run()
+    )
+
+    assert state.agents["agent:off_1"].persona.biography.strip()
+    spans = [
+        json.loads(line)
+        for line in second_artifacts.trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert not any(span.get("role") == "persona" for span in spans)
+
+
 def test_engine_without_enrich_keeps_empty_biography(tmp_path: Path) -> None:
     cfg = _mk_cfg(enrich_personas=False)
     artifacts = RunArtifacts(

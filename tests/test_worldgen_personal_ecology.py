@@ -299,6 +299,121 @@ class _ArtifactWorldgenProvider(MockLLMProvider):
         return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
 
 
+class _ArtifactPrefixWorldgenProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сгенерируй действия на этот тик." in user:
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "idle"}]},
+                model="mock",
+            )
+        if '"phase": "post"' in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [],
+                    "spawns": [],
+                    "artifact_creations": [
+                        {
+                            "artifact_id": "artifact:oversight_memo_prefixed",
+                            "artifact_type": "memo",
+                            "title": "Служебная записка с legacy-prefix",
+                            "summary": "Worldgen вернул legacy artifact prefix.",
+                            "owner_org_id": "org:city_hall",
+                            "visibility": "internal",
+                            "status": "new",
+                        }
+                    ],
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
+class _ArtifactTypedPrefixWorldgenProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сгенерируй действия на этот тик." in user:
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "idle"}]},
+                model="mock",
+            )
+        if '"phase": "post"' in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [],
+                    "spawns": [],
+                    "artifact_creations": [
+                        {
+                            "artifact_id": "doc:tender_announcement",
+                            "artifact_type": "document",
+                            "title": "Объявление о тендере",
+                            "summary": "Worldgen вернул doc:* prefix.",
+                            "owner_org_id": "org:city_hall",
+                            "visibility": "public",
+                            "status": "published",
+                        },
+                        {
+                            "artifact_id": "report:conflict_assessment",
+                            "artifact_type": "report",
+                            "title": "Оценка конфликта интересов",
+                            "summary": "Worldgen вернул report:* prefix.",
+                            "owner_org_id": "org:city_hall",
+                            "visibility": "internal",
+                            "status": "draft",
+                        },
+                    ],
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
+class _QueueCreateWorldgenProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сгенерируй действия на этот тик." in user:
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "idle"}]},
+                model="mock",
+            )
+        if '"phase": "post"' in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [],
+                    "spawns": [],
+                    "environment_updates": {
+                        "operational_queues": [
+                            {
+                                "queue_id": "queue:audit_procurement",
+                                "backlog": 5,
+                                "capacity_per_tick": 2,
+                                "avg_delay_ticks": 2,
+                                "status": "active",
+                                "pressure": "повышено",
+                            }
+                        ]
+                    },
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
 class _BoundSpawnProvider(MockLLMProvider):
     def generate_structured(
         self,
@@ -1315,6 +1430,145 @@ def test_post_worldgen_can_create_and_update_artifacts(tmp_path: Path) -> None:
     event_types = {event["event_type"] for event in events}
     assert "artifact_created" in event_types
     assert "artifact_updated" in event_types
+
+
+def test_post_worldgen_normalizes_legacy_artifact_prefix(tmp_path: Path) -> None:
+    provider = _ArtifactPrefixWorldgenProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "artifact-prefix-normalization",
+            "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_every_ticks": 1,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "Чиновник",
+                    "capabilities": ["message"],
+                    "org_id": "org:city_hall",
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    assert "art:oversight_memo_prefixed" in state.artifacts
+    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert not any(
+        event["event_type"] == "arbiter_op_failed"
+        and event["payload"].get("origin") == "worldgen_artifact"
+        for event in events
+    )
+
+
+def test_post_worldgen_normalizes_non_artifact_typed_prefixes(tmp_path: Path) -> None:
+    provider = _ArtifactTypedPrefixWorldgenProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "artifact-prefix-normalization-typed",
+            "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_every_ticks": 1,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "Чиновник",
+                    "capabilities": ["message"],
+                    "org_id": "org:city_hall",
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    assert "art:tender_announcement" in state.artifacts
+    assert "art:conflict_assessment" in state.artifacts
+    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert not any(
+        event["event_type"] == "arbiter_op_failed"
+        and event["payload"].get("origin") == "worldgen_artifact"
+        for event in events
+    )
+
+
+def test_post_worldgen_can_create_new_operational_queue(tmp_path: Path) -> None:
+    provider = _QueueCreateWorldgenProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "queue-create-worldgen",
+            "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_every_ticks": 1,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "Чиновник",
+                    "capabilities": ["message"],
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    assert "queue:audit_procurement" in state.environment.operational_queues
+    queue = state.environment.operational_queues["queue:audit_procurement"]
+    assert queue.backlog == 5
+    assert queue.capacity_per_tick == 2
+    assert queue.avg_delay_ticks == 2
+
+    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert any(
+        event["event_type"] == "environment_operational_queue_updated"
+        and event["payload"].get("queue_id") == "queue:audit_procurement"
+        for event in events
+    )
+    assert not any(
+        event["event_type"] == "arbiter_op_failed"
+        and event["payload"].get("origin") == "worldgen_environment"
+        for event in events
+    )
 
 
 def test_environment_updates_activate_peripheral_agent(tmp_path: Path) -> None:

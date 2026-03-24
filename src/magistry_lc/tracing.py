@@ -29,6 +29,7 @@ class TraceSpan(BaseModel):
     response: str = ""
     model: str = ""
     usage: dict[str, Any] = Field(default_factory=dict)
+    meta: dict[str, Any] = Field(default_factory=dict)
     duration_ms: float = 0.0
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     error: dict[str, Any] | None = None

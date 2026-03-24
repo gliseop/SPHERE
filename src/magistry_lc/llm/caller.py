@@ -89,6 +89,7 @@ class LLMCaller:
             span.response = resp.text
             span.model = resp.model
             span.usage = resp.usage or {}
+            span.meta = getattr(resp, "meta", {}) or {}
             return resp
         except Exception as exc:
             span.error = {"type": exc.__class__.__name__, "message": str(exc)}
@@ -120,6 +121,7 @@ class LLMCaller:
             span.response = str(resp.data)
             span.model = resp.model
             span.usage = resp.usage or {}
+            span.meta = getattr(resp, "meta", {}) or {}
             return resp
         except Exception as exc:
             span.error = {"type": exc.__class__.__name__, "message": str(exc)}

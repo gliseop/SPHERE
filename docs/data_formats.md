@@ -329,6 +329,8 @@ Post-worldgen теперь также может возвращать:
 - `artifact_creations` — создание новых `art:*` сущностей;
 - `artifact_updates` — обновление уже существующих артефактов.
 
+Для обратной совместимости legacy `artifact:*` в post-worldgen нормализуется движком в канонический `art:*`.
+
 ### `world.environment.informal_links`
 
 `WorldConfig.environment.informal_links` задаёт стартовые неформальные связи между агентами.
@@ -368,7 +370,7 @@ Post-worldgen теперь также может возвращать:
 - попадает в `state_snapshot`, который видит worldgen;
 - не заменяет собой `orgs`/`work_items`, а существует параллельно им.
 
-Post-worldgen может дополнительно вернуть `environment_updates`, которые движок применяет детерминированно к уже существующим `org:*`, `zone:*` и `res:*`. На текущем этапе поддерживаются:
+Post-worldgen может дополнительно вернуть `environment_updates`, которые движок применяет детерминированно к `org:*`, `zone:*` и `res:*`. Для `operational_queues` движок теперь поддерживает `upsert`: очередь может либо обновиться, либо materialize по `queue_id`, если её ещё не было. На текущем этапе поддерживаются:
 
 - обновление режимов организаций;
 - обновление режимов зон;
@@ -548,7 +550,7 @@ persona:
 }
 ```
 
-Кэш используется только при полном совпадении fingerprint входов.
+Кэш используется только при полном совпадении fingerprint входов. Кроме локального `{out_dir}/personas.json`, движок теперь пишет и persistent fingerprint-cache рядом с директориями прогонов, чтобы одинаковые repeated runs могли переиспользовать enrichment между разными `out_dir`.
 
 ## Типы агентов (`data/agent_types/`)
 
@@ -690,6 +692,7 @@ JSON-файлы с результатами нарративных интерв�
 - `names.json` — отображение `agent_id -> display name`, используемое web UI и WebSocket `meta`.
 - `status.json` — heartbeat-статус прогона (`running` / `finished` / `failed`) с `updated_at`, `pid` и последним tick.
 - `summary.json` — итоговая агрегированная сводка (`governance` + `fidelity`).
+- `perf_summary.json` — агрегированные performance-метрики: суммарные токены, LLM-duration, overlap, `p50/p95/max`, slowest calls, timeout/error counters, разрез по фазам, по локальным embedding-фазам и по тикам.
 - `environment_summary.json` — финальный компактный срез усиленной среды, pending-interactions и queue-actor roles.
 - `environment_timeline.jsonl` — покадровая телеметрия среды по тикам.
 
@@ -741,6 +744,38 @@ JSON-файлы с результатами нарративных интерв�
   "pending_interactions": {"open": 1, "completed": 3, "expired": 0},
   "queue_actor_roles": {"queue_complainant": 1, "queue_reporter": 1},
   "spawn_sources": {"scenario": 2, "queue_process": 2}
+}
+```
+
+```json
+// perf_summary.json
+{
+  "overall": {
+    "prompt_tokens": 262040,
+    "completion_tokens": 51438,
+    "total_tokens": 313478,
+    "sum_llm_duration_s": 683.948,
+    "trace_span_s": 305.975,
+    "overlap_ratio": 2.235,
+    "retries_used_total": 0,
+    "timeout_count": 0
+  },
+  "by_phase": {
+    "agent": {"calls": 14, "total_tokens": 123930, "p95_duration_ms": 15177.2},
+    "memory": {"calls": 6, "total_tokens": 22217, "p95_duration_ms": 26103.9},
+    "auditor": {"calls": 3, "total_tokens": 72249, "p95_duration_ms": 47366.8}
+  },
+  "by_local_phase": {
+    "embeddings_query": {"calls": 14, "duration_s": 15.2},
+    "embeddings_memory": {"calls": 6, "duration_s": 3.7}
+  },
+  "by_tick": {
+    "0": {"calls": 21, "total_tokens": 81686},
+    "1": {"calls": 10, "total_tokens": 108234}
+  },
+  "slowest_calls": [
+    {"phase": "auditor", "tick": 7, "duration_ms": 58882.0}
+  ]
 }
 ```
 

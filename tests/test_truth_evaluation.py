@@ -802,6 +802,7 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert artifacts.summary_path is not None and artifacts.summary_path.exists()
     assert artifacts.environment_summary_path is not None and artifacts.environment_summary_path.exists()
     assert artifacts.environment_timeline_path is not None and artifacts.environment_timeline_path.exists()
+    assert artifacts.perf_summary_path is not None and artifacts.perf_summary_path.exists()
     assert artifacts.scenario_path is not None and artifacts.scenario_path.exists()
     assert artifacts.names_path is not None and artifacts.names_path.exists()
     assert artifacts.status_path is not None and artifacts.status_path.exists()
@@ -815,6 +816,7 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     fidelity = json.loads(artifacts.fidelity_path.read_text(encoding="utf-8"))
     combined = json.loads(artifacts.summary_path.read_text(encoding="utf-8"))
     environment_summary = json.loads(artifacts.environment_summary_path.read_text(encoding="utf-8"))
+    perf_summary = json.loads(artifacts.perf_summary_path.read_text(encoding="utf-8"))
     environment_timeline = [
         json.loads(line)
         for line in artifacts.environment_timeline_path.read_text(encoding="utf-8").splitlines()
@@ -831,6 +833,10 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert combined["governance"]["truth_total"] >= 1
     assert "fidelity" in combined
     assert "environment" in environment_summary
+    assert "overall" in perf_summary
+    assert "by_phase" in perf_summary
+    assert "by_local_phase" in perf_summary
+    assert "slowest_calls" in perf_summary
     assert environment_timeline
     assert scenario["title"] == "lc-truth-evaluation"
     assert names == {"agent:off_1": "Off 1", "agent:off_2": "Off 2"}

@@ -209,7 +209,9 @@ class OpenAICompatibleProvider:
                 "pip install -e ."
             ) from exc
 
-        kwargs: dict = {"timeout": 120.0}
+        self._request_timeout_s = max(1.0, _env_float("MAGISTRY_LLM_REQUEST_TIMEOUT_S", 30.0))
+        self._call_deadline_s = max(1.0, _env_float("MAGISTRY_LLM_CALL_DEADLINE_S", self._request_timeout_s))
+        kwargs: dict = {"timeout": self._request_timeout_s}
         if api_key:
             kwargs["api_key"] = api_key
         if base_url:
@@ -286,9 +288,23 @@ class OpenAICompatibleProvider:
         parse: Callable[[Any], tuple[Any, dict[str, Any]]],
     ) -> tuple[Any, dict[str, Any]]:
         call_id = uuid.uuid4().hex
-        sanitized_kwargs = _sanitize_create_kwargs(create_kwargs, max_chars=self._log_max_chars)
+        overall_started = time.monotonic()
 
         for attempt in range(self._max_retries + 1):
+            elapsed_s = time.monotonic() - overall_started
+            remaining_budget_s = self._call_deadline_s - elapsed_s
+            if remaining_budget_s <= 0:
+                exc = TimeoutError(
+                    f"LLM call deadline exceeded ({self._call_deadline_s:.1f}s) before attempt {attempt + 1}"
+                )
+                raise exc
+            attempt_timeout_s = min(self._request_timeout_s, max(0.5, remaining_budget_s))
+            create_kwargs_with_timeout = dict(create_kwargs)
+            create_kwargs_with_timeout["timeout"] = attempt_timeout_s
+            sanitized_kwargs = _sanitize_create_kwargs(
+                create_kwargs_with_timeout,
+                max_chars=self._log_max_chars,
+            )
             started = time.monotonic()
             self._log(
                 {
@@ -298,6 +314,8 @@ class OpenAICompatibleProvider:
                     "kind": kind,
                     "model": self._model,
                     "phase": "request",
+                    "timeout_s": round(attempt_timeout_s, 3),
+                    "remaining_budget_s": round(remaining_budget_s, 3),
                     "request": sanitized_kwargs,
                 },
                 is_error=False,
@@ -305,7 +323,7 @@ class OpenAICompatibleProvider:
 
             response = None
             try:
-                response = self._get_client().chat.completions.create(**create_kwargs)
+                response = self._get_client().chat.completions.create(**create_kwargs_with_timeout)
                 duration_ms = round((time.monotonic() - started) * 1000, 1)
                 raw_response = _jsonable(response)
                 self._log(
@@ -317,13 +335,23 @@ class OpenAICompatibleProvider:
                         "model": self._model,
                         "phase": "response",
                         "duration_ms": duration_ms,
+                        "timeout_s": round(attempt_timeout_s, 3),
                         "response": raw_response,
                     },
                     is_error=False,
                 )
 
                 parsed, meta = parse(response)
-                meta = meta or {}
+                meta = dict(meta or {})
+                meta.update(
+                    {
+                        "call_id": call_id,
+                        "attempts": attempt + 1,
+                        "retries_used": attempt,
+                        "timeout_s": round(attempt_timeout_s, 3),
+                        "deadline_s": round(self._call_deadline_s, 3),
+                    }
+                )
                 self._log(
                     {
                         "ts": time.time(),
@@ -337,13 +365,19 @@ class OpenAICompatibleProvider:
                     },
                     is_error=False,
                 )
-                return parsed, {"call_id": call_id, **meta}
+                return parsed, meta
             except Exception as exc:
                 duration_ms = round((time.monotonic() - started) * 1000, 1)
                 is_parse = exc.__class__.__name__ in ("JSONDecodeError", "_LLMStructuredParseError")
-                retryable = self._is_retryable_error(exc) or (self._retry_on_parse and is_parse)
-                will_retry = attempt < self._max_retries and retryable
-                sleep_s = self._retry_sleep_s(attempt) if will_retry else 0.0
+                is_timeout = exc.__class__.__name__ == "APITimeoutError" or isinstance(exc, TimeoutError)
+                retryable = (
+                    not is_timeout
+                    and (self._is_retryable_error(exc) or (self._retry_on_parse and is_parse))
+                )
+                elapsed_after_s = time.monotonic() - overall_started
+                remaining_after_s = self._call_deadline_s - elapsed_after_s
+                will_retry = attempt < self._max_retries and retryable and remaining_after_s > 0.05
+                sleep_s = min(self._retry_sleep_s(attempt), max(0.0, remaining_after_s - 0.05)) if will_retry else 0.0
 
                 self._log(
                     {
@@ -354,6 +388,8 @@ class OpenAICompatibleProvider:
                         "model": self._model,
                         "phase": "error",
                         "duration_ms": duration_ms,
+                        "timeout_s": round(attempt_timeout_s, 3),
+                        "remaining_budget_s": round(max(0.0, remaining_after_s), 3),
                         "error": {
                             "type": exc.__class__.__name__,
                             "message": str(exc),
@@ -370,6 +406,10 @@ class OpenAICompatibleProvider:
                 )
 
                 if not will_retry:
+                    if is_timeout:
+                        raise TimeoutError(
+                            f"LLM {kind} timed out after {attempt + 1} attempt(s); deadline={self._call_deadline_s:.1f}s"
+                        ) from exc
                     raise LLMCallError(call_id=call_id, kind=kind, attempt=attempt, original=exc) from exc
                 time.sleep(sleep_s)
 

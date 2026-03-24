@@ -746,6 +746,82 @@ class UpdateOperationalQueueOp:
 
 
 @dataclass(frozen=True, slots=True)
+class UpsertOperationalQueueOp:
+    """Создать или обновить material operational queue среды."""
+
+    queue_id: str
+    title: str | None = None
+    owner_org_id: str | None = None
+    zone_id: str | None = None
+    backlog: int | None = None
+    capacity_per_tick: int | None = None
+    avg_delay_ticks: int | None = None
+    status: str | None = None
+    pressure: str | None = None
+
+    def apply(self, state: WorldState) -> list[Event]:
+        current = state.environment.operational_queues.get(self.queue_id)
+
+        if current is None:
+            backlog = int(self.backlog or 0)
+            capacity = int(self.capacity_per_tick or 0)
+            avg_delay = int(self.avg_delay_ticks or 0)
+            if backlog < 0 or capacity < 0 or avg_delay < 0:
+                raise ValueError("Operational queue values must be >= 0")
+            state.environment.operational_queues[self.queue_id] = OperationalQueueState(
+                queue_id=self.queue_id,
+                title=self.title or self.queue_id,
+                owner_org_id=self.owner_org_id,
+                zone_id=self.zone_id,
+                backlog=backlog,
+                capacity_per_tick=capacity,
+                avg_delay_ticks=avg_delay,
+                status=self.status or "active",
+                pressure=self.pressure or "",
+            )
+        else:
+            if self.owner_org_id is not None and current.owner_org_id != self.owner_org_id:
+                raise ValueError(
+                    f"Operational queue owner mismatch for {self.queue_id!r}: "
+                    f"{current.owner_org_id!r} != {self.owner_org_id!r}"
+                )
+            if self.zone_id is not None and current.zone_id != self.zone_id:
+                raise ValueError(
+                    f"Operational queue zone mismatch for {self.queue_id!r}: "
+                    f"{current.zone_id!r} != {self.zone_id!r}"
+                )
+            updated = UpdateOperationalQueueOp(
+                queue_id=self.queue_id,
+                backlog=self.backlog,
+                capacity_per_tick=self.capacity_per_tick,
+                avg_delay_ticks=self.avg_delay_ticks,
+                status=self.status,
+                pressure=self.pressure,
+            )
+            return updated.apply(state)
+
+        updated = state.environment.operational_queues[self.queue_id]
+        return [
+            Event(
+                tick=state.tick,
+                event_type="environment_operational_queue_updated",
+                actor_id=None,
+                payload={
+                    "queue_id": updated.queue_id,
+                    "backlog": updated.backlog,
+                    "capacity_per_tick": updated.capacity_per_tick,
+                    "avg_delay_ticks": updated.avg_delay_ticks,
+                    "status": updated.status,
+                    "pressure": updated.pressure,
+                    "owner_org_id": updated.owner_org_id,
+                    "zone_id": updated.zone_id,
+                },
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
 class UpdateInformationClimateOp:
     """Обновить глобальный информационный климат."""
 
@@ -1210,7 +1286,7 @@ class CloseAuditCaseOp:
         if case is None:
             raise ValueError(f"Audit case not found: {self.case_id!r}")
         if case.status == "closed":
-            raise ValueError(f"Audit case already closed: {self.case_id!r}")
+            return []
         case.status = "closed"
         case.result = self.result
         case.result_reason = self.reason

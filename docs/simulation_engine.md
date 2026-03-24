@@ -45,7 +45,7 @@ flowchart TD
     MEM --> NEXT{Ещё тики?}
     NEXT -->|да| TICK
     NEXT -->|нет| EVAL[Governance eval + fidelity sidecars]
-    EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + status.json + evaluation.json + fidelity.json + summary.json + environment_summary.json + environment_timeline.jsonl]
+    EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + status.json + evaluation.json + fidelity.json + summary.json + perf_summary.json + environment_summary.json + environment_timeline.jsonl]
 ```
 
 Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы, стартовый `environment`-слой и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry`, материализует `world.environment` как отдельный слой состояния среды, включая operational queues / backlog-контуры, и запускает цикл тиков.
@@ -118,7 +118,7 @@ flowchart TD
 
 Если `runtime.ecology_activation_window_ticks > 0`, не-core акторы (secondary/worldgen/runtime-spawned) не ходят автоматически каждый тик. Движок активирует их только если они недавно были затронуты событиями, hook-ами, созданием, прямым взаимодействием или открытым `pending_interaction`. Это уменьшает public-process capture со стороны ecology без отключения самой среды.
 
-Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью + expert reflection). Результат сохраняется в `{out_dir}/personas.json` и повторно используется при совпадении fingerprint входов (seed, язык, модель, режим, описание сценария и базовые данные агентов).
+Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью + expert reflection). Результат сохраняется в `{out_dir}/personas.json` и дополнительно пишется в persistent fingerprint-cache рядом с директориями прогонов. За счёт этого одинаковые repeated runs могут переиспользовать enrichment между разными `out_dir` при совпадении fingerprint входов (seed, язык, модель, режим, описание сценария и базовые данные агентов).
 
 Если `runtime.spawn_secondary=true`, после enrichment запускается `SocialGraphExtractor`: он извлекает из биографий и интервью значимых людей, создаёт вторичных агентов до первого тика, обогащает их персоны в том же режиме, что и основной сценарий (`core` или `full`), и связывает первичные/вторичные пары через память. Role-only ссылки и alias-дубли существующих должностей не материализуются в новых агентов.
 
@@ -211,6 +211,7 @@ flowchart TD
 
 - `evaluation.json` — governance-eval: сравнение runtime-аудита и deterministic truth-layer;
 - `fidelity.json` — метрики правдоподобия (`temporal consistency`, `identity drift`, `phantom drift`, `bureaucratic loop`, `narrating leakage`, `perform`).
+- `perf_summary.json` — агрегированные runtime/performance-метрики: токены, LLM-duration, overlap, `p50/p95/max`, slowest calls, timeout/error counters, разрез по фазам (`agent`, `memory`, `auditor`, `worldgen` и т.д.), по тикам и по локальным embedding-фазам.
 - `environment_summary.json` — финальный компактный снимок усиленной среды;
 - `environment_timeline.jsonl` — покадровая средовая телеметрия для observability/export.
 
@@ -259,6 +260,10 @@ flowchart TD
 
 Хронологический буфер последних `working_max_entries` записей. При переполнении старейшие записи суммаризируются пакетами по `working_summarize_batch` через LLM-вызов, а суммарии помещаются в долгосрочную память.
 
+Суммаризация теперь не срабатывает на минимальном overflow. У памяти есть дополнительный порог `working_summary_min_overflow`: пока переполнение буфера меньше этого порога, движок предпочитает подождать и не тратить отдельный LLM-вызов на слишком маленький batch.
+
+Перед отправкой batch в суммаризатор движок также детерминированно схлопывает серийные технические записи (`environment_informal_link_updated`, `arbiter_approved`, `pending_interaction_*` и т.п.), чтобы LLM не пережёвывал десятки почти одинаковых строк.
+
 Важно: batch удаляется из `working` только после успешного ответа суммаризатора. Если LLM-вызов падает, движок пишет `memory_llm_error`, но не теряет исходные записи рабочей памяти.
 
 ### Долгосрочная память (hybrid index)
@@ -304,9 +309,9 @@ Agent prompt использует не один общий retrieval-блок, �
 
 Движок принимает `spawns` только если `runtime.allow_runtime_spawn=true`. Для совместимости worldgen по-прежнему понимает legacy-формат `list[world_event]` без блока `spawns`. Дополнительно движок требует человеко-читаемый display-name, отсекает role-only ярлыки и не принимает внутренних акторов от worldgen, если `runtime.worldgen_allow_internal_spawns=false`.
 
-Если worldgen возвращает `environment_updates`, движок применяет их детерминированно к уже существующим организациям, зонам, ресурсным пулам и информационному климату через отдельные события `environment_institution_updated`, `environment_zone_updated`, `environment_resource_updated`, `environment_information_climate_updated`. Этот контур не создаёт новые environment-сущности, а меняет уже материализованный `world.environment`.
+Если worldgen возвращает `environment_updates`, движок применяет их детерминированно к организациям, зонам, ресурсным пулам и информационному климату через отдельные события `environment_institution_updated`, `environment_zone_updated`, `environment_resource_updated`, `environment_information_climate_updated`. Для `operational_queues` контур теперь допускает `upsert`: worldgen может не только менять уже существующую очередь, но и materialize новую queue по `queue_id`, если она ещё не была объявлена в стартовом `world.environment`.
 
-Если worldgen возвращает `artifact_creations` или `artifact_updates`, движок аналогично применяет их детерминированно через `artifact_created` и `artifact_updated`. Тем самым документарный слой становится самостоятельной поверхностью мира, а не только текстом в `world_event`.
+Если worldgen возвращает `artifact_creations` или `artifact_updates`, движок аналогично применяет их детерминированно через `artifact_created` и `artifact_updated`. Для совместимости legacy-prefix `artifact:*` нормализуется в канонический `art:*` до применения ops. Тем самым документарный слой становится самостоятельной поверхностью мира, а не только текстом в `world_event`.
 
 Для pre-tick material действует жёсткий negative contract: worldgen не должен утверждать решения существующего агента, закрывать `work item` текстом, раскрывать private-message content или подменять typed ontology строками `agent:*` / `work:*`.
 

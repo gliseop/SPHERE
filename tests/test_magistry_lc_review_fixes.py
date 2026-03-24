@@ -48,8 +48,9 @@ from magistry_lc.journal import WorldJournal
 from magistry_lc.llm import LLMCaller
 from magistry_lc.llm.caller import create_llm_provider
 from magistry_lc.llm.providers import OpenAICompatibleProvider, create_provider
-from magistry_lc.memory import AgentMemory
+from magistry_lc.memory import AgentMemory, WorkingEntry
 from magistry_lc.ops import CreateAgentOp
+from magistry_lc.ops import CloseAuditCaseOp, OpenAuditCaseOp, OpenVoteOp, UpdateAuditCaseOp
 from magistry_lc.state import AgentState, Vote, WorkItem, WorldState
 from magistry_lc.tracing import TraceLog
 from magistry_lc.worldgen import WorldGenerator
@@ -487,6 +488,30 @@ def test_request_entity_requires_internal_actor_by_default(tmp_path: Path) -> No
     assert out[0].reason == "request_entity_requires_internal_actor"
 
 
+def test_request_entity_accepts_typed_channel_slug_without_double_prefix(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    out = asyncio.run(
+        arbiter.arbitrate_actions(
+            state=state,
+            agent_id="agent:off_1",
+            actions=[
+                RequestEntityAction(
+                    type=ActionType.REQUEST_ENTITY,
+                    kind="chan",
+                    slug="chan:procurement_confidential",
+                    description="private procurement coordination",
+                    justification="",
+                )
+            ],
+        )
+    )
+
+    assert out[0].approved is True
+    assert out[0].ops[0].entity_id == "chan:procurement_confidential"
+
+
 def test_arbiter_open_vote_excludes_target_from_voters_by_default(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
     arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
@@ -907,6 +932,170 @@ def test_engine_init_rejects_initial_work_item_with_unknown_participant(tmp_path
         engine._init_state(event_log=EventLog(artifacts.events_path))
 
 
+def test_engine_memory_summarization_runs_in_parallel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "title": "parallel-memory-summarization",
+            "ticks": 1,
+            "runtime": {
+                "parallel_workers": 2,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "capabilities": ["message"],
+                },
+                {
+                    "agent_id": "agent:off_2",
+                    "name": "Off 2",
+                    "internal": True,
+                    "capabilities": ["message"],
+                },
+            ],
+            "world": {},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider())
+    event_log = EventLog(artifacts.events_path)
+    state = engine._init_state(event_log=event_log)
+    llm = LLMCaller(provider=MockLLMProvider(), trace=TraceLog(artifacts.trace_path))
+
+    active = 0
+    max_active = 0
+
+    async def _fake_summarize(self, *, llm, language, cfg, tick, temperature) -> None:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+
+    monkeypatch.setattr(AgentMemory, "maybe_summarize_working", _fake_summarize)
+
+    asyncio.run(
+        engine._update_agent_memory(
+            state=state,
+            tick_events=[],
+            llm=llm,
+            embedder=None,
+            embed_cache={},
+            event_log=event_log,
+        )
+    )
+
+    assert max_active >= 2
+
+
+def test_engine_ignores_idempotent_runtime_audit_op_failures(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "title": "idempotent-runtime-audit-ops",
+            "ticks": 1,
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "capabilities": ["message", "dao"],
+                },
+                {
+                    "agent_id": "agent:off_2",
+                    "name": "Off 2",
+                    "internal": True,
+                    "capabilities": ["message", "dao"],
+                },
+            ],
+            "world": {},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider())
+    event_log = EventLog(artifacts.events_path)
+    state = engine._init_state(event_log=event_log)
+
+    ops = [
+        OpenAuditCaseOp(
+            actor_id=None,
+            case_id="audit_case:test",
+            finding_id="finding:test",
+            subject_agent_id="agent:off_1",
+            risk_family="conflict_of_interest",
+            violation_type="preferential_treatment_for_connected_actor",
+            summary="first",
+            recommended_action="review",
+            confidence=0.8,
+        ),
+        OpenAuditCaseOp(
+            actor_id=None,
+            case_id="audit_case:test",
+            finding_id="finding:test_2",
+            subject_agent_id="agent:off_1",
+            risk_family="conflict_of_interest",
+            violation_type="preferential_treatment_for_connected_actor",
+            summary="duplicate",
+            recommended_action="review",
+            confidence=0.8,
+        ),
+        UpdateAuditCaseOp(
+            actor_id=None,
+            case_id="audit_case:test",
+            summary="updated",
+        ),
+        CloseAuditCaseOp(
+            actor_id=None,
+            case_id="audit_case:test",
+            result="confirmed",
+            reason="done",
+        ),
+        UpdateAuditCaseOp(
+            actor_id=None,
+            case_id="audit_case:test",
+            summary="late-update",
+        ),
+        OpenVoteOp(
+            vote_id="vote:test",
+            created_by="agent:off_1",
+            created_tick=0,
+            closes_tick=1,
+            target_agent_id="agent:off_2",
+            new_title="",
+            reason="review",
+            voters=["agent:off_1"],
+            vote_type="audit_review",
+        ),
+        OpenVoteOp(
+            vote_id="vote:test",
+            created_by="agent:off_1",
+            created_tick=0,
+            closes_tick=1,
+            target_agent_id="agent:off_2",
+            new_title="",
+            reason="duplicate-review",
+            voters=["agent:off_1"],
+            vote_type="audit_review",
+        ),
+    ]
+
+    events = engine._apply_ops(state=state, ops=ops, event_log=event_log, origin="runtime_audit")
+
+    assert not any(event.event_type == "arbiter_op_failed" for event in events)
+    assert any(event.event_type == "audit_case_opened" for event in events)
+    assert any(event.event_type == "audit_case_updated" for event in events)
+    assert any(event.event_type == "audit_case_closed" for event in events)
+    assert sum(1 for event in events if event.event_type == "vote_opened") == 1
+
+
 def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -914,9 +1103,12 @@ def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) 
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
+    monkeypatch.setattr("magistry_lc.llm.caller._load_dotenv_if_available", lambda: None)
     monkeypatch.setattr("magistry_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
+    monkeypatch.delenv("OPENROUTER_PROVIDER_ORDER", raising=False)
+    monkeypatch.delenv("OPENAI_PROVIDER_ORDER", raising=False)
     _ = create_llm_provider(LLMConfig(model="gpt-4o-mini", base_url=None))
     assert captured["base_url"] == "https://example.test/v1"
     assert captured["provider_order"] is None
@@ -968,6 +1160,8 @@ def test_create_llm_provider_loads_dotenv_from_cwd(
     monkeypatch.setattr("magistry_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENROUTER_PROVIDER_ORDER", raising=False)
+    monkeypatch.delenv("OPENAI_PROVIDER_ORDER", raising=False)
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".env").write_text(
         "OPENAI_API_KEY=dotenv-test-key\nOPENAI_BASE_URL=https://dotenv.example/v1\n",
@@ -1013,6 +1207,82 @@ def test_openai_provider_only_sets_provider_order_for_openrouter() -> None:
     }
 
 
+def test_openai_provider_uses_30s_timeout_by_default() -> None:
+    provider = OpenAICompatibleProvider(
+        model="gpt-4o-mini",
+        api_key="test-key",
+        base_url="https://api.openai.com/v1",
+    )
+
+    assert provider._client_kwargs["timeout"] == 30.0
+
+
+def test_openai_provider_caps_attempt_timeout_by_remaining_budget() -> None:
+    provider = OpenAICompatibleProvider(
+        model="gpt-4o-mini",
+        api_key="test-key",
+        base_url="https://api.openai.com/v1",
+    )
+    provider._request_timeout_s = 30.0
+    provider._call_deadline_s = 1.0
+
+    captured: dict[str, object] = {}
+
+    class _FakeResponse:
+        choices = [SimpleNamespace(message=SimpleNamespace(content="ok", tool_calls=None))]
+        usage = SimpleNamespace(prompt_tokens=1, completion_tokens=1)
+
+    class _FakeChat:
+        class _Completions:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+                return _FakeResponse()
+
+        completions = _Completions()
+
+    provider._get_client = lambda: SimpleNamespace(chat=_FakeChat())  # type: ignore[method-assign]
+
+    result = provider.generate("sys", "usr", 0.0)
+
+    assert result.text == "ok"
+    assert captured["timeout"] == pytest.approx(1.0, rel=0.01)
+
+
+def test_openai_provider_stops_retrying_after_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = OpenAICompatibleProvider(
+        model="gpt-4o-mini",
+        api_key="test-key",
+        base_url="https://api.openai.com/v1",
+    )
+    provider._request_timeout_s = 30.0
+    provider._call_deadline_s = 1.0
+    provider._max_retries = 2
+    provider._retry_base_delay_s = 0.1
+    provider._retry_max_delay_s = 0.1
+
+    calls = {"count": 0}
+
+    class APITimeoutError(Exception):
+        pass
+
+    class _FakeChat:
+        class _Completions:
+            def create(self, **kwargs):
+                calls["count"] += 1
+                raise APITimeoutError("timeout")
+
+        completions = _Completions()
+
+    provider._get_client = lambda: SimpleNamespace(chat=_FakeChat())  # type: ignore[method-assign]
+
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        provider.generate("sys", "usr", 0.0)
+
+    assert calls["count"] == 1
+
+
 def test_governance_config_rejects_auto_position_policy() -> None:
     with pytest.raises(ValidationError, match="position_policy='auto'"):
         GovernanceConfig(position_policy="auto")
@@ -1039,7 +1309,7 @@ def test_runtime_config_rejects_zero_worldgen_interval() -> None:
 
 def test_memory_summarizes_working_buffer(tmp_path: Path) -> None:
     mem = AgentMemory(agent_id="agent:off_1")
-    cfg = MemoryConfig(working_max_entries=2, working_summarize_batch=2)
+    cfg = MemoryConfig(working_max_entries=2, working_summarize_batch=2, working_summary_min_overflow=1)
 
     for t in range(4):
         mem.add_working(tick=t, text=f"e{t}")
@@ -1068,7 +1338,7 @@ def test_memory_summarization_failure_preserves_working_buffer(tmp_path: Path) -
             raise RuntimeError("boom")
 
     mem = AgentMemory(agent_id="agent:off_1")
-    cfg = MemoryConfig(working_max_entries=2, working_summarize_batch=2)
+    cfg = MemoryConfig(working_max_entries=2, working_summarize_batch=2, working_summary_min_overflow=1)
 
     for t in range(4):
         mem.add_working(tick=t, text=f"e{t}")
@@ -1088,6 +1358,45 @@ def test_memory_summarization_failure_preserves_working_buffer(tmp_path: Path) -
         )
 
     assert [entry.text for entry in mem.working] == ["e0", "e1", "e2", "e3"]
+
+
+def test_memory_skips_summary_when_overflow_below_threshold(tmp_path: Path) -> None:
+    mem = AgentMemory(agent_id="agent:off_1")
+    cfg = MemoryConfig(working_max_entries=4, working_summarize_batch=2, working_summary_min_overflow=3)
+
+    for t in range(6):
+        mem.add_working(tick=t, text=f"e{t}")
+
+    mock = MockLLMProvider(responses={"Обнови сводку рабочей памяти агента.": "- should not happen\n"})
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    llm = LLMCaller(provider=mock, trace=trace)
+
+    asyncio.run(
+        mem.maybe_summarize_working(
+            llm=llm,
+            language="ru",
+            cfg=cfg,
+            tick=10,
+            temperature=0.0,
+        )
+    )
+
+    assert mem.summary == ""
+    assert len(mem.working) == 6
+
+
+def test_memory_compacts_repeated_working_entries() -> None:
+    mem = AgentMemory(agent_id="agent:off_1")
+    batch = [
+        WorkingEntry(tick=1, text="environment_informal_link_updated: {'a': 1}"),
+        WorkingEntry(tick=1, text="environment_informal_link_updated: {'a': 2}"),
+        WorkingEntry(tick=2, text="Публичное сообщение agent:off_1 -> chan:public: тест"),
+    ]
+
+    lines = mem._compact_working_batch(batch)
+
+    assert lines[0].startswith("- (t1, x2) environment_informal_link_updated:")
+    assert lines[1] == "- (t2) Публичное сообщение agent:off_1 -> chan:public: тест"
 
 
 def test_memory_config_uses_real_embeddings_by_default() -> None:

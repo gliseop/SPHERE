@@ -615,7 +615,16 @@ class Arbiter:
             if self.runtime.request_entity_internal_only and not agent.internal:
                 return ActionResult(action_index, False, "request_entity_requires_internal_actor", [])
             kind = EntityKind.ORG if action.kind == "org" else EntityKind.CHANNEL
-            eid = make_id(kind, action.slug)
+            slug = action.slug
+            if ":" in slug:
+                try:
+                    parsed = parse_typed_id(slug)
+                except ValueError:
+                    return ActionResult(action_index, False, f"invalid_request_entity_slug:{slug}", [])
+                if parsed.kind != kind:
+                    return ActionResult(action_index, False, f"request_entity_kind_mismatch:{slug}", [])
+                slug = parsed.slug
+            eid = make_id(kind, slug)
             if state.registry.exists(eid):
                 return ActionResult(action_index, True, "entity_already_exists", [])
             return ActionResult(
