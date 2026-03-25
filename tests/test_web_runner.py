@@ -314,6 +314,11 @@ class TestLaunchSimulation:
         run_dir = results_dir / run_name
         assert run_dir.exists()
         assert (run_dir / "_input_scenario.json").exists()
+        assert (run_dir / "run.json").exists()
+        run_meta = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        assert run_meta["run_name"] == run_name
+        assert run_meta["governance"] == "G1"
+        assert run_meta["status"] == "running"
         assert run_name in runner._active
         proc = runner._active[run_name]
         assert proc.cmd[:3] == [runner.sys.executable, "-m", "sphere_lc.cli"]

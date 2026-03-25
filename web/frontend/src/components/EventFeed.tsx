@@ -2,19 +2,19 @@ import { useEffect, useRef } from 'react'
 import type { SimEvent } from '../types'
 
 const EVENT_ICONS: Record<string, string> = {
-  message_sent: '💬',
-  graph_updated: '🔗',
-  reputation_modified: '⭐',
-  case_opened: '📂',
-  case_resolved: '✅',
-  case_modified: '✏️',
-  proposal_submitted: '📋',
-  evidence_added: '🔍',
-  evidence_removed: '🗑️',
-  arbiter_approved: '✔️',
-  arbiter_rejected: '✖️',
-  auto_transition: '⏭️',
-  world_event: '🌍',
+  message_sent: 'msg',
+  graph_updated: 'link',
+  reputation_modified: 'rep',
+  case_opened: 'case',
+  case_resolved: 'done',
+  case_modified: 'edit',
+  proposal_submitted: 'prop',
+  evidence_added: 'e+',
+  evidence_removed: 'e-',
+  arbiter_approved: 'ok',
+  arbiter_rejected: 'no',
+  auto_transition: 'auto',
+  world_event: 'world',
 }
 
 interface Props {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { getToken } from '../utils/apiClient'
 import type { GraphEdge, GraphNode, RunInfo, SimEnvironment, SimEvent, SimMeta, WsMessage } from '../types'
 
-export type SimMode = 'idle' | 'playback' | 'live'
+export type SimMode = 'idle' | 'playback' | 'live' | 'snapshot'
 
 export interface SimState {
   meta: SimMeta | null
@@ -14,6 +14,7 @@ export interface SimState {
   currentRound: number | null
   done: boolean
   error: string | null
+  totalEvents: number
 }
 
 const INITIAL_STATE: SimState = {
@@ -26,6 +27,7 @@ const INITIAL_STATE: SimState = {
   currentRound: null,
   done: false,
   error: null,
+  totalEvents: 0,
 }
 
 const MAX_EVENTS = 10_000
@@ -33,6 +35,63 @@ const EVENT_FLUSH_INTERVAL_MS = 60
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function normalizeEnvironment(raw: unknown, fallback?: SimEnvironment): SimEnvironment {
+  const base = fallback ?? { queues: [], active_signals: [] }
+  if (!isRecord(raw)) return base
+  const environment = isRecord(raw.environment) ? raw.environment : raw
+  const queuesRaw = Array.isArray(environment.operational_queues)
+    ? environment.operational_queues
+    : Array.isArray(environment.queues)
+      ? environment.queues
+      : []
+  const activeSignalsRaw = Array.isArray(environment.active_signals)
+    ? environment.active_signals
+    : isRecord(environment.information_climate) && Array.isArray(environment.information_climate.active_signals)
+      ? environment.information_climate.active_signals
+      : []
+  return {
+    queues: queuesRaw
+      .filter((item): item is Record<string, unknown> => isRecord(item))
+      .map((item) => ({
+        queue_id: String(item.queue_id ?? ''),
+        title: typeof item.title === 'string' ? item.title : undefined,
+        backlog: Number(item.backlog ?? 0),
+        capacity_per_tick: Number(item.capacity_per_tick ?? 0),
+        avg_delay_ticks: Number(item.avg_delay_ticks ?? 0),
+        status: String(item.status ?? ''),
+        pressure: String(item.pressure ?? ''),
+        owner_org_id: String(item.owner_org_id ?? ''),
+        zone_id: String(item.zone_id ?? ''),
+      })),
+    active_signals: activeSignalsRaw.map((item) => String(item)).filter(Boolean),
+    information_climate: isRecord(environment.information_climate)
+      ? {
+        public_mood: String(environment.information_climate.public_mood ?? ''),
+        oversight_attention: String(environment.information_climate.oversight_attention ?? ''),
+        media_pressure: String(environment.information_climate.media_pressure ?? ''),
+        narrative_temperature: String(environment.information_climate.narrative_temperature ?? ''),
+        active_signals: Array.isArray(environment.information_climate.active_signals)
+          ? environment.information_climate.active_signals.map((item) => String(item)).filter(Boolean)
+          : [],
+      }
+      : base.information_climate,
+    informal_links: Array.isArray(environment.informal_links)
+      ? environment.informal_links
+        .filter((item): item is Record<string, unknown> => isRecord(item))
+        .map((item) => ({
+          link_id: String(item.link_id ?? ''),
+          agent_a_id: String(item.agent_a_id ?? ''),
+          agent_b_id: String(item.agent_b_id ?? ''),
+          link_type: String(item.link_type ?? ''),
+          strength: Number(item.strength ?? 0),
+          visibility: String(item.visibility ?? ''),
+          pressure: String(item.pressure ?? ''),
+          source: String(item.source ?? ''),
+        }))
+      : base.informal_links,
+  }
 }
 
 function extractNamesFromEvent(event: SimEvent): Record<string, string> {
@@ -118,6 +177,7 @@ export function useSimulation() {
           names: nextNames,
           meta: prev.meta ? { ...prev.meta, names: nextNames } : prev.meta,
           currentRound: nextRound,
+          totalEvents: Math.max(prev.totalEvents, nextEvents.length),
         }
       })
     }
@@ -165,9 +225,10 @@ export function useSimulation() {
         return
       }
       if (msg.type === 'meta') {
+        const nextMeta = { ...msg, names: msg.names ?? {}, run_name: msg.run_name } as SimMeta
         setState((prev) => ({
           ...prev,
-          meta: { scenario: msg.scenario, governance: msg.governance, seed: msg.seed, variant: msg.variant ?? null, run_name: msg.run_name, names: msg.names ?? {} },
+          meta: nextMeta,
           names: msg.names ?? {},
         }))
         return
@@ -177,7 +238,7 @@ export function useSimulation() {
           ...prev,
           nodes: msg.nodes,
           edges: msg.edges,
-          environment: msg.environment ?? prev.environment,
+          environment: normalizeEnvironment(msg.environment, prev.environment),
         }))
         return
       }
@@ -219,7 +280,56 @@ export function useSimulation() {
     connect(url, 'live', token)
   }, [connect])
 
+  const openSnapshot = useCallback(async (runName: string, tailLimit: number = 300) => {
+    disconnect()
+    setState(INITIAL_STATE)
+    setMode('snapshot')
+    try {
+      const token = getToken()
+      if (!token) {
+        setState((prev) => ({ ...prev, error: 'Не выполнен вход' }))
+        setMode('idle')
+        return
+      }
+      const res = await fetch(`/api/run/${encodeURIComponent(runName)}/snapshot?tail_limit=${tailLimit}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`)
+      }
+      const payload = await res.json()
+      const events = Array.isArray(payload.events) ? payload.events as SimEvent[] : []
+      const names = isRecord(payload.names)
+        ? Object.fromEntries(Object.entries(payload.names).map(([k, v]) => [String(k), String(v)]))
+        : {}
+      const graph = isRecord(payload.graph) ? payload.graph : {}
+      const graphEnvironment = isRecord(graph.environment) ? graph.environment : undefined
+      setState({
+        meta: isRecord(payload.meta)
+          ? { ...(payload.meta as SimMeta), names }
+          : null,
+        names,
+        events,
+        nodes: Array.isArray(graph.nodes) ? graph.nodes as GraphNode[] : [],
+        edges: Array.isArray(graph.edges) ? graph.edges as GraphEdge[] : [],
+        environment: normalizeEnvironment(payload.environment, normalizeEnvironment(graphEnvironment)),
+        currentRound: typeof payload.current_round === 'number'
+          ? payload.current_round
+          : (events[events.length - 1]?.round ?? null),
+        done: true,
+        error: null,
+        totalEvents: typeof payload.total_events === 'number' ? payload.total_events : events.length,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Не удалось открыть прогон'
+      setState((prev) => ({ ...prev, error: message }))
+      setMode('idle')
+    }
+  }, [disconnect])
+
   useEffect(() => () => disconnect(), [disconnect])
 
-  return { state, mode, startPlayback, startLive, disconnect }
+  return { state, mode, startPlayback, startLive, openSnapshot, disconnect }
 }

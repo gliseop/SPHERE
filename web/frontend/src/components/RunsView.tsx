@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 import type { RunInfo } from '../types'
 import { apiClient } from '../utils/apiClient'
 import type { AuthUser } from '../hooks/useAuth'
+import { Icon } from './Icons'
 
 interface ActiveRun {
   run_name: string
+  display_name?: string
   pid: number
   status: 'running' | 'finished'
   returncode?: number
@@ -24,6 +26,7 @@ interface SavedScenario {
 
 interface Props {
   onPlayback: (run: RunInfo, speed: number) => void
+  onOpenRun: (runName: string) => void
   onLive: (runName?: string) => void
   speed: number
   mode: string
@@ -80,7 +83,7 @@ const FALLBACK_GOVERNANCE: GovernanceModeItem[] = [
   { id: 'G3', label: 'G3 — Полный контроль (трибунал)' },
 ]
 
-export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: Props) {
+export function RunsView({ onPlayback, onOpenRun, onLive, speed, mode, user, activeRuns }: Props) {
   const [runs, setRuns] = useState<RunInfo[] | null>(null)
   const [filter, setFilter] = useState<string>('all')
   const [templateScenarios, setTemplateScenarios] = useState<TemplateScenario[] | null>(null)
@@ -92,7 +95,6 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
   const [launchScenarioId, setLaunchScenarioId] = useState('')
   const [launchScenario, setLaunchScenario] = useState('S1')
   const [launchGovernance, setLaunchGovernance] = useState('G1')
-  const [launchSeed, setLaunchSeed] = useState('')
   const [launchRounds, setLaunchRounds] = useState('25')
   const [launchParallel, setLaunchParallel] = useState(true)
   const [launchWorkers, setLaunchWorkers] = useState('')
@@ -194,7 +196,6 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
         : await apiClient.post('/api/runs/launch', {
           scenario: launchScenario,
           governance: launchGovernance,
-          seed: launchSeed ? Number(launchSeed) : null,
           runner: 'cognitive',
           rounds: launchRounds ? Number(launchRounds) : 25,
           parallel_agents: launchParallel,
@@ -274,7 +275,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
     ? (savedScenarios ?? []).find((s) => s.id === launchScenarioId) ?? null
     : null
 
-  const isIdle = mode === 'idle'
+  const isIdle = mode === 'idle' || mode === 'snapshot'
 
   return (
     <div className="runs-view">
@@ -306,7 +307,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                 value={launchSource}
                 onChange={(e) => setLaunchSource(e.target.value as 'template' | 'saved')}
               >
-                <option value="template">Шаблон (S/G)</option>
+                <option value="template">Шаблон</option>
                 <option value="saved">Сценарий (из библиотеки)</option>
               </select>
             </div>
@@ -318,7 +319,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                   <select className="hud-input" value={launchScenario} onChange={(e) => setLaunchScenario(e.target.value)}>
                     {scenarioOptions.map((o) => (
                       <option key={o.id} value={o.id} title={o.description || ''}>
-                        {o.id} — {o.title}
+                        {o.title}
                       </option>
                     ))}
                   </select>
@@ -330,10 +331,6 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                       <option key={o.id} value={o.id} title={o.description || ''}>{o.label}</option>
                     ))}
                   </select>
-                </div>
-                <div className="form-field">
-                  <label>Seed (пусто = случайный)</label>
-                  <input className="hud-input" type="number" value={launchSeed} onChange={(e) => setLaunchSeed(e.target.value)} placeholder="42" />
                 </div>
                 <div className="form-field">
                   <label title="Длительность симуляции в днях (временная модель)">Дней</label>
@@ -362,7 +359,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                     <option value="">— выбрать —</option>
                     {(savedScenarios ?? []).map((s) => (
                       <option key={s.id ?? s.name} value={s.id ?? ''} disabled={!s.id}>
-                        {s.name} ({s.scenario}/{s.governance})
+                        {s.name}
                       </option>
                     ))}
                   </select>
@@ -371,9 +368,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                   <label>Параметры</label>
                   <div className="text-muted" style={{ fontSize: '0.7rem' }}>
                     {selectedSaved
-                      ? `${selectedSaved.scenario} / ${selectedSaved.governance} / дней: ${selectedSaved.rounds}`
-                        + (selectedSaved.seed !== null ? ` / seed ${selectedSaved.seed}` : '')
-                        + (selectedSaved.sim_config ? ' / custom' : '')
+                      ? `${selectedSaved.name} / дней: ${selectedSaved.rounds}${selectedSaved.sim_config ? ' / custom' : ''}`
                       : 'Выберите сценарий из библиотеки'}
                   </div>
                 </div>
@@ -386,7 +381,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                 onClick={handleLaunch}
                 disabled={launching || !isIdle || (launchSource === 'saved' && !launchScenarioId)}
               >
-                {launching ? 'Запуск...' : '▶ Запустить'}
+                {launching ? 'Запуск...' : 'Запустить'}
               </button>
             </div>
           </div>
@@ -401,7 +396,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
             {activeRuns.filter((a) => a.status === 'running').map((a) => (
               <div key={a.run_name} className="runs-active-item">
                 <div className="active-dot" />
-                <span className="runs-active-name">{a.run_name}</span>
+                <span className="runs-active-name">{a.display_name || a.run_name}</span>
                 <span className="runs-active-pid">
                   {a.external ? 'external' : `PID ${a.pid}`}
                 </span>
@@ -410,7 +405,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                   onClick={() => onLive(a.run_name)}
                   title="Перейти в монитор (Live)"
                 >
-                  ● Live
+                  <Icon name="live" size={14} />
                 </button>
                 {user?.role === 'admin' && (a.stop_supported ?? !a.external) && (
                   <button
@@ -437,7 +432,6 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
               <th>Дата</th>
               <th>Сценарий</th>
               <th>Управление</th>
-              <th>Seed</th>
               <th>Размер</th>
               <th></th>
             </tr>
@@ -448,37 +442,58 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
               const isActive = Boolean(activeEntry)
               const stopSupported = Boolean(activeEntry && (activeEntry.stop_supported ?? !activeEntry.external))
               return (
-                <tr key={r.name} className={`runs-row${isActive ? ' active' : ''}`}>
+                <tr
+                  key={r.name}
+                  className={`runs-row${isActive ? ' active' : ''}`}
+                  onDoubleClick={() => onOpenRun(r.name)}
+                  title={r.display_name || r.scenario_title || r.name}
+                >
                   {hasRunning && (
                     <td className="runs-status-cell">
                       {isActive && <div className="active-dot" />}
                     </td>
                   )}
-                  <td className="runs-name-cell">{r.name}</td>
-                  <td className="runs-date-cell">
-                    {r.created_at
-                      ? new Date(r.created_at * 1000).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
-                      : '—'}
+                  <td className="runs-name-cell">
+                    <button
+                      className="runs-open-button"
+                      onClick={() => onOpenRun(r.name)}
+                      title="Открыть финальное состояние"
+                    >
+                      {r.display_name || r.scenario_title || r.name}
+                    </button>
                   </td>
-                  <td><span className="badge small accent">{r.scenario || '—'}</span></td>
-                  <td><span className="badge small info">{r.governance || '—'}</span></td>
-                  <td className="runs-seed-cell">{r.seed ?? '—'}</td>
+                  <td className="runs-date-cell">
+                    {r.simulated_start_date && r.simulated_end_date
+                      ? `${r.simulated_start_date} - ${r.simulated_end_date}`
+                      : r.created_at
+                        ? new Date(r.created_at * 1000).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+                        : '—'}
+                  </td>
+                  <td><span className="badge small accent">{r.scenario_title || r.scenario || '—'}</span></td>
+                  <td><span className="badge small info">{r.governance_label || r.governance || '—'}</span></td>
                   <td className="runs-size-cell">{r.size_kb} KB</td>
                   <td className="runs-actions-cell">
+                    <button
+                      className="btn-clipped small"
+                      onClick={() => onOpenRun(r.name)}
+                      title="Открыть"
+                    >
+                      <Icon name="open" size={14} />
+                    </button>
                     <button
                       className="btn-clipped primary small"
                       disabled={!isIdle}
                       onClick={() => onPlayback(r, speed)}
                       title="Воспроизвести"
                     >
-                      ▶
+                      <Icon name="play" size={14} />
                     </button>
                     <button
                       className="btn-clipped small"
                       onClick={() => handleExport(r.name)}
                       title="Выгрузить JSON"
                     >
-                      ↓
+                      <Icon name="download" size={14} />
                     </button>
                     {isActive && (
                       <button
@@ -486,7 +501,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                         onClick={() => onLive(r.name)}
                         title="Перейти в монитор (Live)"
                       >
-                        ●
+                        <Icon name="live" size={14} />
                       </button>
                     )}
                     {isActive && user?.role === 'admin' && stopSupported && (
@@ -496,7 +511,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                         disabled={stopping === r.name}
                         title="Остановить"
                       >
-                        ■
+                        <Icon name="stop" size={14} />
                       </button>
                     )}
                     {user?.role === 'admin' && (
@@ -507,7 +522,7 @@ export function RunsView({ onPlayback, onLive, speed, mode, user, activeRuns }: 
                         title={isActive ? 'Нельзя удалить активный прогон' : 'Удалить'}
                         style={{ marginLeft: '0.35rem' }}
                       >
-                        🗑
+                        <Icon name="delete" size={14} />
                       </button>
                     )}
                   </td>

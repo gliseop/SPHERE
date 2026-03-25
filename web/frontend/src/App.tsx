@@ -13,14 +13,14 @@ import { ScenariosView } from './components/ScenariosView'
 import { RunsView } from './components/RunsView'
 import { AgentTypesView } from './components/AgentTypesView'
 import { PersonalitiesView } from './components/PersonalitiesView'
+import { Icon } from './components/Icons'
 import { APP_NAME } from './constants'
-import { getBool } from './utils/payload'
 import { apiClient } from './utils/apiClient'
 import type { RunInfo } from './types'
 import './styles/hud.css'
 
 const MIN_PANEL = 150
-const MAX_PANEL = 400
+const MAX_LEFT_PANEL = 400
 const COLLAPSED_PANEL = 44
 
 function ResizeHandle({ onDrag }: { onDrag: (delta: number) => void }) {
@@ -59,7 +59,7 @@ function ResizeHandle({ onDrag }: { onDrag: (delta: number) => void }) {
 }
 
 export default function App() {
-  const { state, mode, startPlayback, startLive, disconnect } = useSimulation()
+  const { state, mode, startPlayback, startLive, openSnapshot, disconnect } = useSimulation()
   const auth = useAuth()
   const [view, setView] = useState<'monitor' | 'scenarios' | 'runs' | 'agentTypes' | 'personalities'>('monitor')
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
@@ -67,6 +67,7 @@ export default function App() {
   const [focusDay, setFocusDay] = useState<string | null>(null)
   const [activeRuns, setActiveRuns] = useState<Array<{
     run_name: string
+    display_name?: string
     pid: number
     status: 'running' | 'finished'
     returncode?: number
@@ -115,11 +116,12 @@ export default function App() {
 
   const [leftWidth, setLeftWidth] = useState<number>(() => {
     const stored = localStorage.getItem('sphere-left-w')
-    return stored ? Math.max(MIN_PANEL, Math.min(MAX_PANEL, Number(stored))) : 200
+    return stored ? Math.max(MIN_PANEL, Math.min(MAX_LEFT_PANEL, Number(stored))) : 200
   })
   const [rightWidth, setRightWidth] = useState<number>(() => {
     const stored = localStorage.getItem('sphere-right-w')
-    return stored ? Math.max(MIN_PANEL, Math.min(MAX_PANEL, Number(stored))) : 260
+    const maxWidth = Math.max(MIN_PANEL, Math.floor(window.innerWidth * 0.8))
+    return stored ? Math.max(MIN_PANEL, Math.min(maxWidth, Number(stored))) : 320
   })
   const [leftCollapsed, setLeftCollapsed] = useState<boolean>(() => localStorage.getItem('sphere-left-collapsed') === '1')
   const [rightCollapsed, setRightCollapsed] = useState<boolean>(() => localStorage.getItem('sphere-right-collapsed') === '1')
@@ -145,28 +147,24 @@ export default function App() {
     [state.events],
   )
 
-  const messageEvents = useMemo(
-    () => meaningfulEvents.filter((e) => e.event_type === 'message_sent' || e.event_type === 'message'),
-    [meaningfulEvents],
-  )
-
-  const privateStats = useMemo(() => {
-    const total = messageEvents.length
-    const priv = messageEvents.filter((e) => getBool(e.payload, 'private')).length
-    const ratio = total ? (priv / total) * 100 : 0
-    return { total, priv, ratio }
-  }, [messageEvents])
-
   const lastDateLabel = useMemo(() => {
     const last = state.events[state.events.length - 1]
-    if (!last?.timestamp) return '---'
+    if (last?.simulated_date) {
+      const ms = Date.parse(`${last.simulated_date}T12:00:00`)
+      if (Number.isFinite(ms)) {
+        return new Date(ms).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
+      }
+      return last.simulated_date
+    }
+    if (!last?.timestamp) return state.meta?.simulated_end_date ?? '---'
     const ms = Date.parse(last.timestamp)
     if (!Number.isFinite(ms)) return '---'
     return new Date(ms).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })
-  }, [state.events])
+  }, [state.events, state.meta?.simulated_end_date])
 
   const lastTimeLabel = useMemo(() => {
     const last = state.events[state.events.length - 1]
+    if (last?.simulated_time) return last.simulated_time
     if (!last?.timestamp) return '---'
     const ms = Date.parse(last.timestamp)
     if (!Number.isFinite(ms)) return '---'
@@ -183,12 +181,15 @@ export default function App() {
 
   const handleLeftDrag = useCallback((delta: number) => {
     if (leftCollapsed) setLeftCollapsed(false)
-    setLeftWidth((w) => Math.max(MIN_PANEL, Math.min(MAX_PANEL, w + delta)))
+    setLeftWidth((w) => Math.max(MIN_PANEL, Math.min(MAX_LEFT_PANEL, w + delta)))
   }, [leftCollapsed])
 
   const handleRightDrag = useCallback((delta: number) => {
     if (rightCollapsed) setRightCollapsed(false)
-    setRightWidth((w) => Math.max(MIN_PANEL, Math.min(MAX_PANEL, w - delta)))
+    setRightWidth((w) => {
+      const maxWidth = Math.max(MIN_PANEL, Math.floor(window.innerWidth * 0.8))
+      return Math.max(MIN_PANEL, Math.min(maxWidth, w - delta))
+    })
   }, [rightCollapsed])
 
   if (!auth.isAuthenticated) {
@@ -245,10 +246,8 @@ export default function App() {
           </nav>
           {state.meta && (
             <span className="hud-header-meta">
-              {state.meta.scenario}
-              {state.meta.governance ? ` / ${state.meta.governance}` : ''}
-              {state.meta.seed !== null ? ` / seed${state.meta.seed}` : ''}
-              {state.meta.variant ? ` / ${state.meta.variant}` : ''}
+              {state.meta.display_name || state.meta.scenario_title || state.meta.run_name}
+              {state.meta.governance_label ? ` / ${state.meta.governance_label}` : ''}
             </span>
           )}
         </div>
@@ -272,40 +271,15 @@ export default function App() {
               </div>
               <div className="hud-header-stat">
                 <span className="hud-header-stat-label">Событий</span>
-                <span className="hud-header-stat-value">{meaningfulEvents.length}</span>
-              </div>
-              <div className="hud-header-stat">
-                <span className="hud-header-stat-label">Приватных</span>
-                <span
-                  className={`hud-header-stat-value ${(privateStats.total >= 5 && privateStats.ratio > 80) ? 'danger' : ''}`}
-                  title={privateStats.total ? `${privateStats.priv}/${privateStats.total}` : 'Нет сообщений'}
-                >
-                  {privateStats.ratio.toFixed(0)}%
-                </span>
-              </div>
-              <div className="hud-header-stat">
-                <span className="hud-header-stat-label">Агентов</span>
-                <span className="hud-header-stat-value">{state.nodes.length}</span>
-              </div>
-              <div className="hud-header-stat">
-                <span className="hud-header-stat-label">Очереди</span>
-                <span className={`hud-header-stat-value${state.environment.queues.length > 0 ? ' accent' : ''}`}>
-                  {state.environment.queues.length}
-                </span>
-              </div>
-              <div className="hud-header-stat">
-                <span className="hud-header-stat-label">Сигналы</span>
-                <span className={`hud-header-stat-value${state.environment.active_signals.length > 0 ? ' danger' : ''}`}>
-                  {state.environment.active_signals.length}
-                </span>
+                <span className="hud-header-stat-value">{state.totalEvents || meaningfulEvents.length}</span>
               </div>
 
-              {state.done && <span className="badge success">✓ Завершено</span>}
-              {state.error && <span className="badge danger">⚠ Ошибка</span>}
+              {state.done && <span className="badge success">Завершено</span>}
+              {state.error && <span className="badge danger">Ошибка</span>}
 
-              {mode !== 'idle' && (
+              {(mode === 'live' || mode === 'playback') && (
                 <button className="btn-clipped danger small" onClick={disconnect}>
-                  Стоп
+                  <Icon name="stop" size={14} />
                 </button>
               )}
             </>
@@ -317,7 +291,7 @@ export default function App() {
             aria-pressed={theme === 'dark'}
             style={{ marginLeft: '0.5rem' }}
           >
-            {theme === 'light' ? '◐' : '◑'}
+            <Icon name="theme" size={14} />
           </button>
           <span
             className="hud-header-stat-label"
@@ -337,7 +311,7 @@ export default function App() {
             title="Выйти"
             style={{ marginLeft: '0.5rem' }}
           >
-            ✕
+            <Icon name="close" size={14} />
           </button>
         </div>
       </header>
@@ -354,7 +328,7 @@ export default function App() {
                 onClick={() => setLeftCollapsed((v) => !v)}
                 title={leftCollapsed ? 'Развернуть левую панель' : 'Свернуть левую панель'}
               >
-                {leftCollapsed ? '▶' : '◀'}
+                <Icon name={leftCollapsed ? 'collapseRight' : 'collapseLeft'} size={14} />
               </button>
 
               {!leftCollapsed && (
@@ -368,6 +342,10 @@ export default function App() {
                       onLive={(runName?: string) => {
                         setSelectedNode(null)
                         startLive(runName)
+                      }}
+                      onOpenRun={(runName: string) => {
+                        setSelectedNode(null)
+                        void openSnapshot(runName)
                       }}
                       speed={speed}
                       onSpeedChange={setSpeed}
@@ -421,67 +399,34 @@ export default function App() {
                 onClick={() => setRightCollapsed((v) => !v)}
                 title={rightCollapsed ? 'Развернуть правую панель' : 'Свернуть правую панель'}
               >
-                {rightCollapsed ? '◀' : '▶'}
+                <Icon name={rightCollapsed ? 'collapseLeft' : 'collapseRight'} size={14} />
               </button>
               {!rightCollapsed && (
                 <>
-                  <div style={{
-                    display: 'flex',
-                    gap: 0,
-                    borderBottom: '1px solid var(--border)',
-                    background: 'var(--surface-1)',
-                    flexShrink: 0,
-                  }}>
+                  <div className="panel-icon-tabs">
                     <button
                       onClick={() => setRightTab('activity')}
-                      style={{
-                        flex: 1,
-                        padding: '0.35rem 0.5rem',
-                        fontSize: '0.65rem',
-                        fontWeight: rightTab === 'activity' ? 600 : 400,
-                        color: rightTab === 'activity' ? 'var(--accent)' : 'var(--text-secondary)',
-                        background: 'transparent',
-                        border: 'none',
-                        borderBottom: rightTab === 'activity' ? '2px solid var(--accent)' : '2px solid transparent',
-                        cursor: 'pointer',
-                        transition: 'color 0.15s, border-color 0.15s',
-                      }}
+                      className={`panel-icon-tab${rightTab === 'activity' ? ' active' : ''}`}
+                      title="Активность"
+                      aria-label="Активность"
                     >
-                      Активность
+                      <Icon name="activity" size={16} />
                     </button>
                     <button
                       onClick={() => setRightTab('scenario')}
-                      style={{
-                        flex: 1,
-                        padding: '0.35rem 0.5rem',
-                        fontSize: '0.65rem',
-                        fontWeight: rightTab === 'scenario' ? 600 : 400,
-                        color: rightTab === 'scenario' ? 'var(--accent)' : 'var(--text-secondary)',
-                        background: 'transparent',
-                        border: 'none',
-                        borderBottom: rightTab === 'scenario' ? '2px solid var(--accent)' : '2px solid transparent',
-                        cursor: 'pointer',
-                        transition: 'color 0.15s, border-color 0.15s',
-                      }}
+                      className={`panel-icon-tab${rightTab === 'scenario' ? ' active' : ''}`}
+                      title="Сценарий"
+                      aria-label="Сценарий"
                     >
-                      Сценарий
+                      <Icon name="scenario" size={16} />
                     </button>
                     <button
                       onClick={() => setRightTab('environment')}
-                      style={{
-                        flex: 1,
-                        padding: '0.35rem 0.5rem',
-                        fontSize: '0.65rem',
-                        fontWeight: rightTab === 'environment' ? 600 : 400,
-                        color: rightTab === 'environment' ? 'var(--accent)' : 'var(--text-secondary)',
-                        background: 'transparent',
-                        border: 'none',
-                        borderBottom: rightTab === 'environment' ? '2px solid var(--accent)' : '2px solid transparent',
-                        cursor: 'pointer',
-                        transition: 'color 0.15s, border-color 0.15s',
-                      }}
+                      className={`panel-icon-tab${rightTab === 'environment' ? ' active' : ''}`}
+                      title="Среда"
+                      aria-label="Среда"
                     >
-                      Среда
+                      <Icon name="environment" size={16} />
                     </button>
                   </div>
                   {rightTab === 'activity' && (
@@ -547,6 +492,11 @@ export default function App() {
             onPlayback={(run: RunInfo, spd: number) => {
               setSelectedNode(null)
               startPlayback(run, spd)
+              setView('monitor')
+            }}
+            onOpenRun={(runName: string) => {
+              setSelectedNode(null)
+              void openSnapshot(runName)
               setView('monitor')
             }}
             onLive={(runName?: string) => {

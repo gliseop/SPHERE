@@ -373,7 +373,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
       <div className="library-editor">
         <div className="library-editor-header">
           <span>{editing.id ? 'Редактировать личность' : 'Новая личность'}</span>
-          <button className="btn-clipped small" onClick={() => setEditing(null)}>✕ Отмена</button>
+          <button className="btn-clipped small" onClick={() => setEditing(null)}>Отмена</button>
         </div>
 
         <div className="scenarios-form">
@@ -602,7 +602,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
               onClick={() => setShowJson(!showJson)}
               style={{ marginBottom: '0.5rem', width: 'fit-content' }}
             >
-              {showJson ? '▲ Скрыть JSON' : '▼ JSON-превью'}
+              {showJson ? 'Скрыть JSON' : 'JSON-превью'}
             </button>
             {showJson && (
               <pre className="json-preview">{JSON.stringify(editing, null, 2)}</pre>
@@ -692,9 +692,9 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
                         {generatingInterviewId === p.id ? '...' : '🧠'}
                       </button>
                     )}
-                    <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_PERSONALITY, ...p })} title="Редактировать">✎</button>
+                    <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_PERSONALITY, ...p })} title="Редактировать">Ред.</button>
                     {p.id && (
-                      <button className="btn-clipped danger small" onClick={() => handleDelete(p.id!)} title="Удалить">✕</button>
+                      <button className="btn-clipped danger small" onClick={() => handleDelete(p.id!)} title="Удалить">Удалить</button>
                     )}
                   </>
                 )}
@@ -739,7 +739,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
                 className="btn-clipped small"
                 onClick={() => { setViewingInterviewId(null); setInterviewData(null) }}
               >
-                ✕
+                Закрыть
               </button>
             </div>
           </div>

@@ -21,7 +21,7 @@ web/backend/
 ├── main.py           # FastAPI-приложение: WebSocket, middleware, точка входа
 ├── routes/           # REST-эндпоинты (выделены из main.py)
 │   ├── auth.py       # POST /api/auth/login
-│   ├── runs.py       # Прогоны: список, детали, экспорт, удаление
+│   ├── runs.py       # Прогоны: список, детали, snapshot, trace/export, удаление
 │   ├── run_control.py # Запуск и остановка симуляций
 │   ├── scenarios.py  # CRUD сценариев
 │   ├── agent_types.py # CRUD типов агентов
@@ -64,9 +64,11 @@ web/backend/
 |---|---|---|
 | GET | `/api/runs` | Список всех прогонов |
 | GET | `/api/run/{name}` | Детали прогона (события, граф, environment-summary, метрики) |
+| GET | `/api/run/{name}/snapshot` | Финальное состояние прогона + хвост событий для monitor snapshot |
 | GET | `/api/run/{name}/export` | Экспорт полного прогона, включая environment sidecars |
 | GET | `/api/run/{name}/scenario` | Конфигурация сценария прогона |
 | GET | `/api/run/{name}/prompts` | Промпты и ответы LLM (только `admin`, limit ≤ 1000) |
+| GET | `/api/run/{name}/trace.md` | Markdown-экспорт LLM trace (только `admin`) |
 | GET | `/api/artifacts/{doc_id}` | Артефакты (сгенерированные документы, только `admin`) |
 | DELETE | `/api/runs/{run_name}` | Удалить прогон |
 
@@ -74,7 +76,11 @@ web/backend/
 Для directory-based LC-run движок дополнительно пишет sidecar-файлы `scenario.json`, `names.json`, `status.json`, `trace.jsonl`, `summary.json`, `environment_summary.json` и `environment_timeline.jsonl`, чтобы web UI и экспорт могли загрузить не только конфиг и итоговые метрики, но и отдельную телеметрию усиленной среды.
 Для активного directory-based прогона `GET /api/run/{name}/scenario` и `GET /api/run/{name}/export` умеют читать и ранний launcher-sidecar `_input_scenario.json`, поэтому конфиг доступен сразу после старта, ещё до записи финального `scenario.json`.
 Для SPHERE-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl`, если они вынесены из `events.jsonl`.
-Перед отдачей `GET /api/run/{name}` и `GET /api/run/{name}/export` backend теперь применяет `audience`-policy: viewer не получает point-to-point события, адресованные только конкретным `agent:*`, а admin по-прежнему видит полный поток. Это же правило используется и для построения `graph_state`, чтобы скрытые события не просачивались через побочные изменения графа. В ответ `GET /api/run/{name}` теперь также входит компактный `environment`-блок, а `GET /api/run/{name}/export` дополнительно включает `environment` и `environment_timeline`.
+Перед отдачей `GET /api/run/{name}`, `GET /api/run/{name}/snapshot` и `GET /api/run/{name}/export` backend применяет `audience`-policy: viewer не получает point-to-point события, адресованные только конкретным `agent:*`, а admin по-прежнему видит полный поток. Это же правило используется и для построения `graph_state`, чтобы скрытые события не просачивались через побочные изменения графа. В ответ `GET /api/run/{name}` теперь также входит компактный `environment`-блок, `GET /api/run/{name}/snapshot` возвращает финальный graph-state и tail событий для monitor snapshot, а `GET /api/run/{name}/export` дополнительно включает `environment` и `environment_timeline`.
+
+Для directory-based run backend теперь предпочитает sidecar `run.json` как источник UI-метаданных прогона. Это позволяет хранить не только legacy `scenario/governance/seed`, но и `display_name`, `scenario_title`, `governance_label`, `ticks_total`, параметры runtime и симуляционный диапазон дат. Старый разбор имени прогона через regex остаётся fallback только для legacy артефактов без `run.json`.
+
+При выдаче событий backend дополнительно материализует симуляционное время из runtime-конфига (`start_date`, `tick_granularity`, `tick_duration_days`) и добавляет в события поля `simulated_date`, `simulated_time`, `simulated_timestamp`. Благодаря этому monitor и timeline могут опираться на каноническое время мира, а не только на wall-clock `timestamp` записи в JSONL.
 
 #### Живая симуляция
 
@@ -183,7 +189,7 @@ WebSocket-поток использует ту же visibility-policy, что и
 | Тип | Направление | Описание |
 |---|---|---|
 | `auth` | клиент → сервер | Первое сообщение после подключения: JWT-аутентификация |
-| `meta` | сервер → клиент | Метаданные прогона (`scenario`, `governance`, `seed`, `run_name`, `names`) |
+| `meta` | сервер → клиент | Метаданные прогона (`display_name`, `scenario_title`, `governance_label`, runtime-время мира, `run_name`, `names`) |
 | `event` | сервер → клиент | Одно событие |
 | `events` | сервер → клиент | Пакет событий |
 | `graph_state` | сервер → клиент | Текущее состояние графа и компактный environment-срез |
@@ -191,7 +197,7 @@ WebSocket-поток использует ту же visibility-policy, что и
 | `done` | сервер → клиент | Поток завершён |
 | `error` | сервер → клиент | Ошибка (например, unauthorized/run not found) |
 
-Оптимизация: события пакетируются (`SPHERE_WS_EVENT_BATCH_SIZE`, по умолчанию 50 штук каждые 0.15 с), обновления графа троттлятся (`SPHERE_LIVE_GRAPH_THROTTLE_S`, по умолчанию 0.25 с). Типы событий из `SPHERE_WS_DROP_EVENT_TYPES` (по умолчанию `idle`) фильтруются и не передаются клиенту.
+Оптимизация: события пакетируются (`SPHERE_WS_EVENT_BATCH_SIZE`, по умолчанию 50 штук каждые 0.15 с), обновления графа троттлятся (`SPHERE_LIVE_GRAPH_THROTTLE_S`, по умолчанию 0.25 с). Типы событий из `SPHERE_WS_DROP_EVENT_TYPES` (по умолчанию `idle`) фильтруются и не передаются клиенту. Для UI-событий backend также обрезает длинные payload-строки для WS-транспорта, но сохраняет полные данные в REST и `trace.md`/`prompts`.
 
 ## Клиентская часть
 

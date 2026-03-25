@@ -15,10 +15,35 @@ function queueBadgeClass(pressure: string): string {
 
 function statusLabel(status: string): string {
   const normalized = status.trim().toLowerCase()
-  if (normalized === 'overloaded') return 'перегрузка'
-  if (normalized === 'recovering') return 'восстановление'
-  if (normalized === 'stable') return 'стабильно'
+  if (normalized === 'overloaded') return 'перегружена'
+  if (normalized === 'recovering') return 'восстанавливается'
+  if (normalized === 'stable') return 'стабильна'
+  if (normalized === 'active') return 'активна'
   return status || 'неизвестно'
+}
+
+function queueMeaning(status: string, backlog: number, delay: number): string {
+  if (status === 'overloaded' || backlog >= 5 || delay >= 4) {
+    return 'Очередь стала bottleneck: решения, проверки или ответы накапливаются быстрее, чем система их переваривает.'
+  }
+  if (backlog > 0 || delay > 0) {
+    return 'Есть накопление задач. Это ещё не авария, но уже влияет на ритм симуляции и может рождать жалобы, публикации и follow-up.'
+  }
+  return 'Очередь работает без заметного давления.'
+}
+
+function signalMeaning(signal: string): string {
+  const normalized = signal.toLowerCase()
+  if (normalized.includes('queue') || normalized.includes('очеред')) {
+    return 'Это признак операционной перегрузки: он может усилить жалобы, медийное давление и надзор.'
+  }
+  if (normalized.includes('media') || normalized.includes('public')) {
+    return 'Это внешний информационный сигнал: он делает происходящее более видимым и повышает репутационные ставки.'
+  }
+  if (normalized.includes('oversight') || normalized.includes('check')) {
+    return 'Это надзорный сигнал: он увеличивает вероятность аудита, эскалации и формальных реакций.'
+  }
+  return 'Это активный фактор среды, который уже влияет на decisions, pressure и interpretation событий.'
 }
 
 export function EnvironmentPanel({ environment }: Props) {
@@ -45,6 +70,8 @@ export function EnvironmentPanel({ environment }: Props) {
     [environment.queues]
   )
 
+  const climate = environment.information_climate
+
   return (
     <div className="environment-panel">
       <div className="environment-summary-grid">
@@ -66,6 +93,17 @@ export function EnvironmentPanel({ environment }: Props) {
 
       <section className="environment-section">
         <div className="environment-section-header">
+          <span className="section-label" style={{ padding: 0 }}>Что это значит</span>
+        </div>
+        <div className="environment-empty" style={{ textAlign: 'left', lineHeight: 1.55 }}>
+          Очереди показывают, где в мире накапливается незавершённая работа.
+          Сигналы показывают, какой внешний или внутренний фон уже давит на решения.
+          Перегрузка означает, что система не успевает обрабатывать поток задач, жалоб или проверок.
+        </div>
+      </section>
+
+      <section className="environment-section">
+        <div className="environment-section-header">
           <span className="section-label" style={{ padding: 0 }}>Операционные очереди</span>
         </div>
         {orderedQueues.length === 0 ? (
@@ -75,7 +113,7 @@ export function EnvironmentPanel({ environment }: Props) {
             {orderedQueues.map((queue) => (
               <div key={queue.queue_id} className="environment-queue-card">
                 <div className="environment-queue-header">
-                  <div className="environment-queue-title">{queue.queue_id}</div>
+                  <div className="environment-queue-title">{queue.title || queue.queue_id}</div>
                   <span className={`badge small ${queueBadgeClass(queue.pressure)}`}>{queue.pressure || 'low'}</span>
                 </div>
                 <div className="environment-queue-meta">
@@ -97,9 +135,33 @@ export function EnvironmentPanel({ environment }: Props) {
                     <span className="environment-stat-value">{queue.avg_delay_ticks}</span>
                   </div>
                 </div>
+                <div className="environment-empty" style={{ textAlign: 'left', padding: '0.55rem 0 0' }}>
+                  {queueMeaning(queue.status, queue.backlog, queue.avg_delay_ticks)}
+                </div>
               </div>
             ))}
           </div>
+        )}
+      </section>
+
+      <section className="environment-section">
+        <div className="environment-section-header">
+          <span className="section-label" style={{ padding: 0 }}>Информационный климат</span>
+        </div>
+        {climate ? (
+          <div className="environment-queue-card">
+            <div className="environment-queue-meta" style={{ marginBottom: '0.4rem' }}>
+              <span>public: {climate.public_mood || '—'}</span>
+              <span>oversight: {climate.oversight_attention || '—'}</span>
+              <span>media: {climate.media_pressure || '—'}</span>
+              <span>narrative: {climate.narrative_temperature || '—'}</span>
+            </div>
+            <div className="environment-empty" style={{ textAlign: 'left', padding: 0 }}>
+              Этот блок показывает общий внешний фон: насколько напряжено публичное поле, насколько активен надзор и насколько “горячей” стала история.
+            </div>
+          </div>
+        ) : (
+          <div className="environment-empty">Климат среды пока не материализован</div>
         )}
       </section>
 
@@ -112,13 +174,44 @@ export function EnvironmentPanel({ environment }: Props) {
         ) : (
           <div className="environment-signal-list">
             {environment.active_signals.map((signal) => (
-              <div key={signal} className="environment-signal-item">
-                {signal}
+              <div key={signal} className="environment-signal-item" title={signalMeaning(signal)}>
+                <div style={{ fontWeight: 600, marginBottom: '0.15rem' }}>{signal}</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.62rem', lineHeight: 1.45 }}>
+                  {signalMeaning(signal)}
+                </div>
               </div>
             ))}
           </div>
         )}
       </section>
+
+      {environment.informal_links && environment.informal_links.length > 0 && (
+        <section className="environment-section">
+          <div className="environment-section-header">
+            <span className="section-label" style={{ padding: 0 }}>Неформальные связи</span>
+          </div>
+          <div className="environment-queue-list">
+            {environment.informal_links.slice(0, 8).map((link) => (
+              <div key={link.link_id} className="environment-queue-card">
+                <div className="environment-queue-header">
+                  <div className="environment-queue-title">{link.agent_a_id} / {link.agent_b_id}</div>
+                  <span className="badge small accent">{link.link_type || 'link'}</span>
+                </div>
+                <div className="environment-queue-meta">
+                  <span>strength {link.strength.toFixed(2)}</span>
+                  <span>{link.visibility || '—'}</span>
+                  <span>{link.source || '—'}</span>
+                </div>
+                {link.pressure && (
+                  <div className="environment-empty" style={{ textAlign: 'left', padding: '0.55rem 0 0' }}>
+                    Давление: {link.pressure}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   )
 }

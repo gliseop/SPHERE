@@ -12,6 +12,7 @@ from .settings import RESULTS_DIR
 RunFormat = Literal["legacy", "directory"]
 
 _LEGACY_EVENTS_SUFFIX = "_events.jsonl"
+_RUN_METADATA_NAME = "run.json"
 _RUN_META_RE = re.compile(
     r"^(?P<scenario>.+)_(?P<governance>G\d+)"
     r"(?:_seed(?P<seed>\d+))?"
@@ -145,6 +146,20 @@ def run_jsonl_sidecar_candidates(
     base = RESULTS_DIR if results_dir is None else results_dir
     legacy = base / f"{ref.name}_{stem}.jsonl"
     directory = base / ref.name / f"{stem}.jsonl"
+    if ref.format == "directory":
+        return directory, legacy
+    return legacy, directory
+
+
+def run_metadata_candidates(
+    ref: RunArtifactRef,
+    *,
+    results_dir: Path | None = None,
+) -> tuple[Path, Path]:
+    """Кандидаты metadata-sidecar прогона (primary, fallback)."""
+    base = RESULTS_DIR if results_dir is None else results_dir
+    directory = base / ref.name / _RUN_METADATA_NAME
+    legacy = base / f"{ref.name}_run.json"
     if ref.format == "directory":
         return directory, legacy
     return legacy, directory

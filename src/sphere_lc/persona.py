@@ -411,10 +411,12 @@ class SocialGraphExtractor:
         interview_excerpt = "\n\n".join(chunk_text(interview_text, max_chars=3200)[:2])
         system = (
             "Ты — модуль извлечения социального графа для симуляции организационных процессов.\n"
-            "Выдели только людей, которые реально важны для сюжета и решений агента.\n"
+            "Выдели только НОВЫХ людей, которые реально важны для сюжета и решений агента.\n"
             "Приоритет: родня, близкие друзья, старые карьерные связи, финансовые зависимости, неформальные посредники, "
             "люди, которые влияют на страх, карьеру, репутацию и зависимость агента.\n"
             "Не возвращай абстрактные должности и ролевые ярлыки вместо конкретных людей.\n"
+            "Не возвращай уже существующих агентов из списка ниже.\n"
+            "Если новых конкретных людей в биографии нет, верни пустой список.\n"
             "Не придумывай новых организаций, должностей или ID. Возвращай строго JSON по схеме.\n"
             f"Пиши на языке: {language!r}.\n"
         )
@@ -424,9 +426,10 @@ class SocialGraphExtractor:
             f"Уже существующие агенты:\n- " + "\n- ".join(existing_agent_names or ["(нет)"]) + "\n\n"
             f"Биография:\n{biography or '(пусто)'}\n\n"
             f"Интервью (фрагмент):\n{interview_excerpt or '(пусто)'}\n\n"
-            f"Выдели до {max_links} людей. Для каждого укажи имя, связь, почему важен, краткий persona_hint, "
+            f"Выдели до {max_links} НОВЫХ людей. Для каждого укажи имя, связь, почему важен, краткий persona_hint, "
             "является ли он внутренним участником процесса, и рекомендуемые capabilities. "
             "Если в тексте есть только должность без имени, такого кандидата не возвращай. "
+            "Запрещено повторять имена из списка уже существующих агентов. "
             "Старайся находить не декоративные знакомства, а людей, которые реально создают давление и точки выбора."
         )
         resp = await self.llm.generate_structured(
@@ -442,6 +445,7 @@ class SocialGraphExtractor:
         if not isinstance(raw_links, list):
             return []
 
+        existing_name_keys = {social_link_name_key(name) for name in existing_agent_names if social_link_name_key(name)}
         links: list[SocialLink] = []
         for item in raw_links:
             if not isinstance(item, dict):
@@ -450,6 +454,8 @@ class SocialGraphExtractor:
             relation = str(item.get("relation") or "").strip()
             persona_hint = str(item.get("persona_hint") or "").strip()
             if not name or not relation or not persona_hint:
+                continue
+            if social_link_name_key(name) in existing_name_keys:
                 continue
             links.append(
                 SocialLink(

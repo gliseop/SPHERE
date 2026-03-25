@@ -80,6 +80,16 @@ class GraphStateBuilder:
     _thread_strength: dict[str, float] = field(default_factory=dict)
     environment_queues: dict[str, dict] = field(default_factory=dict)
     environment_signals: list[str] = field(default_factory=list)
+    information_climate: dict[str, Any] = field(
+        default_factory=lambda: {
+            "public_mood": "",
+            "oversight_attention": "",
+            "media_pressure": "",
+            "narrative_temperature": "",
+            "active_signals": [],
+        }
+    )
+    informal_links: dict[str, dict] = field(default_factory=dict)
 
     def ingest(self, e: dict[str, Any]) -> None:
         e = normalize_event_compat(e)
@@ -172,6 +182,7 @@ class GraphStateBuilder:
             if queue_id:
                 self.environment_queues[queue_id] = {
                     "queue_id": queue_id,
+                    "title": str(payload.get("title", self.environment_queues.get(queue_id, {}).get("title", queue_id)) or queue_id),
                     "backlog": int(_as_float(payload.get("backlog", 0), default=0.0)),
                     "capacity_per_tick": int(_as_float(payload.get("capacity_per_tick", 0), default=0.0)),
                     "avg_delay_ticks": int(_as_float(payload.get("avg_delay_ticks", 0), default=0.0)),
@@ -186,6 +197,26 @@ class GraphStateBuilder:
             signals = payload.get("active_signals") or []
             if isinstance(signals, list):
                 self.environment_signals = [str(item) for item in signals if str(item)]
+                self.information_climate["active_signals"] = list(self.environment_signals)
+            self.information_climate["public_mood"] = str(payload.get("public_mood", self.information_climate.get("public_mood", "")) or "")
+            self.information_climate["oversight_attention"] = str(payload.get("oversight_attention", self.information_climate.get("oversight_attention", "")) or "")
+            self.information_climate["media_pressure"] = str(payload.get("media_pressure", self.information_climate.get("media_pressure", "")) or "")
+            self.information_climate["narrative_temperature"] = str(payload.get("narrative_temperature", self.information_climate.get("narrative_temperature", "")) or "")
+            return
+
+        if event_type == "environment_informal_link_updated":
+            link_id = str(payload.get("link_id", "") or "")
+            if link_id:
+                self.informal_links[link_id] = {
+                    "link_id": link_id,
+                    "agent_a_id": str(payload.get("agent_a_id", "") or ""),
+                    "agent_b_id": str(payload.get("agent_b_id", "") or ""),
+                    "link_type": str(payload.get("link_type", "") or ""),
+                    "strength": _as_float(payload.get("strength", 0.0), default=0.0),
+                    "visibility": str(payload.get("visibility", "") or ""),
+                    "pressure": str(payload.get("pressure", "") or ""),
+                    "source": str(payload.get("source", "") or ""),
+                }
             return
 
         # Backward/legacy: edges strengthened implicitly by message traffic.
@@ -230,6 +261,15 @@ class GraphStateBuilder:
             "environment": {
                 "queues": list(self.environment_queues.values()),
                 "active_signals": list(self.environment_signals),
+                "information_climate": dict(self.information_climate),
+                "informal_links": sorted(
+                    self.informal_links.values(),
+                    key=lambda item: (
+                        -float(item.get("strength", 0.0)),
+                        str(item.get("link_type", "")),
+                        str(item.get("link_id", "")),
+                    ),
+                )[:12],
             },
         }
 

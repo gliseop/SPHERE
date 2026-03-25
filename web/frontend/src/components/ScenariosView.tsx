@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiClient } from '../utils/apiClient'
 import type { AuthUser } from '../hooks/useAuth'
+import { Icon } from './Icons'
 
 interface AgentTypeOption {
   id: string
@@ -144,19 +145,40 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
   const [simConfigText, setSimConfigText] = useState('')
   const [simConfigError, setSimConfigError] = useState<string | null>(null)
   const [simConfigLoading, setSimConfigLoading] = useState(false)
+  const [secondaryPrompt, setSecondaryPrompt] = useState('')
+  const [secondaryFamilyCount, setSecondaryFamilyCount] = useState('1')
+  const [secondarySocietyCount, setSecondarySocietyCount] = useState('1')
+  const [secondaryLoading, setSecondaryLoading] = useState(false)
   const prevEditingRef = useRef<Scenario | null>(null)
 
   useEffect(() => {
     if (editing && prevEditingRef.current === null) {
       setSimConfigText(editing.sim_config ? JSON.stringify(editing.sim_config, null, 2) : '')
       setSimConfigError(null)
+      setSecondaryPrompt('')
     }
     if (!editing && prevEditingRef.current !== null) {
       setSimConfigText('')
       setSimConfigError(null)
+      setSecondaryPrompt('')
     }
     prevEditingRef.current = editing
   }, [editing])
+
+  function parseScenarioConfigDraft(): Record<string, unknown> | null {
+    if (!simConfigText.trim()) return null
+    try {
+      const parsed = JSON.parse(simConfigText) as unknown
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        setSimConfigError('Ожидается JSON-объект (ScenarioConfig)')
+        return null
+      }
+      return parsed as Record<string, unknown>
+    } catch (e) {
+      setSimConfigError(e instanceof Error ? e.message : 'Некорректный JSON')
+      return null
+    }
+  }
 
   useEffect(() => {
     apiClient.get('/api/scenarios')
@@ -319,7 +341,6 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
         : await apiClient.post('/api/runs/launch', {
           scenario: s.scenario,
           governance: s.governance,
-          seed: s.seed,
           runner: 'cognitive',
           rounds: s.rounds,
         })
@@ -399,7 +420,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
       <div className="scenarios-editor">
         <div className="scenarios-editor-header">
           <span>{editing.id ? 'Редактировать сценарий' : 'Новый сценарий'}</span>
-          <button className="btn-clipped small" onClick={() => setEditing(null)}>✕ Отмена</button>
+          <button className="btn-clipped small" onClick={() => setEditing(null)}>Отмена</button>
         </div>
 
         <div className="scenarios-form">
@@ -426,7 +447,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
 
           <div className="form-row">
             <div className="form-field">
-              <label>Шаблон сценария</label>
+              <label>Основа сценария</label>
               <select
                 className="hud-input"
                 value={editing.scenario}
@@ -434,7 +455,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
               >
                 {(templateScenarios ?? FALLBACK_SCENARIOS).map((o) => (
                   <option key={o.id} value={o.id} title={o.description || ''}>
-                    {o.id} — {o.title}
+                    {o.title}
                   </option>
                 ))}
               </select>
@@ -464,16 +485,6 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                 onChange={(e) => setEditing({ ...editing, rounds: Number(e.target.value) })}
               />
             </div>
-            <div className="form-field">
-              <label>Seed (пусто = случайный)</label>
-              <input
-                className="hud-input"
-                type="number"
-                value={editing.seed ?? ''}
-                onChange={(e) => setEditing({ ...editing, seed: e.target.value ? Number(e.target.value) : null })}
-                placeholder="случайный"
-              />
-            </div>
           </div>
 
           <div className="form-field">
@@ -485,7 +496,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
 
           <div className="form-field">
             <div className="form-field-header">
-              <label>S &amp; G (сим-конфиг)</label>
+              <label>Полный сим-конфиг</label>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 <button
                   className="btn-clipped small"
@@ -505,7 +516,6 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                         return
                       }
                       cfg.ticks = editing.rounds
-                      if (editing.seed !== null) cfg.seed = editing.seed
                       setSimConfigText(JSON.stringify(cfg, null, 2))
                       setSimConfigError(null)
                     } finally {
@@ -513,9 +523,9 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                     }
                   }}
                   disabled={simConfigLoading}
-                  title="Подставить полный конфиг симуляции из встроенного шаблона (с учётом G)"
+                  title="Подставить полный конфиг симуляции из встроенного шаблона"
                 >
-                  {simConfigLoading ? '…' : '⭳ Из шаблона'}
+                  {simConfigLoading ? '…' : 'Из шаблона'}
                 </button>
                 <button
                   className="btn-clipped danger small"
@@ -525,14 +535,14 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                     setSimConfigText('')
                     setSimConfigError(null)
                   }}
-                  title="Убрать кастомизацию (вернуться к S*/G*)"
+                  title="Убрать кастомизацию и вернуться к встроенной основе"
                 >
                   Очистить
                 </button>
               </div>
             </div>
             <div className="text-muted" style={{ fontSize: '0.7rem', marginTop: '0.25rem' }}>
-              Пусто = запуск по встроенным шаблонам S/G. Здесь можно увидеть и изменить «что зашито» (агенты, потребности, параметры).
+              Пусто = запуск по встроенной основе. Здесь можно увидеть и изменить полный `ScenarioConfig`.
             </div>
             {simConfigText.trim() && (
               <div className="text-muted" style={{ fontSize: '0.7rem', marginTop: '0.35rem' }}>
@@ -561,12 +571,64 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
           <div className="form-field">
             <div className="form-field-header">
               <label>Вторичные агенты (LLM)</label>
-              <span className="badge small">временно скрыто</span>
             </div>
             <div className="text-muted" style={{ fontSize: '0.7rem', marginTop: '0.25rem' }}>
-              Веб-генератор вторичных агентов временно скрыт, потому что backend-маршрут ещё не перенесён
-              с legacy-движка и отвечает 501. Для экспериментов с вторичными агентами используйте
-              готовый `ScenarioConfig` в JSON или CLI/сценарии из репозитория.
+              Генерирует семейных и общественных акторов давления вокруг текущего сценария.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px auto', gap: '0.5rem', marginTop: '0.5rem', alignItems: 'end' }}>
+              <div className="form-field" style={{ margin: 0 }}>
+                <label>Фокус</label>
+                <input
+                  className="hud-input"
+                  value={secondaryPrompt}
+                  onChange={(e) => setSecondaryPrompt(e.target.value)}
+                  placeholder="Каких вторичных агентов добавить и зачем"
+                />
+              </div>
+              <div className="form-field" style={{ margin: 0 }}>
+                <label>Семья</label>
+                <input className="hud-input" type="number" min={0} max={20} value={secondaryFamilyCount} onChange={(e) => setSecondaryFamilyCount(e.target.value)} />
+              </div>
+              <div className="form-field" style={{ margin: 0 }}>
+                <label>Общество</label>
+                <input className="hud-input" type="number" min={0} max={20} value={secondarySocietyCount} onChange={(e) => setSecondarySocietyCount(e.target.value)} />
+              </div>
+              <button
+                className="btn-clipped small"
+                disabled={secondaryLoading || !secondaryPrompt.trim()}
+                onClick={async () => {
+                  if (!editing) return
+                  const draft = parseScenarioConfigDraft()
+                  if (simConfigText.trim() && !draft) return
+                  setSecondaryLoading(true)
+                  try {
+                    const res = await apiClient.post('/api/ai/secondary-agents', {
+                      scenario: editing.scenario,
+                      governance: editing.governance,
+                      rounds: editing.rounds,
+                      prompt: secondaryPrompt.trim(),
+                      family_count: Number(secondaryFamilyCount || '0'),
+                      society_count: Number(secondarySocietyCount || '0'),
+                      replace_existing: true,
+                      ...(draft ? { sim_config: draft } : {}),
+                    })
+                    if (!res.ok) {
+                      const message = await readApiErrorMessage(res)
+                      window.alert(message || 'Не удалось сгенерировать вторичных агентов')
+                      return
+                    }
+                    const payload = await res.json() as Scenario
+                    setEditing((prev) => prev ? { ...prev, ...payload } : prev)
+                    if (payload.sim_config) {
+                      setSimConfigText(JSON.stringify(payload.sim_config, null, 2))
+                    }
+                  } finally {
+                    setSecondaryLoading(false)
+                  }
+                }}
+              >
+                {secondaryLoading ? '...' : 'Сгенерировать'}
+              </button>
             </div>
           </div>
 
@@ -680,7 +742,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                         </option>
                       ))}
                     </select>
-                    <button className="btn-clipped danger small" onClick={() => removeAgent(i)}>✕</button>
+                    <button className="btn-clipped danger small" onClick={() => removeAgent(i)}><Icon name="close" size={14} /></button>
                   </div>
                 )
               })}
@@ -698,7 +760,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
               onClick={() => setShowJson(!showJson)}
               style={{ marginBottom: '0.5rem', width: 'fit-content' }}
             >
-              {showJson ? '▲ Скрыть JSON' : '▼ JSON-превью'}
+              {showJson ? 'Скрыть JSON' : 'JSON-превью'}
             </button>
             {showJson && (
               <pre className="json-preview">{JSON.stringify(editing, null, 2)}</pre>
@@ -712,7 +774,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
               onClick={() => { void handleSave() }}
               disabled={saving || !editing.name}
             >
-              {saving ? 'Сохранение...' : '✓ Сохранить'}
+              {saving ? 'Сохранение...' : 'Сохранить'}
             </button>
           {editing.id && user?.role === 'admin' && (
             <button
@@ -725,7 +787,7 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
               }}
               disabled={saving || !editing.name}
             >
-              ▶ Сохранить и запустить
+              Сохранить и запустить
             </button>
           )}
         </div>
@@ -762,20 +824,17 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
               <div className="scenario-card-title">{s.name}</div>
               {s.description && <div className="scenario-card-desc">{s.description}</div>}
               <div className="scenario-card-meta">
-                {s.scenario && <span className="badge small accent">{s.scenario}</span>}
-                {s.governance && <span className="badge small info">{s.governance}</span>}
                 {s.sim_config && <span className="badge small warning" title="Есть кастомный сим-конфиг">custom</span>}
                 <span className="badge small">{s.agents?.length ?? 0} аг.</span>
                 <span className="badge small" title="Длительность симуляции (в днях)">{s.rounds} дн.</span>
-                {s.seed !== null && <span className="badge small">seed {s.seed}</span>}
               </div>
             </div>
             <div className="scenario-card-actions">
               {user?.role === 'admin' && (
                 <>
-                  <button className="btn-clipped success small" onClick={() => handleRun(s)} title="Запустить">▶</button>
-                  <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_SCENARIO, ...s, runner: 'cognitive' })} title="Редактировать">✎</button>
-                  <button className="btn-clipped danger small" onClick={() => s.id && handleDelete(s.id)} title="Удалить">✕</button>
+                  <button className="btn-clipped success small" onClick={() => handleRun(s)} title="Запустить"><Icon name="play" size={14} /></button>
+                  <button className="btn-clipped small" onClick={() => setEditing({ ...EMPTY_SCENARIO, ...s, runner: 'cognitive' })} title="Редактировать"><Icon name="edit" size={14} /></button>
+                  <button className="btn-clipped danger small" onClick={() => s.id && handleDelete(s.id)} title="Удалить"><Icon name="delete" size={14} /></button>
                 </>
               )}
             </div>

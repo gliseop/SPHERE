@@ -4,11 +4,12 @@ import { getString, getBool, getNumber } from '../utils/payload'
 import { toDayKey, formatDayLabel } from '../utils/time'
 import { Markdown } from './Markdown'
 import { apiClient } from '../utils/apiClient'
+import { Icon, type IconName } from './Icons'
 
 interface Props {
   events: SimEvent[]
   names: Record<string, string>
-  mode?: 'idle' | 'playback' | 'live'
+  mode?: 'idle' | 'playback' | 'live' | 'snapshot'
   meta?: SimMeta | null
   selectedAgent: string | null
   onClearFilter?: () => void
@@ -110,16 +111,16 @@ function eventTypeLabel(eventType: string): string {
   return EVENT_TYPE_LABELS[eventType] ?? eventType.replace(/_/g, ' ')
 }
 
-function channelIcon(channel: string): string {
-  if (channel === 'telegram') return '✈'
-  if (channel === 'phone') return '☎'
-  if (channel === 'email') return '✉'
-  if (channel === 'face_to_face') return '🤝'
-  if (channel === 'official_doc') return '📄'
-  return '💬'
+function channelIcon(channel: string): IconName {
+  if (channel === 'phone') return 'phone'
+  if (channel === 'email') return 'mail'
+  if (channel === 'face_to_face') return 'face'
+  if (channel === 'official_doc') return 'document'
+  return 'chat'
 }
 
 function eventTimestamp(event: SimEvent): string {
+  if (typeof event.simulated_timestamp === 'string' && event.simulated_timestamp) return event.simulated_timestamp
   return typeof event.timestamp === 'string' ? event.timestamp : ''
 }
 
@@ -257,7 +258,7 @@ function ThreadView({
   return (
     <div className="thread-group">
       <div className="thread-header">
-        <span className="channel-badge">{channelIcon(thread.channel)} {thread.channel}</span>
+        <span className="channel-badge"><Icon name={channelIcon(thread.channel)} size={12} /> {thread.channel}</span>
         <span className="thread-participants">
           {thread.participants.map((id) => dn(id, names)).join(' • ')}
         </span>
@@ -372,7 +373,7 @@ function PromptModal({
       <div className="prompt-modal" onClick={(e) => e.stopPropagation()}>
         <div className="prompt-modal-header">
           <span>Промпт — {dn(agentId, names)}{round !== null ? ` (R${round})` : ''}</span>
-          <button className="btn-clipped small" onClick={onClose}>✕</button>
+          <button className="btn-clipped small" onClick={onClose}><Icon name="close" size={14} /></button>
         </div>
         {loading ? (
           <div className="text-muted" style={{ padding: '1rem' }}>Загрузка...</div>
@@ -399,6 +400,41 @@ function PromptModal({
   )
 }
 
+function EventDetailsModal({
+  event,
+  names,
+  onClose,
+}: {
+  event: SimEvent
+  names: Record<string, string>
+  onClose: () => void
+}) {
+  return (
+    <div className="prompt-modal-overlay" onClick={onClose}>
+      <div className="prompt-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="prompt-modal-header">
+          <span>{eventTypeLabel(event.event_type)} — {dn(event.agent_id, names) || 'system'}</span>
+          <button className="btn-clipped small" onClick={onClose}><Icon name="close" size={14} /></button>
+        </div>
+        <div className="prompt-modal-content">
+          <div className="prompt-section">
+            <div className="prompt-section-label">Время мира</div>
+            <pre className="prompt-text">{event.simulated_timestamp || `${event.simulated_date || '—'} ${event.simulated_time || ''}`.trim() || '—'}</pre>
+          </div>
+          <div className="prompt-section">
+            <div className="prompt-section-label">Время записи</div>
+            <pre className="prompt-text">{event.timestamp || '—'}</pre>
+          </div>
+          <div className="prompt-section">
+            <div className="prompt-section-label">Payload</div>
+            <pre className="prompt-text">{JSON.stringify(event.payload ?? {}, null, 2)}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function EventView({
   event,
   names,
@@ -406,6 +442,7 @@ function EventView({
   onToggleDoc,
   runName,
   onShowPrompt,
+  onOpenDetails,
 }: {
   event: SimEvent
   names: Record<string, string>
@@ -413,6 +450,7 @@ function EventView({
   onToggleDoc: (docId: string) => void
   runName?: string | null
   onShowPrompt?: (agentId: string, round: number | null, timestamp?: string) => void
+  onOpenDetails: (event: SimEvent) => void
 }) {
   const { event_type, agent_id, payload, timestamp } = event
   if (event_type === 'document_created') {
@@ -429,13 +467,13 @@ function EventView({
 
   if (event_type === 'world_event') {
     return (
-      <div className="activity-item world">
+      <div className="activity-item world activity-item-button" onClick={() => onOpenDetails(event)} role="button" tabIndex={0}>
         <div className="activity-item-header">
-          <span className="activity-icon">📢</span>
+          <span className="activity-icon"><Icon name="world" size={16} /></span>
           <span className="activity-label">СОБЫТИЕ</span>
           {timestamp && <span className="activity-time">{fmtTime(timestamp)}</span>}
         </div>
-        <div className="activity-content">{getString(payload, 'narrative')}</div>
+        <div className="activity-content">{getString(payload, 'description') || getString(payload, 'narrative') || '—'}</div>
       </div>
     )
   }
@@ -448,11 +486,11 @@ function EventView({
     const showContent = Boolean(content && content !== 'msg')
     const showResponse = Boolean(response)
     return (
-      <div className={`activity-item message${isPrivate ? ' private' : ''}`}>
+      <div className={`activity-item message activity-item-button${isPrivate ? ' private' : ''}`} onClick={() => onOpenDetails(event)} role="button" tabIndex={0}>
         <div className="activity-item-header">
-          <span className="activity-icon">{isPrivate ? '🔒' : '💬'}</span>
+          <span className="activity-icon"><Icon name={isPrivate ? 'lock' : 'message'} size={16} /></span>
           <span className="activity-agent">{dn(agent_id, names)}</span>
-          <span className="activity-arrow">→</span>
+          <span className="activity-arrow">к</span>
           <span className="activity-agent">{dn(toId, names)}</span>
           {timestamp && <span className="activity-time">{fmtTime(timestamp)}</span>}
         </div>
@@ -488,13 +526,16 @@ function EventView({
           sys:{sysLen} usr:{usrLen} resp:{respLen}
         </span>
         {timestamp && <span className="activity-time">{fmtTime(timestamp)}</span>}
+        <button className="prompt-view-btn" onClick={() => onOpenDetails(event)} title="Детали события">
+          <Icon name="open" size={12} />
+        </button>
         {runName && onShowPrompt && (
           <button
             className="prompt-view-btn"
             onClick={() => onShowPrompt(agent_id, event.round ?? null, timestamp)}
             title="Посмотреть полный промпт"
           >
-            {'{ }'}
+            <Icon name="prompt" size={12} />
           </button>
         )}
       </div>
@@ -502,10 +543,11 @@ function EventView({
   }
 
   return (
-    <div className="activity-item generic">
+    <div className="activity-item generic activity-item-button" onClick={() => onOpenDetails(event)} role="button" tabIndex={0}>
       <span className="badge small">{eventTypeLabel(event_type)}</span>
       <span className="activity-agent text-muted">{dn(agent_id, names)}</span>
       {timestamp && <span className="activity-time">{fmtTime(timestamp)}</span>}
+      <span className="activity-inline-icon"><Icon name="open" size={12} /></span>
     </div>
   )
 }
@@ -522,6 +564,8 @@ export function ActivityFeed({
 }: Props) {
   const [openDocs, setOpenDocs] = useState<Record<string, boolean>>({})
   const [promptTarget, setPromptTarget] = useState<{ agentId: string; round: number | null; timestamp?: string } | null>(null)
+  const [eventTarget, setEventTarget] = useState<SimEvent | null>(null)
+  const [visibleLimit, setVisibleLimit] = useState(250)
   const bottomRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const pausedRef = useRef(false)
@@ -540,10 +584,19 @@ export function ActivityFeed({
     )
   }, [events, selectedAgent])
 
+  useEffect(() => {
+    setVisibleLimit(250)
+  }, [selectedAgent, runName])
+
+  const windowedVisible = useMemo(
+    () => (visible.length > visibleLimit ? visible.slice(-visibleLimit) : visible),
+    [visible, visibleLimit],
+  )
+
   const grouped = useMemo(() => {
-    const entries = buildEntries(visible)
+    const entries = buildEntries(windowedVisible)
     return groupByDayAndHour(entries)
-  }, [visible])
+  }, [windowedVisible])
 
   useEffect(() => {
     if (!pausedRef.current) {
@@ -564,10 +617,22 @@ export function ActivityFeed({
     setOpenDocs((prev) => ({ ...prev, [docId]: !prev[docId] }))
   }
 
+  const handleCopyTrace = useCallback(async () => {
+    if (!runName || !selectedAgent) return
+    const res = await apiClient.get(`/api/run/${encodeURIComponent(runName)}/trace.md?agent_id=${encodeURIComponent(selectedAgent)}`)
+    if (!res.ok) {
+      window.alert('Не удалось получить trace в Markdown')
+      return
+    }
+    const text = await res.text()
+    await navigator.clipboard.writeText(text)
+  }, [runName, selectedAgent])
+
   const emptyText = (() => {
     if (selectedAgent) return 'Нет событий по выбранному агенту'
     if (mode === 'live') return meta ? 'Live подключён — ждём события…' : 'Подключение к Live…'
     if (mode === 'playback') return meta ? 'Воспроизведение — нет событий' : 'Загрузка…'
+    if (mode === 'snapshot') return meta ? 'Финальное состояние прогона — событий в текущем окне нет' : 'Загрузка snapshot…'
     return 'Запустите прогон чтобы увидеть активность'
   })()
 
@@ -577,18 +642,30 @@ export function ActivityFeed({
         <span>
           Активность{selectedAgent ? ` — ${dn(selectedAgent, names)}` : ''}
           <span className="text-muted" style={{ fontSize: '0.6rem', marginLeft: '0.5rem' }}>
-            {events.length > visible.length ? `показаны последние ${visible.length}` : `${visible.length}`}
+            {visible.length > windowedVisible.length ? `показаны последние ${windowedVisible.length} из ${visible.length}` : `${visible.length}`}
           </span>
         </span>
-        {selectedAgent && onClearFilter && (
-          <button
-            className="btn-clipped small"
-            onClick={onClearFilter}
-            style={{ marginLeft: '0.5rem', padding: '0.15rem 0.5rem', fontSize: '0.6rem' }}
-          >
-            ✕ Сбросить
-          </button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          {selectedAgent && runName && (
+            <button
+              className="btn-clipped small"
+              onClick={() => { void handleCopyTrace() }}
+              style={{ padding: '0.15rem 0.5rem', fontSize: '0.6rem' }}
+              title="Копировать trace выбранного агента в Markdown"
+            >
+              <Icon name="copy" size={12} />
+            </button>
+          )}
+          {selectedAgent && onClearFilter && (
+            <button
+              className="btn-clipped small"
+              onClick={onClearFilter}
+              style={{ padding: '0.15rem 0.5rem', fontSize: '0.6rem' }}
+            >
+              Сбросить
+            </button>
+          )}
+        </div>
       </div>
       <div
         ref={scrollRef}
@@ -596,6 +673,13 @@ export function ActivityFeed({
         onMouseEnter={() => { pausedRef.current = true }}
         onMouseLeave={() => { pausedRef.current = false }}
       >
+        {visible.length > windowedVisible.length && (
+          <div style={{ padding: '0.25rem 0.75rem' }}>
+            <button className="btn-clipped small" onClick={() => setVisibleLimit((limit) => limit + 250)}>
+              Загрузить ещё
+            </button>
+          </div>
+        )}
         {grouped.length === 0 && (
           <div className="activity-feed-empty">
             <span className="text-muted">{emptyText}</span>
@@ -633,6 +717,7 @@ export function ActivityFeed({
                   onToggleDoc={toggleDoc}
                   runName={runName}
                   onShowPrompt={handleShowPrompt}
+                  onOpenDetails={setEventTarget}
                 />
               )
             })}
@@ -640,6 +725,9 @@ export function ActivityFeed({
         ))}
         <div ref={bottomRef} />
       </div>
+      {eventTarget && (
+        <EventDetailsModal event={eventTarget} names={names} onClose={() => setEventTarget(null)} />
+      )}
       {promptTarget && runName && (
         <PromptModal
           runName={runName}

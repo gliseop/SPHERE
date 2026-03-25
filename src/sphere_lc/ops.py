@@ -732,6 +732,7 @@ class UpdateOperationalQueueOp:
                 actor_id=None,
                 payload={
                     "queue_id": updated.queue_id,
+                    "title": updated.title,
                     "backlog": updated.backlog,
                     "capacity_per_tick": updated.capacity_per_tick,
                     "avg_delay_ticks": updated.avg_delay_ticks,
@@ -808,6 +809,7 @@ class UpsertOperationalQueueOp:
                 actor_id=None,
                 payload={
                     "queue_id": updated.queue_id,
+                    "title": updated.title,
                     "backlog": updated.backlog,
                     "capacity_per_tick": updated.capacity_per_tick,
                     "avg_delay_ticks": updated.avg_delay_ticks,

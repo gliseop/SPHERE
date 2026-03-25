@@ -15,9 +15,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .auth import verify_ws_token
 from .database import User
-from .graph_state import GraphStateBuilder, normalize_event_compat
+from .graph_state import GraphStateBuilder
+from .routes.runs import _event_with_simulated_time, _read_run_meta
 from .run_artifacts import (
-    parse_run_name,
     resolve_run_artifact,
     run_json_sidecar_candidates,
 )
@@ -125,6 +125,7 @@ def _truncate_json_value(value: Any, *, max_chars: int) -> tuple[Any, bool]:
 
 def _event_for_ws(
     event: dict[str, Any],
+    meta: dict[str, Any],
     names: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Shrink large text fields for WS transport (helps reverse-proxies).
@@ -135,7 +136,7 @@ def _event_for_ws(
     Если передан словарь names, добавляет agent_name и to_name
     для удобства отображения на фронтенде.
     """
-    event = normalize_event_compat(event)
+    event = _event_with_simulated_time(event, meta=meta)
     if event.get("event_type") == "llm_call":
         payload = event.get("payload", {})
         out: dict[str, Any] = {
@@ -271,6 +272,7 @@ async def _consume_live_file_delta(
     builder: GraphStateBuilder,
     pending: list[dict[str, Any]],
     names: dict[str, str],
+    meta: dict[str, Any],
     role: str,
 ) -> tuple[int, bool]:
     """Дочитать весь доступный прирост events-файла."""
@@ -304,7 +306,7 @@ async def _consume_live_file_delta(
                 continue
             builder.ingest(event)
             if _ws_should_send_event(event):
-                pending.append(_event_for_ws(event, names))
+                pending.append(_event_for_ws(event, meta, names))
             graph_dirty = True
 
     return file_pos, graph_dirty
@@ -414,7 +416,7 @@ async def ws_playback(
         return
 
     path = ref.events_path
-    meta = parse_run_name(name)
+    meta = _read_run_meta(ref)
     names = _load_names(name)
     await websocket.send_json({"type": "meta", **meta, "names": names, "run_name": name})
     builder = GraphStateBuilder()
@@ -434,7 +436,7 @@ async def ws_playback(
                 continue
             builder.ingest(event)
             if _ws_should_send_event(event):
-                pending.append(_event_for_ws(event, names))
+                pending.append(_event_for_ws(event, meta, names))
             graph_dirty = True
             now = time.monotonic()
             if pending and (
@@ -484,6 +486,7 @@ async def ws_live(
     watched_run: str | None = None
     watched_path: Path | None = None
     names: dict[str, str] = {}
+    meta: dict[str, Any] = {}
     file_pos = 0
     buf = bytearray()
     bootstrapped = False
@@ -508,6 +511,7 @@ async def ws_live(
                             builder=builder,
                             pending=pending,
                             names=names,
+                            meta=meta,
                             role=role,
                         )
                 else:
@@ -518,6 +522,7 @@ async def ws_live(
                         builder=builder,
                         pending=pending,
                         names=names,
+                        meta=meta,
                         role=role,
                     )
             except OSError:
@@ -591,7 +596,7 @@ async def ws_live(
                 bootstrapped = False
                 graph_dirty = False
                 pending.clear()
-                meta = parse_run_name(target_run)
+                meta = _read_run_meta(resolved) if resolved is not None else {"run_name": target_run}
                 await websocket.send_json(
                     {"type": "meta", **meta, "names": names, "run_name": target_run}
                 )
@@ -628,7 +633,7 @@ async def ws_live(
                 pending_since = last_send
                 for ev in tail_events:
                     if _ws_should_send_event(ev):
-                        pending.append(_event_for_ws(ev, names))
+                        pending.append(_event_for_ws(ev, meta, names))
                     now = time.monotonic()
                     if pending and (
                         len(pending) >= WS_EVENT_BATCH_SIZE
@@ -654,6 +659,7 @@ async def ws_live(
                             builder=builder,
                             pending=pending,
                             names=names,
+                            meta=meta,
                             role=role,
                         )
                         graph_dirty = graph_dirty or drained_dirty

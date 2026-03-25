@@ -688,6 +688,81 @@ def test_prompts_endpoint_returns_empty_list_for_zero_limit(tmp_path: Path):
     assert r.json() == []
 
 
+def test_trace_markdown_endpoint_reads_trace_sidecar(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+    (run_dir / "trace.jsonl").write_text(
+        (
+            '{"role":"agent","name":"agent:off_1","tick":2,'
+            '"system":"SYS","user":"USER","response":"RESP",'
+            '"timestamp":"2026-03-06T10:00:00+00:00"}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/trace.md?agent_id=agent:off_1",
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+    assert r.status_code == 200
+    assert "# Трейс прогона `lc_run`" in r.text
+    assert "## 1. agent:off_1" in r.text
+    assert "SYS" in r.text
+    assert "RESP" in r.text
+
+
+def test_snapshot_endpoint_returns_simulated_time_and_meta(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        (
+            '{"tick":0,"event_type":"message_sent","actor_id":"agent:off_1","payload":{"to_id":"agent:off_2","private":true,"text":"ping"},"audience":["aud:internal"],"timestamp":"2026-03-24T16:00:00Z"}\n'
+            '{"tick":1,"event_type":"message_sent","actor_id":"agent:off_2","payload":{"to_id":"agent:off_1","private":true,"text":"pong"},"audience":["aud:internal"],"timestamp":"2026-03-24T16:01:00Z"}\n'
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_name": "lc_run",
+                "display_name": "Полный ecology run",
+                "scenario_title": "Полный ecology run",
+                "governance": "G2",
+                "governance_label": "Аудитор (санкции по репутации)",
+                "ticks_total": 2,
+                "runtime": {
+                    "start_date": "2026-03-09",
+                    "tick_granularity": "day",
+                    "tick_duration_days": 1,
+                },
+                "simulated_start_date": "2026-03-09",
+                "simulated_end_date": "2026-03-10",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "names.json").write_text('{"agent:off_1":"Alice","agent:off_2":"Bob"}\n', encoding="utf-8")
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/snapshot",
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["meta"]["display_name"] == "Полный ecology run"
+    assert payload["meta"]["simulated_start_date"] == "2026-03-09"
+    assert payload["events"][-1]["simulated_date"] == "2026-03-10"
+    assert payload["events"][-1]["simulated_time"] == "09:00"
+
+
 def test_create_scenario_viewer_gets_403():
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         r = client.post(

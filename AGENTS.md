@@ -120,6 +120,7 @@ SPHERE/
 │           ├── pages/
 │           │   └── LoginPage.tsx # Экран логина
 │           ├── components/     # SimGraph, RunsView, ScenarioPanel, ActivityFeed, EnvironmentPanel и др.
+│           │   ├── Icons.tsx   # Локальный набор SVG-иконок для monitor/runs/scenarios
 │           │   └── EnvironmentPanel.tsx # HUD-панель среды: очереди и активные сигналы
 │           ├── hooks/          # useAuth, useSimulation
 │           ├── utils/          # apiClient, payload, time
@@ -300,6 +301,7 @@ cd web/frontend && npm run test:e2e
 - **Агентские промпты**: `AgentRunner` сообщает агенту текущее время мира (`tick` и каноническую дату, если она задана), но не говорит агенту, что он находится в симуляции.
 - **Объём prompt-контекста**: не сжимать агентские и worldgen-промпты вручную только ради уменьшения токенов. Для ведения большого контекста полагаться на штатные механизмы памяти, суммаризации, compaction (компакции) и другие встроенные алгоритмы управления контекстом; большой объём сам по себе не считается дефектом.
 - **Temporal contract runtime**: `RuntimeConfig` поддерживает `tick_granularity` (`hour` / `half_day` / `day` / `week`) и каноническое world-time. `tick_duration_days` теперь трактуется как множитель выбранной гранулярности; для legacy-конфигов с `day` поведение остаётся прежним.
+- **Run metadata и время мира в web UI**: directory-based launcher теперь пишет sidecar `run.json` с display-метаданными прогона (`display_name`, `scenario_title`, `governance_label`, runtime time-model, симуляционный диапазон дат). REST `/api/runs`, `/api/run/{name}`, `/api/run/{name}/snapshot` и WebSocket `meta` предпочитают этот sidecar regex-разбору имени прогона. При выдаче событий backend дополнительно материализует `simulated_date` / `simulated_time` / `simulated_timestamp`, чтобы monitor и timeline опирались на каноническое время мира, а не только на wall-clock `timestamp` записи в JSONL.
 - **Динамический спавн**: вторичные и runtime-спавненные агенты получают только безопасный capability-набор (`message`/`work`), без `audit` и без права порождать следующих агентов.
 - **Ecology activation**: при `runtime.ecology_activation_window_ticks > 0` не-core акторы ходят не каждый тик, а только когда недавно были затронуты событиями, hook-ами или собственным созданием. Это сохраняет богатую ecology без захвата сюжета внешними акторами.
 - **Имена новых агентов**: secondary-spawn, runtime-spawn и worldgen-spawn принимают только человеко-читаемые имена; role-alias и machine-like display-name отклоняются или маппятся на уже существующего актора.

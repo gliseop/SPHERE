@@ -72,7 +72,7 @@ def _motivation_block(agent: AgentState, visible_events: list[Event]) -> str:
                 break
 
     role_obligation = agent.title if agent.internal else "внешние связи и договорённости"
-    fear_text = threat_text or story_state or "Потерять влияние, доверие или контроль над развитием ситуации."
+    fear_text = threat_text or "Потерять влияние, доверие или контроль над развитием ситуации."
     incentive_text = biography_hint or summary
     return (
         "Твоя ситуация прямо сейчас:\n"
@@ -80,6 +80,7 @@ def _motivation_block(agent: AgentState, visible_events: list[Event]) -> str:
         f"- Твои страхи: {fear_text}\n"
         f"- Кому и чему ты обязан: ответственность за {role_obligation}; также учитывай свои личные связи и обязательства\n"
         f"- Что тебе выгодно: {incentive_text}\n"
+        f"- Текущая внутренняя линия: {story_state}\n"
         f"- Что тебе угрожает: {threat_text or 'ошибка в выборе, потеря репутации, внешний шум или чужая инициатива'}\n"
     )
 
@@ -388,7 +389,7 @@ class AgentRunner:
                 vote_summaries.append(f"- {vid}: {vote.vote_type} для {vote.target_agent_id} -> {vote.new_title}")
         vote_summaries_text = "\n".join(vote_summaries) if vote_summaries else "- (нет)"
         work_summaries = []
-        for wid in sorted(state.work_items.keys())[:12]:
+        for wid in sorted(state.work_items.keys())[:8]:
             work = state.work_items[wid]
             work_summaries.append(f"- {wid}: {work.title} [{work.status}]")
         work_summaries_text = "\n".join(work_summaries) if work_summaries else "- (нет)"
@@ -409,9 +410,9 @@ class AgentRunner:
 
         # Для MVP даём события как короткие факты.
         facts = []
-        for ev in visible_events[-50:]:
+        for ev in visible_events[-20:]:
             # не показываем сырые числа репутации и т.п.
-            facts.append(f"- [{ev.event_type}] {redact_numbers(ev.payload)}")
+            facts.append(f"- [{ev.event_type}] {_truncate(redact_numbers(ev.payload), 220)}")
         facts_text = "\n".join(facts) if facts else "- (нет)"
         rejection_hints = _recent_rejection_hints(visible_events)
         rejection_hints_text = "\n".join(f"- {item}" for item in rejection_hints) if rejection_hints else "- (нет)"
@@ -491,6 +492,8 @@ class AgentRunner:
             "- если упоминаешь даты или сроки, не противоречь канонической дате мира\n"
             "- структурированные действия — это формальные каналы, но они не обязательны во всех ситуациях\n"
             "- если реальный шаг лучше описывается неформально (намёк, давление, просьба, скрытая договорённость, обходной ход), используй perform\n"
+            "- избегай ритуальных повторов: не дублируй один и тот же формальный ход без нового эффекта или новой ставки\n"
+            "- предпочитай действия, которые реально меняют ситуацию, а не только повторно фиксируют уже известное\n"
             f"{request_entity_rule}"
             "- если у тебя есть capability spawn, создавай новых агентов только через spawn_agent и с кратким persona_hint\n"
             "- самономинация на должность запрещена; инициировать голосование можно только за другого агента\n"
@@ -509,15 +512,15 @@ class AgentRunner:
         if agent.persona.summary.strip():
             parts.append("Персона (кратко): " + agent.persona.summary.strip())
         if agent.persona.biography.strip():
-            parts.append("Биография (начало):\n" + _truncate(agent.persona.biography, 600))
+            parts.append("Биография (начало):\n" + _truncate(agent.persona.biography, 420))
         if agent.story_state.strip():
-            parts.append("Личная линия (story state):\n" + _truncate(agent.story_state, 500))
+            parts.append("Личная линия (story state):\n" + _truncate(agent.story_state, 320))
 
         if mem.summary.strip():
-            parts.append("Сводка (рабочая память):\n" + _truncate(mem.summary, 900))
+            parts.append("Сводка (рабочая память):\n" + _truncate(mem.summary, 520))
 
         if mem.working:
-            recent = mem.working[-10:]
+            recent = mem.working[-6:]
             lines = "\n".join(f"- (t{e.tick}) {_truncate(e.text, 220)}" for e in recent)
             parts.append("Последние записи:\n" + lines)
 
@@ -554,7 +557,7 @@ class AgentRunner:
         if persona_anchors:
             parts.append(
                 "Якоря персоны:\n"
-                + "\n".join(f"- {_truncate(item.text, 220)}" for item in persona_anchors)
+                + "\n".join(f"- {_truncate(item.text, 180)}" for item in persona_anchors)
             )
 
         interview_fragments = mem.retrieve(
@@ -568,7 +571,7 @@ class AgentRunner:
         if interview_fragments:
             parts.append(
                 "Фрагменты интервью:\n"
-                + "\n".join(f"- {_truncate(item.text, 220)}" for item in interview_fragments)
+                + "\n".join(f"- {_truncate(item.text, 180)}" for item in interview_fragments)
             )
 
         reflections = mem.retrieve(
@@ -582,7 +585,7 @@ class AgentRunner:
         if reflections:
             parts.append(
                 "Экспертная рефлексия:\n"
-                + "\n".join(f"- {_truncate(item.text, 220)}" for item in reflections)
+                + "\n".join(f"- {_truncate(item.text, 180)}" for item in reflections)
             )
 
         retrieved = mem.retrieve(

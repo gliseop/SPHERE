@@ -228,7 +228,7 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
       <div className="library-editor">
         <div className="library-editor-header">
           <span>{editing.id ? 'Редактировать тип агента' : 'Новый тип агента'}</span>
-          <button className="btn-clipped small" onClick={() => setEditing(null)}>✕ Отмена</button>
+          <button className="btn-clipped small" onClick={() => setEditing(null)}>Отмена</button>
         </div>
 
         <div className="scenarios-form">
@@ -352,11 +352,11 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
           <div className="form-field">
             <button
               className="btn-clipped small"
-              onClick={() => setShowJson(!showJson)}
-              style={{ marginBottom: '0.5rem', width: 'fit-content' }}
-              type="button"
-            >
-              {showJson ? '▲ Скрыть JSON' : '▼ JSON-превью'}
+            onClick={() => setShowJson(!showJson)}
+            style={{ marginBottom: '0.5rem', width: 'fit-content' }}
+            type="button"
+          >
+              {showJson ? 'Скрыть JSON' : 'JSON-превью'}
             </button>
             {showJson && (
               <pre className="json-preview">{safeJson(editing, 20_000)}</pre>
@@ -436,10 +436,10 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
                       title="Редактировать"
                       type="button"
                     >
-                      ✎
+                      Ред.
                     </button>
                     {t.id && (
-                      <button className="btn-clipped danger small" onClick={() => handleDelete(t.id!)} title="Удалить" type="button">✕</button>
+                      <button className="btn-clipped danger small" onClick={() => handleDelete(t.id!)} title="Удалить" type="button">Удалить</button>
                     )}
                   </>
                 )}

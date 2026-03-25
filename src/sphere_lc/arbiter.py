@@ -64,6 +64,7 @@ from .utils import (
 _WORK_TOKEN_RE = re.compile(r"[^A-Za-zА-Яа-я0-9_]+")
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _DOTTED_DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
+_CAMEL_TO_SNAKE_RE = re.compile(r"(?<!^)(?=[A-Z])")
 
 
 def _work_tokens(text: str) -> set[str]:
@@ -84,6 +85,35 @@ def _extract_dates(text: str) -> list[date]:
         except ValueError:
             continue
     return out
+
+
+def _normalize_perform_op_type(op_type: str) -> str:
+    raw = (op_type or "").strip()
+    if not raw:
+        return raw
+    explicit = {
+        "SendMessageOp": "send_message",
+        "PublishOp": "send_message",
+        "CreateWorkOp": "create_work_item",
+        "CreateWorkItemOp": "create_work_item",
+        "AddWorkNoteOp": "add_work_note",
+        "SubmitWorkProposalOp": "submit_work_proposal",
+        "CreateEntityOp": "create_entity",
+        "OpenVoteOp": "open_vote",
+        "CastVoteOp": "cast_vote",
+        "SetVoteConsentOp": "respond_nomination",
+        "RespondNominationOp": "respond_nomination",
+        "ModifyReputationOp": "modify_reputation",
+        "NoopOp": "noop",
+    }
+    if raw in explicit:
+        return explicit[raw]
+    if raw.endswith("Op"):
+        raw = raw[:-2]
+    if raw.islower():
+        return raw
+    normalized = _CAMEL_TO_SNAKE_RE.sub("_", raw).lower()
+    return normalized
 
 
 @dataclass(slots=True)
@@ -802,6 +832,7 @@ class Arbiter:
             "Политика должностей: только через DAO (vote + consent). Не меняй должности напрямую.\n"
             "Нельзя выдумывать новых агентов. Нельзя писать приватно неизвестным ID.\n"
             f"Actor capabilities: {sorted(agent_caps)}\n"
+            "ВАЖНО: в op_type используй только snake_case-значения из JSON-схемы, а не Python-классы вроде SendMessageOp.\n"
             "Ответ: только JSON по схеме.\n"
         )
         user = (
@@ -959,6 +990,7 @@ class Arbiter:
     ) -> list[StateOp]:
         """Сконвертировать LLM-op в реальные ops."""
         allocator = id_alloc or self.id_alloc
+        op_type = _normalize_perform_op_type(op_type)
         if op_type == "noop":
             return []
 
