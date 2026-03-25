@@ -1,4 +1,4 @@
-"""Мелкие утилиты MAGISTRY-LC."""
+"""Мелкие утилиты SPHERE-LC."""
 
 from __future__ import annotations
 

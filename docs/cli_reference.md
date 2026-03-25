@@ -1,23 +1,23 @@
 # Справочник командной строки
 
-## magistry-lc
+## sphere-lc
 
 Точка входа для движка симуляции. Три подкоманды: `run`, `compose`, `oracle`.
 
 ```bash
-magistry-lc <подкоманда> [аргументы]
+sphere-lc <подкоманда> [аргументы]
 ```
 
 Для отладки и для web-launcher эквивалентно работает модульный вызов:
 
 ```bash
-python -m magistry_lc.cli <подкоманда> [аргументы]
+python -m sphere_lc.cli <подкоманда> [аргументы]
 ```
 
 ### run — запуск симуляции
 
 ```bash
-magistry-lc run --scenario <путь> [--out <директория>] [--ticks <число>] [--enrich-personas] [--persona-enrich-mode full|core]
+sphere-lc run --scenario <путь> [--out <директория>] [--ticks <число>] [--enrich-personas] [--persona-enrich-mode full|core]
 ```
 
 | Аргумент | Тип | По умолчанию | Описание |
@@ -31,7 +31,7 @@ magistry-lc run --scenario <путь> [--out <директория>] [--ticks <�
 ### compose — генерация сценария из описания
 
 ```bash
-magistry-lc compose --description <текст> --out <путь> [опции]
+sphere-lc compose --description <текст> --out <путь> [опции]
 ```
 
 | Аргумент | Тип | По умолчанию | Описание |
@@ -51,7 +51,7 @@ magistry-lc compose --description <текст> --out <путь> [опции]
 ### oracle — анализ нарушений
 
 ```bash
-magistry-lc oracle --events <путь> --out <путь> [опции]
+sphere-lc oracle --events <путь> --out <путь> [опции]
 ```
 
 | Аргумент | Тип | По умолчанию | Описание |
@@ -69,31 +69,31 @@ magistry-lc oracle --events <путь> --out <путь> [опции]
 
 ```bash
 # Минимальный прогон
-magistry-lc run --scenario scenarios/lc_minimal.yaml
+sphere-lc run --scenario scenarios/lc_minimal.yaml
 
 # Прогон с указанием выходной директории и числа тиков
-magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/run_50 --ticks 50
+sphere-lc run --scenario scenarios/lc_minimal.yaml --out results/run_50 --ticks 50
 
 # Реалистичный сценарий с enrichment/social graph/worldgen
-magistry-lc run --scenario scenarios/procurement_tender.yaml --out results/procurement_tender_run
+sphere-lc run --scenario scenarios/procurement_tender.yaml --out results/procurement_tender_run
 
 # Генерация сценария через LLM
-magistry-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" \
+sphere-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" \
     --out scenarios/tender.yaml
 
 # Генерация из файла с описанием
-magistry-lc compose --description-file docs/brief.txt \
+sphere-lc compose --description-file docs/brief.txt \
     --out scenarios/brief.yaml --ticks 30 --seed 123
 
 # Анализ нарушений с указанием модели
-magistry-lc oracle --events results/run_50/events.jsonl \
+sphere-lc oracle --events results/run_50/events.jsonl \
     --out results/run_50/violations.json --model gpt-4o
 ```
 
 ## manage_users.py
 
 Управление учётными записями веб-интерфейса.
-CLI подхватывает `.env` автоматически, поэтому `MAGISTRY_USERS_DB` и другие
+CLI подхватывает `.env` автоматически, поэтому `SPHERE_USERS_DB` и другие
 переменные можно хранить рядом с проектом.
 
 ```bash
@@ -146,20 +146,20 @@ python -m web.backend.manage_users change-role --username viewer1 --role admin
 | Переменная | По умолчанию | Описание |
 |---|---|---|
 | `JWT_EXPIRE_HOURS` | `24` | Время жизни JWT-токена в часах |
-| `MAGISTRY_USERS_DB` | `web/backend/users.db` | Путь к SQLite-базе пользователей для backend и `manage_users.py` |
+| `SPHERE_USERS_DB` | `web/backend/users.db` | Путь к SQLite-базе пользователей для backend и `manage_users.py` |
 | `ALLOWED_ORIGIN` | — | Разрешённый домен для CORS |
-| `MAGISTRY_DEV` | `0` | Режим разработки: `1` позволяет запуск без явного `JWT_SECRET`, при этом backend генерирует одноразовый секрет на процесс |
-| `MAGISTRY_MAX_RUNNING` | `5` | Максимум одновременно запущенных симуляций |
-| `MAGISTRY_MAX_BODY_BYTES` | `2097152` (2 МБ) | Максимальный размер тела HTTP-запроса |
+| `SPHERE_DEV` | `0` | Режим разработки: `1` позволяет запуск без явного `JWT_SECRET`, при этом backend генерирует одноразовый секрет на процесс |
+| `SPHERE_MAX_RUNNING` | `5` | Максимум одновременно запущенных симуляций |
+| `SPHERE_MAX_BODY_BYTES` | `2097152` (2 МБ) | Максимальный размер тела HTTP-запроса |
 
 ### WebSocket
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
-| `MAGISTRY_WS_MAX_STR_CHARS` | `2500` | Максимальная длина WS-сообщения (символы) |
-| `MAGISTRY_WS_PING_INTERVAL_S` | `15` | Интервал ping-сообщений (секунды) |
-| `MAGISTRY_LIVE_HISTORY_EVENTS` | `60` | Буфер событий при подключении к текущей симуляции |
-| `MAGISTRY_LIVE_GRAPH_THROTTLE_S` | `0.25` | Минимальный интервал между обновлениями графа (секунды) |
-| `MAGISTRY_WS_EVENT_BATCH_SIZE` | `50` | Размер пакета WS-событий |
-| `MAGISTRY_WS_EVENT_BATCH_INTERVAL_S` | `0.15` | Интервал отправки пакетов (секунды) |
-| `MAGISTRY_WS_DROP_EVENT_TYPES` | `idle` | Типы событий, фильтруемые при отправке (через запятую) |
+| `SPHERE_WS_MAX_STR_CHARS` | `2500` | Максимальная длина WS-сообщения (символы) |
+| `SPHERE_WS_PING_INTERVAL_S` | `15` | Интервал ping-сообщений (секунды) |
+| `SPHERE_LIVE_HISTORY_EVENTS` | `60` | Буфер событий при подключении к текущей симуляции |
+| `SPHERE_LIVE_GRAPH_THROTTLE_S` | `0.25` | Минимальный интервал между обновлениями графа (секунды) |
+| `SPHERE_WS_EVENT_BATCH_SIZE` | `50` | Размер пакета WS-событий |
+| `SPHERE_WS_EVENT_BATCH_INTERVAL_S` | `0.15` | Интервал отправки пакетов (секунды) |
+| `SPHERE_WS_DROP_EVENT_TYPES` | `idle` | Типы событий, фильтруемые при отправке (через запятую) |

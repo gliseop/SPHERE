@@ -1,4 +1,4 @@
-"""Загрузка/сохранение сценариев MAGISTRY-LC (YAML/JSON)."""
+"""Загрузка/сохранение сценариев SPHERE-LC (YAML/JSON)."""
 
 from __future__ import annotations
 

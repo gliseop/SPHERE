@@ -1,4 +1,4 @@
-"""Pydantic-конфиги для MAGISTRY-LC."""
+"""Pydantic-конфиги для SPHERE-LC."""
 
 from __future__ import annotations
 
@@ -935,7 +935,7 @@ class ScriptedEventConfig(BaseModel):
 
 
 class ScenarioConfig(BaseModel):
-    """Корневой конфиг сценария MAGISTRY-LC."""
+    """Корневой конфиг сценария SPHERE-LC."""
 
     model_config = ConfigDict(extra="forbid")
 

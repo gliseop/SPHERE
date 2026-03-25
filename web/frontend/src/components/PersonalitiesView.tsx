@@ -23,7 +23,7 @@ const TECHNIQUES: Array<{ value: TechniqueValue; label: string }> = [
   { value: 'defense_of_necessity', label: 'Защита необходимостью' },
 ]
 
-const ACTIVE_PERSONALITY_STORAGE_KEY = 'magistry-active-personality-id'
+const ACTIVE_PERSONALITY_STORAGE_KEY = 'sphere-active-personality-id'
 
 const DEFAULT_GENERATE_PERSONALITY_SYSTEM_PROMPT = (
   'Ты — эксперт по организационной психологии и криминологии. '
@@ -500,7 +500,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
               </span>
             </div>
             <div className="text-muted" style={{ fontSize: '0.7rem', lineHeight: 1.45, marginTop: '0.25rem' }}>
-              HEXACO — шестифакторная модель личности (0–100). В MAGISTRY эти значения используются для
+              HEXACO — шестифакторная модель личности (0–100). В SPHERE эти значения используются для
               классификации архетипа (бейдж) и для генерации нарративных материалов (биография/интервью),
               которые затем попадают в промпт LLM-агента.
             </div>
@@ -564,7 +564,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
           <div className="form-field">
             <label>Техники нейтрализации</label>
             <div className="text-muted" style={{ fontSize: '0.7rem', lineHeight: 1.45, marginTop: '0.25rem' }}>
-              Техники нейтрализации (Sykes &amp; Matza) — типовые «оправдания» нарушений норм. MAGISTRY передаёт
+              Техники нейтрализации (Sykes &amp; Matza) — типовые «оправдания» нарушений норм. SPHERE передаёт
               выбранные техники в промпт и в модуль рефлексии: в рефлексиях может появляться пометка
               <span style={{
                 fontFamily: "'JetBrains Mono', monospace",

@@ -1,4 +1,4 @@
-"""Graph state reconstruction for the MAGISTRY web UI.
+"""Graph state reconstruction for the SPHERE web UI.
 
 This module is intentionally dependency-free so it can be imported from tests
 without pulling in FastAPI/aiofiles.
@@ -53,7 +53,7 @@ def _is_governance_agent(agent_id: str) -> bool:
 def _is_agentish_id(entity_id: str) -> bool:
     """Return True for agent identifiers understood by the current UI.
 
-    Typed MAGISTRY-LC ids keep only ``agent:*`` nodes in the social graph.
+    Typed SPHERE-LC ids keep only ``agent:*`` nodes in the social graph.
     Untyped legacy ids are still treated as agents for backward compatibility.
     """
     if not entity_id:

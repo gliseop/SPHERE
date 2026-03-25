@@ -5,13 +5,13 @@ from pathlib import Path
 
 import asyncio
 
-from magistry_lc.llm import MockLLMProvider
+from sphere_lc.llm import MockLLMProvider
 
-from magistry_lc.config import ScenarioConfig
-from magistry_lc.engine import RunArtifacts, WorldEngine
+from sphere_lc.config import ScenarioConfig
+from sphere_lc.engine import RunArtifacts, WorldEngine
 
 
-def test_magistry_lc_runs_one_tick(tmp_path: Path) -> None:
+def test_sphere_lc_runs_one_tick(tmp_path: Path) -> None:
     cfg = ScenarioConfig.model_validate(
         {
             "version": 1,
@@ -46,7 +46,7 @@ def test_magistry_lc_runs_one_tick(tmp_path: Path) -> None:
     assert snapshots[0]["payload"]["score"] == 0.0
 
 
-def test_magistry_lc_rejects_phantom_message(tmp_path: Path) -> None:
+def test_sphere_lc_rejects_phantom_message(tmp_path: Path) -> None:
     cfg = ScenarioConfig.model_validate(
         {
             "version": 1,

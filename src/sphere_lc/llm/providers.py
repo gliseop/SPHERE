@@ -209,8 +209,8 @@ class OpenAICompatibleProvider:
                 "pip install -e ."
             ) from exc
 
-        self._request_timeout_s = max(1.0, _env_float("MAGISTRY_LLM_REQUEST_TIMEOUT_S", 30.0))
-        self._call_deadline_s = max(1.0, _env_float("MAGISTRY_LLM_CALL_DEADLINE_S", self._request_timeout_s))
+        self._request_timeout_s = max(1.0, _env_float("SPHERE_LLM_REQUEST_TIMEOUT_S", 30.0))
+        self._call_deadline_s = max(1.0, _env_float("SPHERE_LLM_CALL_DEADLINE_S", self._request_timeout_s))
         kwargs: dict = {"timeout": self._request_timeout_s}
         if api_key:
             kwargs["api_key"] = api_key
@@ -223,11 +223,11 @@ class OpenAICompatibleProvider:
         self._model = model
         self._cache = LLMCache(cache_path) if cache_path else None
         self._use_tool_calls = use_tool_calls
-        self._max_retries = max(0, _env_int("MAGISTRY_LLM_MAX_RETRIES", 2))
-        self._retry_base_delay_s = max(0.05, _env_float("MAGISTRY_LLM_RETRY_BASE_DELAY_S", 0.75))
-        self._retry_max_delay_s = max(self._retry_base_delay_s, _env_float("MAGISTRY_LLM_RETRY_MAX_DELAY_S", 8.0))
-        self._retry_on_parse = (os.getenv("MAGISTRY_LLM_RETRY_ON_PARSE") or "").strip().lower() not in ("0", "false", "no", "off")
-        self._log_max_chars = _env_int("MAGISTRY_LLM_LOG_MAX_CHARS", 0)
+        self._max_retries = max(0, _env_int("SPHERE_LLM_MAX_RETRIES", 2))
+        self._retry_base_delay_s = max(0.05, _env_float("SPHERE_LLM_RETRY_BASE_DELAY_S", 0.75))
+        self._retry_max_delay_s = max(self._retry_base_delay_s, _env_float("SPHERE_LLM_RETRY_MAX_DELAY_S", 8.0))
+        self._retry_on_parse = (os.getenv("SPHERE_LLM_RETRY_ON_PARSE") or "").strip().lower() not in ("0", "false", "no", "off")
+        self._log_max_chars = _env_int("SPHERE_LLM_LOG_MAX_CHARS", 0)
         log_path = _resolve_llm_log_path()
         self._debug_logger = _LLMDebugLogger(log_path, max_chars=self._log_max_chars) if log_path else None
         self._extra_body: dict | None = None
@@ -729,7 +729,7 @@ def create_provider(
 
     resolved_use_tool_calls = use_tool_calls
     if not resolved_use_tool_calls:
-        raw = (os.getenv("MAGISTRY_LLM_USE_TOOL_CALLS") or "").strip().lower()
+        raw = (os.getenv("SPHERE_LLM_USE_TOOL_CALLS") or "").strip().lower()
         resolved_use_tool_calls = raw in ("1", "true", "yes", "on")
 
     return OpenAICompatibleProvider(

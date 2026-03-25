@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient } from '../utils/apiClient'
 import type { AuthUser } from '../hooks/useAuth'
 
-const ACTIVE_PERSONALITY_STORAGE_KEY = 'magistry-active-personality-id'
+const ACTIVE_PERSONALITY_STORAGE_KEY = 'sphere-active-personality-id'
 
 interface AgentType {
   id?: string
@@ -31,7 +31,7 @@ const EMPTY_AGENT_TYPE: AgentType = {
 
 const DEFAULT_GENERATE_AGENT_TYPE_SYSTEM_PROMPT = (
   'Ты — сценарист и организационный психолог. '
-  + 'Нужно описать тип агента для симуляции MAGISTRY. '
+  + 'Нужно описать тип агента для симуляции SPHERE. '
   + 'На входе: выбранная личность (HEXACO + тёмная триада + биография + техники) и описание роли/контекста. '
   + 'На выходе: JSON с полями name, description, id_prefix. '
   + 'Важно: НЕ добавляй бюджет/персонал/полномочия/контракты — это генерирует движок мира.'

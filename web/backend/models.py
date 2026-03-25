@@ -1,4 +1,4 @@
-"""Pydantic-модели запросов/ответов для API MAGISTRY."""
+"""Pydantic-модели запросов/ответов для API SPHERE."""
 
 from __future__ import annotations
 

@@ -2,13 +2,13 @@
 
 ## Назначение проекта
 
-MAGISTRY — мета-двигатель для агентной симуляции организационных процессов. Система моделирует деятельность муниципальных организаций с помощью когнитивных LLM-агентов, исследуя эффективность гибридных управленческих систем (AI-аудит + децентрализованное голосование) в противодействии коррупции.
+SPHERE — мета-двигатель для агентной симуляции организационных процессов. Система моделирует деятельность муниципальных организаций с помощью когнитивных LLM-агентов, исследуя эффективность гибридных управленческих систем (AI-аудит + децентрализованное голосование) в противодействии коррупции.
 
 ### Теоретическая база
 
 [chapter_1.md](chapter_1.md) — первая глава ВКР, содержащая обзор литературы и обоснование подхода. Глава охватывает проблему принципала-агента в иерархических организациях (Йенсен, Меклинг), четыре категории подходов к снижению агентских издержек (институциональные, технологические, поведенческие, децентрализованные), эволюцию агентного моделирования от детерминированных правил к БЯМ-агентам, а также формулирует исследовательский пробел — отсутствие инструмента для экспериментальной оценки гибридных управленческих механизмов в среде с адаптивными агентами. Раздел 1.6 описывает архитектуру предлагаемой гибридной системы (ИИ-аудитор, репутационный механизм, коллегиальное рассмотрение), включая границы применимости и обоснование проектных решений.
 
-[docs/2411.10109v1.pdf](docs/2411.10109v1.pdf) — Park J.S. et al. «Generative Agent Simulations of 1,000 People» (2024). Ключевая статья, определяющая архитектуру когнитивного агента в MAGISTRY. Авторы показали, что генеративные агенты на основе двухчасовых интервью достигают нормализованной точности 0,85 в воспроизведении индивидуального поведения (GSS). Из статьи заимствованы: приоритет текстового описания над числовыми параметрами, механизм экспертной рефлексии, система нарративных интервью с гибридным поиском по фрагментам (fragment-based retrieval).
+[docs/2411.10109v1.pdf](docs/2411.10109v1.pdf) — Park J.S. et al. «Generative Agent Simulations of 1,000 People» (2024). Ключевая статья, определяющая архитектуру когнитивного агента в SPHERE. Авторы показали, что генеративные агенты на основе двухчасовых интервью достигают нормализованной точности 0,85 в воспроизведении индивидуального поведения (GSS). Из статьи заимствованы: приоритет текстового описания над числовыми параметрами, механизм экспертной рефлексии, система нарративных интервью с гибридным поиском по фрагментам (fragment-based retrieval).
 
 ### Архитектурная документация
 
@@ -31,12 +31,12 @@ MAGISTRY — мета-двигатель для агентной симуляц�
 Ниже перечислены исходники и важные служебные файлы. Generated/runtime-артефакты (`__pycache__/`, `web/frontend/dist/`, `web/frontend/node_modules/`, локальные `results/*`) в дерево не включены как источник истины.
 
 ```text
-MAGISTRY/
+SPHERE/
 ├── docker/                    # Контейнерные entrypoint/служебные скрипты
 │   └── web-entrypoint.sh      # Bootstrap admin-пользователя и запуск uvicorn в Docker
-├── src/magistry_lc/            # Движок симуляции (LangChain/LangGraph)
+├── src/sphere_lc/            # Движок симуляции (LangChain/LangGraph)
 │   ├── __init__.py             # Пакет
-│   ├── cli.py                  # CLI `magistry-lc`
+│   ├── cli.py                  # CLI `sphere-lc`
 │   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + world.environment (incl. operational_queues/informal_links/population_blueprints) + world.artifacts + temporal pending-follow-up knobs
 │   ├── scenario.py             # Load/save YAML/JSON сценариев
 │   ├── ids.py                  # Типизированные ID и аудитории (aud:*)
@@ -127,9 +127,9 @@ MAGISTRY/
 │               └── hud.css     # Основная HUD-тема интерфейса
 ├── tests/                      # pytest-модули движка и web backend
 │   ├── conftest.py             # Общая подготовка окружения тестов
-│   ├── test_magistry_lc_smoke.py
-│   ├── test_magistry_lc_cli.py
-│   ├── test_magistry_lc_review_fixes.py
+│   ├── test_sphere_lc_smoke.py
+│   ├── test_sphere_lc_cli.py
+│   ├── test_sphere_lc_review_fixes.py
 │   ├── test_persona_enrichment.py
 │   ├── test_worldgen_personal_ecology.py
 │   ├── test_truth_evaluation.py
@@ -165,7 +165,7 @@ MAGISTRY/
 │   └── collect_for_chatgpt.py  # Сборка контекста репозитория в один файл
 ├── .dockerignore              # Исключения для Docker build context
 ├── Dockerfile.web             # Мультистейдж-образ web UI: сборка React + запуск FastAPI
-├── docker-compose.yml         # Контейнерный launcher web-стека MAGISTRY
+├── docker-compose.yml         # Контейнерный launcher web-стека SPHERE
 ├── .env.example                # Пример переменных окружения
 ├── AGENTS.md                   # Главная карта проекта для AI-агентов
 ├── chapter_1.md                # Теоретическая глава ВКР
@@ -213,11 +213,11 @@ pytest tests/test_web_runner.py
 pytest tests/test_persona_enrichment.py -k worldgen
 pytest tests/test_worldgen_personal_ecology.py
 
-# MAGISTRY-LC
-magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
-magistry-lc run --scenario scenarios/procurement_tender_full_ecology.yaml --out results/procurement_tender_full_run --enrich-personas --persona-enrich-mode full
-magistry-lc compose --description "Короткое описание" --out scenarios/lc_composed.yaml
-magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
+# SPHERE-LC
+sphere-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
+sphere-lc run --scenario scenarios/procurement_tender_full_ecology.yaml --out results/procurement_tender_full_run --enrich-personas --persona-enrich-mode full
+sphere-lc compose --description "Короткое описание" --out scenarios/lc_composed.yaml
+sphere-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
 
 # Веб-интерфейс
 cd web && bash start.sh
@@ -252,9 +252,9 @@ cd web/frontend && npm run test:e2e
 
 | Что изменилось | Какой документ обновить | Приоритет |
 |---|---|---|
-| Добавлен/удалён/переименован файл в `src/magistry_lc/` | `AGENTS.md` (дерево файлов) | Обязательный |
+| Добавлен/удалён/переименован файл в `src/sphere_lc/` | `AGENTS.md` (дерево файлов) | Обязательный |
 | Добавлен/удалён/переименован файл в `web/backend/`, `web/frontend/src/`, `scripts/`, `web/scripts/` | `AGENTS.md` (дерево файлов), при необходимости `docs/web_interface.md` / `docs/getting_started.md` | Обязательный |
-| Новый модуль в `src/magistry_lc/` | `AGENTS.md` (дерево), `docs/architecture_guide.md` | Обязательный |
+| Новый модуль в `src/sphere_lc/` | `AGENTS.md` (дерево), `docs/architecture_guide.md` | Обязательный |
 | Устранён технический долг из таблицы | `AGENTS.md` (раздел «Техническое состояние») — удалить или обновить строку | Обязательный |
 | Появился новый технический долг | `AGENTS.md` (раздел «Техническое состояние») — добавить строку | Обязательный |
 | Новый инструмент агента | `docs/simulation_engine.md`, `docs/architecture_guide.md` | Обязательный |
@@ -324,16 +324,16 @@ cd web/frontend && npm run test:e2e
 - **Status/truth/evaluation/fidelity sidecars**: каждый прогон может писать `status.json` (heartbeat и финальный статус `running`/`finished`/`failed`), `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина), `summary.json` (разделённая сводка), `perf_summary.json` (LLM-phase/tick performance profile), а также `environment_summary.json` и `environment_timeline.jsonl` для отдельной телеметрии усиленной среды.
 - **Memory summarization runtime**: `AgentMemory.maybe_summarize_working` теперь вызывается параллельно для нескольких агентов с bounded-parallel contract, чтобы memory-sidecar не тянул весь tick последовательно.
 - **Memory summarization policy**: рабочая память больше не суммаризируется при минимальном overflow. Перед LLM-вызовом движок ждёт, пока переполнение `working` превысит порог `working_summary_min_overflow`, и детерминированно схлопывает серийные технические записи перед отправкой batch в суммаризатор.
-- **Provider timeout contract**: один модельный ответ теперь ограничен жёстким deadline (`MAGISTRY_LLM_CALL_DEADLINE_S`, по умолчанию 30 секунд), а timeout-ошибки не растягиваются длинной retry-цепочкой тем же провайдером.
+- **Provider timeout contract**: один модельный ответ теперь ограничен жёстким deadline (`SPHERE_LLM_CALL_DEADLINE_S`, по умолчанию 30 секунд), а timeout-ошибки не растягиваются длинной retry-цепочкой тем же провайдером.
 - **Persistent persona cache**: fingerprint-cache enrichment теперь живёт не только в локальном `{out_dir}/personas.json`, но и рядом с директориями прогонов, так что одинаковые benchmark-runs могут переиспользовать персоны между разными `out_dir`.
-- **Docker web-launcher**: для этой среды web UI предпочтительно поднимать через `docker compose up web`: контейнер сам собирает фронтенд, поднимает FastAPI, создаёт bootstrap `admin` из env (`MAGISTRY_ADMIN_USERNAME` / `MAGISTRY_ADMIN_PASSWORD`) и работает поверх bind-mounted `results/`, `scenarios/`, `data/`.
+- **Docker web-launcher**: для этой среды web UI предпочтительно поднимать через `docker compose up web`: контейнер сам собирает фронтенд, поднимает FastAPI, создаёт bootstrap `admin` из env (`SPHERE_ADMIN_USERNAME` / `SPHERE_ADMIN_PASSWORD`) и работает поверх bind-mounted `results/`, `scenarios/`, `data/`.
 - **DAO по умолчанию**: self-nomination и self-vote цели отключены; нормальный путь для кандидата — `respond_nomination`, а `vote_closed` пишет детерминированную причину результата. `governance.position_policy` в v1 поддерживает только `dao`; `auto` отклоняется при валидации.
-- **Веб-launcher на `magistry_lc`**: `POST /api/scenarios/{id}/run` и `POST /api/runs/launch` запускают `magistry_lc` как subprocess, пишут артефакты в `results/{run_name}/` и показываются в `/api/runs/active` как обычные API-запуски.
+- **Веб-launcher на `sphere_lc`**: `POST /api/scenarios/{id}/run` и `POST /api/runs/launch` запускают `sphere_lc` как subprocess, пишут артефакты в `results/{run_name}/` и показываются в `/api/runs/active` как обычные API-запуски.
 - **Предпочтительный способ запуска среды**: в этой рабочей среде по умолчанию считать Docker основным способом подъёма backend/frontend и сопутствующих сервисов. Если контейнерный путь доступен, сначала использовать его; прямой локальный запуск через `start.sh`, `uvicorn`, `npm` и аналогичные команды рассматривать как запасной вариант для случаев, когда Docker-конфигурации или образов ещё нет.
 - **Built-in seed-сценарии**: `seed_s*_g*.json` используются только как backing-файлы для `/api/templates/scenarios/*` и уже хранятся как полноценный `ScenarioConfig`; backend не показывает их в CRUD-списке `/api/scenarios` и не позволяет менять/удалять через сценарные маршруты.
 - **Отказ от legacy web-сценариев**: старый формат JSON-карточек (`name/scenario/governance/agents` без полного `ScenarioConfig`) больше не поддерживается. Web backend сохраняет пользовательские сценарии только как полный `ScenarioConfig`; если `sim_config` пуст, при сохранении сначала материализуется выбранный шаблон `S/G`, а затем поверх него накладываются overrides из UI.
 - **Custom governance modes**: пользовательские `G*`-режимы должны содержать валидный `GovernanceConfig` (в поле `config` или в корне JSON); backend применяет их при подстановке шаблона и round-trip сценария, а не игнорирует как неизвестный `G4+`.
-- **AI-маршруты web API**: все основные AI-эндпоинты web backend теперь живые: генерация personality, agent-type, interview и secondary agents работает через текущий `magistry_lc.llm` без зависимости от удалённого `magistry_sim`.
+- **AI-маршруты web API**: все основные AI-эндпоинты web backend теперь живые: генерация personality, agent-type, interview и secondary agents работает через текущий `sphere_lc.llm` без зависимости от удалённого прежнего монолитного движка.
 - **Environment telemetry в web UI**: правый HUD-tab `Среда` теперь показывает compact environment slice из `graph_state`: operational queues, их давление/задержки и `information_climate.active_signals`.
 - **Артефакты прогонов в web API**: чтение и мониторинг поддерживают оба формата — `results/*_events.jsonl` и `results/{run_name}/events.jsonl`.
 - **Role-based visibility в web API/WS**: `viewer` получает только shared-события (`aud:public` / `aud:internal`); point-to-point private events скрываются, чувствительные payload'ы shared-событий редактируются, а `GET /api/artifacts/{doc_id}` доступен только `admin`. Audience-less legacy event-stream не считается поддерживаемым контрактом API.
@@ -351,6 +351,6 @@ cd web/frontend && npm run test:e2e
 
 | Миграция | Описание |
 |----------|---------|
-| Удаление `magistry_sim` | Старый движок удалён целиком. Все нужные модули (`bm25.py`, `llm/`) перенесены в `magistry_lc`. Зависимость через `deps.py` устранена. |
-| Веб-launcher на `magistry_lc` | Запуск и мониторинг прогонов переведены на `magistry_lc` и directory-based артефакты в `results/{run_name}/`, при сохранении совместимости с legacy sidecars. |
-| Веб-эндпоинты после миграции `magistry_sim` | Основные сценарные, runner-, template- и AI-маршруты переведены на `magistry_lc` или локальные библиотеки. Legacy `501` для interview/secondary-agents устранён. |
+| Удаление прежнего монолитного движка | Старый пакет симуляции удалён целиком. Все нужные модули (`bm25.py`, `llm/`) перенесены в `sphere_lc`. Зависимость через `deps.py` устранена. |
+| Веб-launcher на `sphere_lc` | Запуск и мониторинг прогонов переведены на `sphere_lc` и directory-based артефакты в `results/{run_name}/`, при сохранении совместимости с legacy sidecars. |
+| Веб-эндпоинты после миграции на `sphere_lc` | Основные сценарные, runner-, template- и AI-маршруты переведены на `sphere_lc` или локальные библиотеки. Legacy `501` для interview/secondary-agents устранён. |

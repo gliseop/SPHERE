@@ -32,12 +32,12 @@ _active_lock = threading.Lock()
 _logger = logging.getLogger(__name__)
 
 try:
-    _MAX_RUNNING = max(1, int(os.environ.get("MAGISTRY_MAX_RUNNING", "5")))
+    _MAX_RUNNING = max(1, int(os.environ.get("SPHERE_MAX_RUNNING", "5")))
 except ValueError:
     _MAX_RUNNING = 5
 
 try:
-    _EXTERNAL_ALIVE_THRESHOLD = max(60, int(os.environ.get("MAGISTRY_EXTERNAL_ALIVE_THRESHOLD", "300")))
+    _EXTERNAL_ALIVE_THRESHOLD = max(60, int(os.environ.get("SPHERE_EXTERNAL_ALIVE_THRESHOLD", "300")))
 except ValueError:
     _EXTERNAL_ALIVE_THRESHOLD = 300
 
@@ -57,11 +57,11 @@ def _env_truthy(name: str) -> bool:
 
 def _maybe_add_parallel_flags(cmd: list[str]) -> None:
     """Добавить флаги параллельной симуляции из env (best-effort)."""
-    if not _env_truthy("MAGISTRY_PARALLEL_AGENTS"):
+    if not _env_truthy("SPHERE_PARALLEL_AGENTS"):
         return
     cmd.append("--parallel-agents")
 
-    raw_workers = os.environ.get("MAGISTRY_PARALLEL_WORKERS")
+    raw_workers = os.environ.get("SPHERE_PARALLEL_WORKERS")
     if raw_workers:
         try:
             workers = int(raw_workers)
@@ -70,7 +70,7 @@ def _maybe_add_parallel_flags(cmd: list[str]) -> None:
         if workers > 0:
             cmd.extend(["--parallel-workers", str(workers)])
 
-    raw_window = os.environ.get("MAGISTRY_PARALLEL_WINDOW")
+    raw_window = os.environ.get("SPHERE_PARALLEL_WINDOW")
     if raw_window:
         try:
             window = float(raw_window)
@@ -101,7 +101,7 @@ def _write_names_json(run_name: str, scenario_id: str, governance: str) -> None:
         governance: Идентификатор режима управления (G0-G3).
     """
     _logger.warning(
-        "Cannot write names JSON for run %s: magistry_sim removed", run_name
+        "Cannot write names JSON for run %s: legacy names export path removed", run_name
     )
 
 
@@ -229,7 +229,7 @@ def launch_simulation_from_config(
         cmd = [
             sys.executable,
             "-m",
-            "magistry_lc.cli",
+            "sphere_lc.cli",
             "run",
             "--scenario",
             str(scenario_path),
@@ -240,13 +240,13 @@ def launch_simulation_from_config(
         env = os.environ.copy()
         env.setdefault("PYTHONUNBUFFERED", "1")
         if resolved_parallel_agents is True:
-            env["MAGISTRY_PARALLEL_AGENTS"] = "1"
+            env["SPHERE_PARALLEL_AGENTS"] = "1"
         elif resolved_parallel_agents is False:
-            env["MAGISTRY_PARALLEL_AGENTS"] = "0"
+            env["SPHERE_PARALLEL_AGENTS"] = "0"
         if resolved_parallel_workers is not None:
-            env["MAGISTRY_PARALLEL_WORKERS"] = str(int(resolved_parallel_workers))
+            env["SPHERE_PARALLEL_WORKERS"] = str(int(resolved_parallel_workers))
         if resolved_parallel_window is not None:
-            env["MAGISTRY_PARALLEL_WINDOW"] = str(float(resolved_parallel_window))
+            env["SPHERE_PARALLEL_WINDOW"] = str(float(resolved_parallel_window))
 
         proc = subprocess.Popen(
             cmd,

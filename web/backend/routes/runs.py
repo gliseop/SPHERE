@@ -461,14 +461,14 @@ async def get_llm_debug_log(
 ) -> list[dict]:
     """Вернуть хвост debug-лога LLM (JSONL).
 
-    Лог пишется провайдером ``magistry_lc.llm.OpenAICompatibleProvider``
-    в файл ``results/llm_debug.jsonl`` (или ``MAGISTRY_LLM_LOG_PATH``).
+    Лог пишется провайдером ``sphere_lc.llm.OpenAICompatibleProvider``
+    в файл ``results/llm_debug.jsonl`` (или ``SPHERE_LLM_LOG_PATH``).
     """
     try:
         limit = max(0, min(2_000, int(limit)))
     except Exception:
         limit = 200
-    raw_path = (_os.environ.get("MAGISTRY_LLM_LOG_PATH") or "").strip()
+    raw_path = (_os.environ.get("SPHERE_LLM_LOG_PATH") or "").strip()
     path = Path(raw_path).expanduser() if raw_path else (RESULTS_DIR / "llm_debug.jsonl")
     if limit <= 0 or not path.exists():
         return []

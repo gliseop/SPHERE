@@ -8,10 +8,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from magistry_lc.config import AgentConfig, ChannelConfig, GovernanceConfig, ScenarioConfig
-from magistry_lc.ids import EntityKind, make_id, normalize_slug
-from magistry_lc.persona import PersonaArtifact
-from magistry_lc.scenario import save_scenario
+from sphere_lc.config import AgentConfig, ChannelConfig, GovernanceConfig, ScenarioConfig
+from sphere_lc.ids import EntityKind, make_id, normalize_slug
+from sphere_lc.persona import PersonaArtifact
+from sphere_lc.scenario import save_scenario
 
 from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User

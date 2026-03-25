@@ -13,11 +13,11 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from magistry_lc.agent import AgentRunner
-from magistry_lc.auditor import RuntimeAuditor
-from magistry_lc.llm import MockLLMProvider
+from sphere_lc.agent import AgentRunner
+from sphere_lc.auditor import RuntimeAuditor
+from sphere_lc.llm import MockLLMProvider
 
-from magistry_lc.actions import (
+from sphere_lc.actions import (
     ActionType,
     CastVoteAction,
     CreateWorkItemAction,
@@ -28,8 +28,8 @@ from magistry_lc.actions import (
     SendMessageAction,
     SpawnAgentAction,
 )
-from magistry_lc.arbiter import Arbiter
-from magistry_lc.config import (
+from sphere_lc.arbiter import Arbiter
+from sphere_lc.config import (
     AuditRuntimeConfig,
     GovernanceConfig,
     LLMConfig,
@@ -37,23 +37,23 @@ from magistry_lc.config import (
     RuntimeConfig,
     ScenarioConfig,
 )
-from magistry_lc.dao import DaoEngine
-from magistry_lc.cli import _cmd_run
-from magistry_lc.engine import RunArtifacts, WorldEngine
-from magistry_lc.entities import EntityRecord, EntityRegistry
-from magistry_lc.events import Event, EventLog
-from magistry_lc.id_alloc import IdAllocator
-from magistry_lc.ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
-from magistry_lc.journal import WorldJournal
-from magistry_lc.llm import LLMCaller
-from magistry_lc.llm.caller import create_llm_provider
-from magistry_lc.llm.providers import OpenAICompatibleProvider, create_provider
-from magistry_lc.memory import AgentMemory, WorkingEntry
-from magistry_lc.ops import CreateAgentOp
-from magistry_lc.ops import CloseAuditCaseOp, OpenAuditCaseOp, OpenVoteOp, UpdateAuditCaseOp
-from magistry_lc.state import AgentState, Vote, WorkItem, WorldState
-from magistry_lc.tracing import TraceLog
-from magistry_lc.worldgen import WorldGenerator
+from sphere_lc.dao import DaoEngine
+from sphere_lc.cli import _cmd_run
+from sphere_lc.engine import RunArtifacts, WorldEngine
+from sphere_lc.entities import EntityRecord, EntityRegistry
+from sphere_lc.events import Event, EventLog
+from sphere_lc.id_alloc import IdAllocator
+from sphere_lc.ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
+from sphere_lc.journal import WorldJournal
+from sphere_lc.llm import LLMCaller
+from sphere_lc.llm.caller import create_llm_provider
+from sphere_lc.llm.providers import OpenAICompatibleProvider, create_provider
+from sphere_lc.memory import AgentMemory, WorkingEntry
+from sphere_lc.ops import CreateAgentOp
+from sphere_lc.ops import CloseAuditCaseOp, OpenAuditCaseOp, OpenVoteOp, UpdateAuditCaseOp
+from sphere_lc.state import AgentState, Vote, WorkItem, WorldState
+from sphere_lc.tracing import TraceLog
+from sphere_lc.worldgen import WorldGenerator
 
 
 def _mk_state(*, off_1_caps: list[str], off_2_caps: list[str], off_2_wants_promotion: bool = True) -> WorldState:
@@ -290,7 +290,7 @@ def test_cli_module_invocation_executes_main() -> None:
     env["PYTHONUTF8"] = "1"
 
     result = subprocess.run(
-        [sys.executable, "-m", "magistry_lc.cli", "--help"],
+        [sys.executable, "-m", "sphere_lc.cli", "--help"],
         cwd=project_root,
         env=env,
         capture_output=True,
@@ -301,7 +301,7 @@ def test_cli_module_invocation_executes_main() -> None:
     )
 
     assert result.returncode == 0
-    assert "MAGISTRY-LC" in result.stdout
+    assert "SPHERE-LC" in result.stdout
 
 
 def test_arbiter_rejects_target_self_vote_by_default(tmp_path: Path) -> None:
@@ -1103,8 +1103,8 @@ def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) 
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("magistry_lc.llm.caller._load_dotenv_if_available", lambda: None)
-    monkeypatch.setattr("magistry_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
+    monkeypatch.setattr("sphere_lc.llm.caller._load_dotenv_if_available", lambda: None)
+    monkeypatch.setattr("sphere_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
     monkeypatch.delenv("OPENROUTER_PROVIDER_ORDER", raising=False)
@@ -1121,7 +1121,7 @@ def test_create_llm_provider_uses_env_provider_order(monkeypatch: pytest.MonkeyP
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("magistry_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
+    monkeypatch.setattr("sphere_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("OPENROUTER_PROVIDER_ORDER", "Groq, OpenAI,Groq")
@@ -1138,7 +1138,7 @@ def test_create_provider_uses_env_provider_order(monkeypatch: pytest.MonkeyPatch
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("magistry_lc.llm.providers.OpenAICompatibleProvider", _FakeProvider)
+    monkeypatch.setattr("sphere_lc.llm.providers.OpenAICompatibleProvider", _FakeProvider)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("OPENROUTER_PROVIDER_ORDER", "Groq, OpenAI,Groq")
@@ -1157,7 +1157,7 @@ def test_create_llm_provider_loads_dotenv_from_cwd(
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr("magistry_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
+    monkeypatch.setattr("sphere_lc.llm.caller.OpenAICompatibleProvider", _FakeProvider)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENROUTER_PROVIDER_ORDER", raising=False)
@@ -1437,8 +1437,8 @@ def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path
 def test_langgraph_world_graph_supports_checkpoint_path(tmp_path: Path) -> None:
     pytest.importorskip("langgraph")
 
-    from magistry_lc.entities import EntityRegistry
-    from magistry_lc.graphs import build_world_graph
+    from sphere_lc.entities import EntityRegistry
+    from sphere_lc.graphs import build_world_graph
 
     async def _gather(gs: dict) -> dict:
         return {"proposed": {}}
@@ -1522,8 +1522,8 @@ def test_cli_run_defaults_to_results_directory(monkeypatch: pytest.MonkeyPatch, 
 
             return _Now()
 
-    monkeypatch.setattr("magistry_lc.cli.WorldEngine", _FakeEngine)
-    monkeypatch.setattr("magistry_lc.cli.datetime", _FakeDatetime)
+    monkeypatch.setattr("sphere_lc.cli.WorldEngine", _FakeEngine)
+    monkeypatch.setattr("sphere_lc.cli.datetime", _FakeDatetime)
 
     args = argparse.Namespace(
         scenario=str(scenario_path),
@@ -1725,7 +1725,7 @@ def test_engine_survives_single_agent_llm_failure(tmp_path: Path) -> None:
 
 
 def test_composer_normalizes_or_falls_back_on_invalid_ids(tmp_path: Path) -> None:
-    from magistry_lc.composer import WorldComposer
+    from sphere_lc.composer import WorldComposer
 
     mock = MockLLMProvider(
         structured_responses={

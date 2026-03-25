@@ -1,4 +1,4 @@
-"""LangGraph-графы для MAGISTRY-LC.
+"""LangGraph-графы для SPHERE-LC.
 
 Движок может работать и без LangGraph (обычный asyncio-цикл),
 но при наличии зависимостей и включённом флаге `runtime.use_langgraph`

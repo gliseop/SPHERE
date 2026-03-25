@@ -11,10 +11,10 @@ tests/
 ├── conftest.py                         # Глобальные фикстуры и настройки
 ├── __init__.py
 │
-│  # Движок magistry_lc
-├── test_magistry_lc_smoke.py           # Smoke-тесты: конфигурация, движок, агент, арбитр,
+│  # Движок sphere_lc
+├── test_sphere_lc_smoke.py           # Smoke-тесты: конфигурация, движок, агент, арбитр,
 │                                       # DAO, composer, oracle, worldgen, память
-├── test_magistry_lc_review_fixes.py    # Регрессионные тесты: journal history, persona retry,
+├── test_sphere_lc_review_fixes.py    # Регрессионные тесты: journal history, persona retry,
 │                                       # ID-нормализация, action schema
 ├── test_embedding.py                   # Провайдеры эмбеддингов (Mock + интеграция)
 │
@@ -47,7 +47,7 @@ asyncio_mode = "auto"
 pytest
 
 # Конкретный файл
-pytest tests/test_magistry_lc_smoke.py
+pytest tests/test_sphere_lc_smoke.py
 
 # С выводом деталей
 pytest -v
@@ -56,7 +56,7 @@ pytest -v
 pytest -x
 
 # Только тесты движка (без веб-тестов)
-pytest tests/test_magistry_lc_smoke.py tests/test_magistry_lc_review_fixes.py tests/test_embedding.py
+pytest tests/test_sphere_lc_smoke.py tests/test_sphere_lc_review_fixes.py tests/test_embedding.py
 
 # Быстрая проверка
 pytest -x -q
@@ -74,12 +74,12 @@ pip install -e ".[dev,lc]"
 
 ### MockLLMProvider и MockEmbeddingProvider
 
-`MockLLMProvider` (`src/magistry_lc/llm/providers.py`) возвращает фиксированные текстовые и структурированные ответы без обращения к внешним API. Параметр `structured_responses` позволяет задать словарь ответов для различных вызовов.
+`MockLLMProvider` (`src/sphere_lc/llm/providers.py`) возвращает фиксированные текстовые и структурированные ответы без обращения к внешним API. Параметр `structured_responses` позволяет задать словарь ответов для различных вызовов.
 
-`MockEmbeddingProvider` (`src/magistry_lc/llm/embeddings.py`) генерирует детерминированные эмбеддинги заданной размерности, что обеспечивает воспроизводимость тестов семантического поиска.
+`MockEmbeddingProvider` (`src/sphere_lc/llm/embeddings.py`) генерирует детерминированные эмбеддинги заданной размерности, что обеспечивает воспроизводимость тестов семантического поиска.
 
 ```python
-from magistry_lc.llm import MockLLMProvider, MockEmbeddingProvider
+from sphere_lc.llm import MockLLMProvider, MockEmbeddingProvider
 
 llm = MockLLMProvider(structured_responses={"perform_action": verdict_data})
 embedder = MockEmbeddingProvider(dimensions=16)
@@ -113,9 +113,9 @@ assert r.status_code == 200
 
 | Модуль | Тестовый файл |
 |---|---|
-| `magistry_lc` (конфигурация, движок, агент, арбитр, DAO, composer, oracle, worldgen, память) | `test_magistry_lc_smoke.py` |
-| `magistry_lc` (journal history, persona retry, ID-нормализация, action schema) | `test_magistry_lc_review_fixes.py` |
-| `magistry_lc.llm.embeddings` | `test_embedding.py` |
+| `sphere_lc` (конфигурация, движок, агент, арбитр, DAO, composer, oracle, worldgen, память) | `test_sphere_lc_smoke.py` |
+| `sphere_lc` (journal history, persona retry, ID-нормализация, action schema) | `test_sphere_lc_review_fixes.py` |
+| `sphere_lc.llm.embeddings` | `test_embedding.py` |
 | `web/backend/graph_state.py` | `test_graph_state.py` |
 | `web/backend/auth.py` | `test_web_auth.py` |
 | `web/backend/database.py` | `test_web_database.py` |
@@ -124,6 +124,6 @@ assert r.status_code == 200
 
 ## Добавление новых тестов
 
-При создании нового модуля в `src/magistry_lc/` следует создать соответствующий тестовый файл в `tests/`. Тесты должны быть самодостаточными и не зависеть от внешних сервисов (OpenAI API, реальных баз данных). Для этого используются `MockLLMProvider`, `MockEmbeddingProvider` и фикстуры с временными директориями.
+При создании нового модуля в `src/sphere_lc/` следует создать соответствующий тестовый файл в `tests/`. Тесты должны быть самодостаточными и не зависеть от внешних сервисов (OpenAI API, реальных баз данных). Для этого используются `MockLLMProvider`, `MockEmbeddingProvider` и фикстуры с временными директориями.
 
 Асинхронные тесты объявляются как `async def test_...` — `pytest-asyncio` обработает их автоматически благодаря `asyncio_mode = "auto"`.

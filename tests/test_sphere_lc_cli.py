@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from magistry_lc.cli import _SafeArgumentParser
-from magistry_lc.llm.providers import OpenAICompatibleProvider
-from magistry_lc.persona import PersonaLibrary
-from magistry_lc.scenario import _load_yaml
+from sphere_lc.cli import _SafeArgumentParser
+from sphere_lc.llm.providers import OpenAICompatibleProvider
+from sphere_lc.persona import PersonaLibrary
+from sphere_lc.scenario import _load_yaml
 
 
 class _EncodingFailingStream:
@@ -50,7 +50,7 @@ def test_yaml_loader_error_points_to_lc_extra(monkeypatch: pytest.MonkeyPatch) -
         _load_yaml(Path("dummy.yaml"))
 
     assert 'pip install -e ".[lc]"' in str(exc.value)
-    assert "magistry-sim[lc]" not in str(exc.value)
+    assert "sphere-sim[lc]" not in str(exc.value)
 
 
 def test_persona_library_yaml_error_points_to_lc_extra(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,7 +60,7 @@ def test_persona_library_yaml_error_points_to_lc_extra(monkeypatch: pytest.Monke
         PersonaLibrary._load_file(Path("dummy.yaml"))
 
     assert 'pip install -e ".[lc]"' in str(exc.value)
-    assert "magistry-sim[lc]" not in str(exc.value)
+    assert "sphere-sim[lc]" not in str(exc.value)
 
 
 def test_openai_provider_error_points_to_project_install(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -70,4 +70,4 @@ def test_openai_provider_error_points_to_project_install(monkeypatch: pytest.Mon
         OpenAICompatibleProvider()
 
     assert "pip install -e ." in str(exc.value)
-    assert "magistry-sim[llm]" not in str(exc.value)
+    assert "sphere-sim[llm]" not in str(exc.value)

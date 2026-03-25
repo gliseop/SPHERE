@@ -30,11 +30,11 @@ RUN pip install --upgrade pip \
     && pip install -r web/backend/requirements.txt
 
 COPY --from=frontend-builder /app/web/frontend/dist ./web/frontend/dist
-COPY docker/web-entrypoint.sh /usr/local/bin/magistry-web-entrypoint
+COPY docker/web-entrypoint.sh /usr/local/bin/sphere-web-entrypoint
 
-RUN chmod +x /usr/local/bin/magistry-web-entrypoint \
+RUN chmod +x /usr/local/bin/sphere-web-entrypoint \
     && mkdir -p /app/results /app/data /app/scenarios /data
 
 EXPOSE 8765
 
-ENTRYPOINT ["magistry-web-entrypoint"]
+ENTRYPOINT ["sphere-web-entrypoint"]

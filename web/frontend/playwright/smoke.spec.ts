@@ -19,7 +19,7 @@ async function apiLogin(request: APIRequestContext): Promise<string> {
 
 async function openAuthedApp(page, request: APIRequestContext): Promise<string> {
   const token = await apiLogin(request)
-  await page.addInitScript((t) => localStorage.setItem('magistry_token', t), token)
+  await page.addInitScript((t) => localStorage.setItem('sphere_token', t), token)
   await page.goto('/')
   await expect(page.locator('.hud-header')).toBeVisible()
   return token
@@ -28,7 +28,7 @@ async function openAuthedApp(page, request: APIRequestContext): Promise<string> 
 test('login UI: success + error', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { name: 'MAGISTRY' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'SPHERE' })).toBeVisible()
 
   // wrong password
   await page.locator('input[autocomplete="username"]').fill(ADMIN_USER)
@@ -109,7 +109,7 @@ test('playback websocket closes and UI returns to idle', async ({ page, request 
   )
 
   // Open app with token
-  await page.addInitScript((t) => localStorage.setItem('magistry_token', t), token)
+  await page.addInitScript((t) => localStorage.setItem('sphere_token', t), token)
   await page.goto('/')
   await expect(page.locator('.hud-header')).toBeVisible()
 

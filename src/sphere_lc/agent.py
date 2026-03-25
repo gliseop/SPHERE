@@ -1,4 +1,4 @@
-"""Агентный слой MAGISTRY-LC (1 LLM-вызов на ход)."""
+"""Агентный слой SPHERE-LC (1 LLM-вызов на ход)."""
 
 from __future__ import annotations
 

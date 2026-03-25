@@ -114,30 +114,30 @@ export default function App() {
   }, [state.meta?.run_name])
 
   const [leftWidth, setLeftWidth] = useState<number>(() => {
-    const stored = localStorage.getItem('magistry-left-w')
+    const stored = localStorage.getItem('sphere-left-w')
     return stored ? Math.max(MIN_PANEL, Math.min(MAX_PANEL, Number(stored))) : 200
   })
   const [rightWidth, setRightWidth] = useState<number>(() => {
-    const stored = localStorage.getItem('magistry-right-w')
+    const stored = localStorage.getItem('sphere-right-w')
     return stored ? Math.max(MIN_PANEL, Math.min(MAX_PANEL, Number(stored))) : 260
   })
-  const [leftCollapsed, setLeftCollapsed] = useState<boolean>(() => localStorage.getItem('magistry-left-collapsed') === '1')
-  const [rightCollapsed, setRightCollapsed] = useState<boolean>(() => localStorage.getItem('magistry-right-collapsed') === '1')
+  const [leftCollapsed, setLeftCollapsed] = useState<boolean>(() => localStorage.getItem('sphere-left-collapsed') === '1')
+  const [rightCollapsed, setRightCollapsed] = useState<boolean>(() => localStorage.getItem('sphere-right-collapsed') === '1')
 
-  useEffect(() => { localStorage.setItem('magistry-left-w', String(leftWidth)) }, [leftWidth])
-  useEffect(() => { localStorage.setItem('magistry-right-w', String(rightWidth)) }, [rightWidth])
-  useEffect(() => { localStorage.setItem('magistry-left-collapsed', leftCollapsed ? '1' : '0') }, [leftCollapsed])
-  useEffect(() => { localStorage.setItem('magistry-right-collapsed', rightCollapsed ? '1' : '0') }, [rightCollapsed])
+  useEffect(() => { localStorage.setItem('sphere-left-w', String(leftWidth)) }, [leftWidth])
+  useEffect(() => { localStorage.setItem('sphere-right-w', String(rightWidth)) }, [rightWidth])
+  useEffect(() => { localStorage.setItem('sphere-left-collapsed', leftCollapsed ? '1' : '0') }, [leftCollapsed])
+  useEffect(() => { localStorage.setItem('sphere-right-collapsed', rightCollapsed ? '1' : '0') }, [rightCollapsed])
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const stored = localStorage.getItem('magistry-theme') as 'light' | 'dark' | null
+    const stored = localStorage.getItem('sphere-theme') as 'light' | 'dark' | null
     if (stored) return stored
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   })
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem('magistry-theme', theme)
+    localStorage.setItem('sphere-theme', theme)
   }, [theme])
 
   const meaningfulEvents = useMemo(

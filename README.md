@@ -1,6 +1,6 @@
-# MAGISTRY — мета-двигатель управления
+# SPHERE — мета-двигатель управления
 
-MAGISTRY (Multi-Agent Governance and Institutional Simulation for Testing and Research Yield) — исследовательская платформа для агентной симуляции организационных процессов. Система моделирует деятельность муниципальных и государственных организаций с помощью когнитивных LLM-агентов, действующих автономно в рамках заданных полномочий и ресурсов. Каждый агент обладает уникальной личностью, заданной текстовой биографией и нарративным интервью, потоком памяти с гибридным поиском и способностью к адаптивному поведению.
+SPHERE — исследовательская платформа для агентной симуляции организационных процессов. Система моделирует деятельность муниципальных и государственных организаций с помощью когнитивных LLM-агентов, действующих автономно в рамках заданных полномочий и ресурсов. Каждый агент обладает уникальной личностью, заданной текстовой биографией и нарративным интервью, потоком памяти с гибридным поиском и способностью к адаптивному поведению.
 
 Платформа создана для магистерской диссертации, посвящённой оценке гибридных управленческих систем (AI + DAO) в контексте противодействия коррупции. Ключевая гипотеза: сочетание AI-аудита, репутационного механизма и децентрализованного голосования снижает уровень нарушений по сравнению с традиционным контролем или его отсутствием. Теоретические основания и обзор литературы — в [chapter_1.md](chapter_1.md).
 
@@ -15,7 +15,7 @@ MAGISTRY (Multi-Agent Governance and Institutional Simulation for Testing and Re
 ### Установка
 
 ```bash
-git clone <repository-url> && cd MAGISTRY
+git clone <repository-url> && cd SPHERE
 python -m venv .venv
 # Linux/macOS: source .venv/bin/activate
 # Windows (PowerShell): .\.venv\Scripts\Activate.ps1
@@ -37,25 +37,25 @@ cp .env.example .env
 
 ```bash
 # Минимальный сценарий
-magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
+sphere-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
 
 # Богатый demo-сценарий
-magistry-lc run --scenario scenarios/procurement_tender.yaml --out results/procurement_tender_run
+sphere-lc run --scenario scenarios/procurement_tender.yaml --out results/procurement_tender_run
 
 # Исследовательский core-governance run: без worldgen, без secondary-spawn
-magistry-lc run --scenario scenarios/procurement_tender_core_governance.yaml --out results/procurement_tender_core_run
+sphere-lc run --scenario scenarios/procurement_tender_core_governance.yaml --out results/procurement_tender_core_run
 
 # Исследовательский full-ecology run: full-persona + secondary-spawn + worldgen
-magistry-lc run --scenario scenarios/procurement_tender_full_ecology.yaml --out results/procurement_tender_full_run
+sphere-lc run --scenario scenarios/procurement_tender_full_ecology.yaml --out results/procurement_tender_full_run
 
 # Генерация сценария из текстового описания (LLM)
-magistry-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" --out scenarios/composed.yaml
+sphere-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" --out scenarios/composed.yaml
 
 # Пост-фактум анализ нарушений (LLM-оракул, чанкинг по events.jsonl)
-magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
+sphere-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
 ```
 
-При запуске `magistry-lc run` движок пишет `events.jsonl`, `trace.jsonl`, `truth.jsonl`, `evaluation.json`, `fidelity.json` и `summary.json` в директорию прогона. Если `--out` не указан, используется `results/<timestamp>`, поэтому прогон сразу доступен web-интерфейсу.
+При запуске `sphere-lc run` движок пишет `events.jsonl`, `trace.jsonl`, `truth.jsonl`, `evaluation.json`, `fidelity.json` и `summary.json` в директорию прогона. Если `--out` не указан, используется `results/<timestamp>`, поэтому прогон сразу доступен web-интерфейсу.
 
 ### Запуск веб-интерфейса
 
@@ -67,10 +67,10 @@ docker compose up --build -d web
 
 После старта UI доступен по адресу `http://localhost:8765`. По умолчанию контейнер создаёт dev-пользователя:
 
-- логин: `magistry_admin`
-- пароль: `MagistryDocker123!`
+- логин: `sphere_admin`
+- пароль: `SphereDocker123!`
 
-При необходимости переопределите `MAGISTRY_ADMIN_USERNAME` и `MAGISTRY_ADMIN_PASSWORD` через окружение или `.env` до запуска `docker compose`.
+При необходимости переопределите `SPHERE_ADMIN_USERNAME` и `SPHERE_ADMIN_PASSWORD` через окружение или `.env` до запуска `docker compose`.
 
 Локальный fallback без Docker:
 
@@ -86,7 +86,7 @@ cd web && bash start.sh
 
 ```mermaid
 graph TB
-    subgraph Движок["Движок симуляции (magistry_lc)"]
+    subgraph Движок["Движок симуляции (sphere_lc)"]
         ENGINE[WorldEngine]
         AGENT[AgentRunner]
         ARB[Arbiter]

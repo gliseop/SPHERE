@@ -5,21 +5,21 @@ import json
 import re
 from pathlib import Path
 
-from magistry_lc.agent import AgentRunner
-from magistry_lc.arbiter import Arbiter
-from magistry_lc.config import MemoryConfig, RuntimeConfig, ScenarioConfig
-from magistry_lc.dao import DaoEngine
-from magistry_lc.engine import RunArtifacts, WorldEngine
-from magistry_lc.entities import EntityRecord, EntityRegistry
-from magistry_lc.events import Event, EventLog
-from magistry_lc.fidelity import evaluate_fidelity
-from magistry_lc.id_alloc import IdAllocator
-from magistry_lc.ids import EntityKind
-from magistry_lc.ids import INTERNAL_AUDIENCE
-from magistry_lc.journal import WorldJournal
-from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
-from magistry_lc.persona import PersonaArtifact
-from magistry_lc.state import (
+from sphere_lc.agent import AgentRunner
+from sphere_lc.arbiter import Arbiter
+from sphere_lc.config import MemoryConfig, RuntimeConfig, ScenarioConfig
+from sphere_lc.dao import DaoEngine
+from sphere_lc.engine import RunArtifacts, WorldEngine
+from sphere_lc.entities import EntityRecord, EntityRegistry
+from sphere_lc.events import Event, EventLog
+from sphere_lc.fidelity import evaluate_fidelity
+from sphere_lc.id_alloc import IdAllocator
+from sphere_lc.ids import EntityKind
+from sphere_lc.ids import INTERNAL_AUDIENCE
+from sphere_lc.journal import WorldJournal
+from sphere_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
+from sphere_lc.persona import PersonaArtifact
+from sphere_lc.state import (
     AgentState,
     ArtifactState,
     InstitutionRegimeState,
@@ -30,8 +30,8 @@ from magistry_lc.state import (
     WorldState,
     ZoneState,
 )
-from magistry_lc.tracing import TraceLog
-from magistry_lc.worldgen import AgentDailyContext, SceneHook
+from sphere_lc.tracing import TraceLog
+from sphere_lc.worldgen import AgentDailyContext, SceneHook
 
 
 class _CaptureAgentPromptProvider(MockLLMProvider):
@@ -1042,7 +1042,7 @@ def test_agent_prompt_includes_informal_links(tmp_path: Path) -> None:
         persona=PersonaArtifact(summary="Собеседник"),
         capabilities=["message"],
     )
-    from magistry_lc.state import InformalLinkState, informal_link_key
+    from sphere_lc.state import InformalLinkState, informal_link_key
 
     link_id = informal_link_key("agent:off_1", "agent:off_2", "private_contact")
     state.environment.informal_links[link_id] = InformalLinkState(

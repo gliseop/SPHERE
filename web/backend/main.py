@@ -1,4 +1,4 @@
-"""FastAPI-сервер для веб-интерфейса симуляций MAGISTRY.
+"""FastAPI-сервер для веб-интерфейса симуляций SPHERE.
 
 Точка входа для ``uvicorn web.backend.main:app``. Создание маршрутов,
 middleware и подключение роутеров вынесены в подмодули.
@@ -53,7 +53,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 # Application
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="MAGISTRY Graph UI", lifespan=_lifespan)
+app = FastAPI(title="SPHERE Graph UI", lifespan=_lifespan)
 
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_BODY_BYTES)
 app.add_middleware(

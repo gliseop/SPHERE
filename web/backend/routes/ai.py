@@ -9,11 +9,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from magistry_lc.config import AgentConfig, ScenarioConfig
-from magistry_lc.ids import EntityKind, make_unique_id
-from magistry_lc.llm import create_provider
-from magistry_lc.persona import social_link_match_key, social_link_name_key
-from magistry_lc.utils import (
+from sphere_lc.config import AgentConfig, ScenarioConfig
+from sphere_lc.ids import EntityKind, make_unique_id
+from sphere_lc.llm import create_provider
+from sphere_lc.persona import social_link_match_key, social_link_name_key
+from sphere_lc.utils import (
     looks_like_machine_name,
     looks_like_role_label,
     normalize_agent_display_name,
@@ -151,7 +151,7 @@ def _secondary_agents_system_prompt(*, family_count: int, society_count: int) ->
     """System prompt для генерации вторичных акторов."""
 
     return (
-        "Ты — модуль генерации вторичных акторов для MAGISTRY.\n"
+        "Ты — модуль генерации вторичных акторов для SPHERE.\n"
         "Нужно предложить concrete human agents вокруг уже существующих участников сценария.\n"
         "Категории только две:\n"
         "- family: родственники, супруги, близкие друзья семьи, люди кланового давления;\n"
@@ -304,7 +304,7 @@ async def generate_personality(
     if not _os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(status_code=409, detail="OPENAI_API_KEY is not set")
 
-    from magistry_lc.llm import create_provider
+    from sphere_lc.llm import create_provider
     from web.backend.constants import NEUTRALIZATION_TECHNIQUES
 
     techniques = list(NEUTRALIZATION_TECHNIQUES)
@@ -416,7 +416,7 @@ async def generate_agent_type(
     if not isinstance(personality, dict):
         raise HTTPException(status_code=500, detail="Invalid personality JSON")
 
-    from magistry_lc.llm import create_provider
+    from sphere_lc.llm import create_provider
 
     schema = {
         "type": "object",
@@ -431,7 +431,7 @@ async def generate_agent_type(
 
     system_prompt_default = (
         "\u0422\u044b \u2014 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0441\u0442 \u0438 \u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0446\u0438\u043e\u043d\u043d\u044b\u0439 \u043f\u0441\u0438\u0445\u043e\u043b\u043e\u0433. "
-        "\u041d\u0443\u0436\u043d\u043e \u043e\u043f\u0438\u0441\u0430\u0442\u044c \u0442\u0438\u043f \u0430\u0433\u0435\u043d\u0442\u0430 \u0434\u043b\u044f \u0441\u0438\u043c\u0443\u043b\u044f\u0446\u0438\u0438 MAGISTRY. "
+        "\u041d\u0443\u0436\u043d\u043e \u043e\u043f\u0438\u0441\u0430\u0442\u044c \u0442\u0438\u043f \u0430\u0433\u0435\u043d\u0442\u0430 \u0434\u043b\u044f \u0441\u0438\u043c\u0443\u043b\u044f\u0446\u0438\u0438 SPHERE. "
         "\u041d\u0430 \u0432\u0445\u043e\u0434\u0435: \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u0430\u044f \u043b\u0438\u0447\u043d\u043e\u0441\u0442\u044c (HEXACO + \u0442\u0451\u043c\u043d\u0430\u044f \u0442\u0440\u0438\u0430\u0434\u0430 + \u0431\u0438\u043e\u0433\u0440\u0430\u0444\u0438\u044f + \u0442\u0435\u0445\u043d\u0438\u043a\u0438) \u0438 \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u0440\u043e\u043b\u0438/\u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u0430. "
         "\u041d\u0430 \u0432\u044b\u0445\u043e\u0434\u0435: JSON \u0441 \u043f\u043e\u043b\u044f\u043c\u0438 name, description, id_prefix. "
         "\u0412\u0430\u0436\u043d\u043e: \u041d\u0415 \u0434\u043e\u0431\u0430\u0432\u043b\u044f\u0439 \u0431\u044e\u0434\u0436\u0435\u0442/\u043f\u0435\u0440\u0441\u043e\u043d\u0430\u043b/\u043f\u043e\u043b\u043d\u043e\u043c\u043e\u0447\u0438\u044f/\u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u044b \u2014 \u044d\u0442\u043e \u0433\u0435\u043d\u0435\u0440\u0438\u0440\u0443\u0435\u0442 \u0434\u0432\u0438\u0436\u043e\u043a \u043c\u0438\u0440\u0430."

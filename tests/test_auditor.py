@@ -4,17 +4,17 @@ import asyncio
 import json
 from pathlib import Path
 
-from magistry_lc.auditor import RuntimeAuditor
-from magistry_lc.config import AuditRuntimeConfig, ScenarioConfig
-from magistry_lc.dao import DaoEngine
-from magistry_lc.engine import RunArtifacts, WorldEngine
-from magistry_lc.entities import EntityRecord, EntityRegistry
-from magistry_lc.events import Event
-from magistry_lc.ids import EntityKind
-from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
-from magistry_lc.ops import ModifyReputationOp, OpenAuditCaseOp, OpenVoteOp, UpdateAuditCaseOp
-from magistry_lc.state import AgentState, ArtifactState, AuditCase, Vote, WorldState
-from magistry_lc.tracing import TraceLog
+from sphere_lc.auditor import RuntimeAuditor
+from sphere_lc.config import AuditRuntimeConfig, ScenarioConfig
+from sphere_lc.dao import DaoEngine
+from sphere_lc.engine import RunArtifacts, WorldEngine
+from sphere_lc.entities import EntityRecord, EntityRegistry
+from sphere_lc.events import Event
+from sphere_lc.ids import EntityKind
+from sphere_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
+from sphere_lc.ops import ModifyReputationOp, OpenAuditCaseOp, OpenVoteOp, UpdateAuditCaseOp
+from sphere_lc.state import AgentState, ArtifactState, AuditCase, Vote, WorldState
+from sphere_lc.tracing import TraceLog
 
 
 def _mk_state() -> WorldState:

@@ -48,7 +48,7 @@ DB_PATH="${PW_USERS_DB:-$ROOT_DIR/.tmp/playwright-users-$PORT.db}"
 mkdir -p "$ROOT_DIR/.tmp"
 rm -f "$DB_PATH"
 
-echo "=== MAGISTRY E2E server ==="
+echo "=== SPHERE E2E server ==="
 echo "PORT=$PORT"
 echo "DB=$DB_PATH"
 
@@ -59,7 +59,7 @@ npm run build
 echo "Инициализация users DB и тестового admin..."
 cd "$ROOT_DIR"
 PYTHON_BIN="$(resolve_python_bin)"
-MAGISTRY_USERS_DB="$DB_PATH" "$PYTHON_BIN" - <<PY
+SPHERE_USERS_DB="$DB_PATH" "$PYTHON_BIN" - <<PY
 from web.backend.auth import hash_password
 from web.backend.database import create_user, init_db
 
@@ -68,7 +68,7 @@ create_user("$ADMIN_USER", hash_password("$ADMIN_PASS"), "admin")
 PY
 
 echo "Запуск сервера: http://127.0.0.1:$PORT"
-export MAGISTRY_USERS_DB="$DB_PATH"
+export SPHERE_USERS_DB="$DB_PATH"
 export JWT_SECRET="$JWT_SECRET"
 export JWT_EXPIRE_HOURS=24
 export ALLOWED_ORIGIN="http://127.0.0.1:$PORT"

@@ -1,4 +1,4 @@
-"""MAGISTRY-LC: движок MAGISTRY на LangChain/LangGraph.
+"""SPHERE-LC: движок SPHERE на LangChain/LangGraph.
 
 Реализация с контролем контекста, антифантомами и DAO-политикой.
 """

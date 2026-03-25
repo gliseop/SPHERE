@@ -1,4 +1,4 @@
-"""WorldState для MAGISTRY-LC."""
+"""WorldState для SPHERE-LC."""
 
 from __future__ import annotations
 

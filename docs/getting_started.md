@@ -1,6 +1,6 @@
 # Быстрый старт
 
-Руководство по установке и запуску MAGISTRY.
+Руководство по установке и запуску SPHERE.
 
 ## Предварительные требования
 
@@ -14,7 +14,7 @@
 
 ```bash
 git clone <repository-url>
-cd MAGISTRY
+cd SPHERE
 python -m venv .venv
 source .venv/bin/activate  # Linux/macOS
 ```
@@ -33,7 +33,7 @@ pip install -e ".[lc,dev]"
 ```
 
 Группы зависимостей:
-- `lc` — движок MAGISTRY-LC: LangChain/LangGraph, PyYAML, OpenAI, Rich
+- `lc` — движок SPHERE-LC: LangChain/LangGraph, PyYAML, OpenAI, Rich
 - `dev` — pytest, pytest-asyncio, rank-bm25 и веб-зависимости тестового контура (`fastapi`, `aiofiles`, `python-multipart`, `PyJWT`, `bcrypt`)
 
 ### Настройка переменных окружения
@@ -49,11 +49,11 @@ cp .env.example .env
 | `OPENAI_API_KEY` | Да (для симуляций) | Ключ OpenAI API (или совместимого провайдера, например OpenRouter) |
 | `OPENAI_BASE_URL` | Нет | Базовый URL OpenAI-compatible API. Для OpenRouter обычно `https://openrouter.ai/api/v1` |
 | `OPENROUTER_PROVIDER_ORDER` | Нет | Порядок OpenRouter provider routing через запятую, например `Groq,OpenAI` |
-| `MAGISTRY_LLM_REQUEST_TIMEOUT_S` | Нет | Жёсткий timeout одной попытки LLM-вызова; по умолчанию `30` секунд |
-| `MAGISTRY_LLM_CALL_DEADLINE_S` | Нет | Общий deadline одного модельного ответа с учётом retries; по умолчанию `30` секунд |
+| `SPHERE_LLM_REQUEST_TIMEOUT_S` | Нет | Жёсткий timeout одной попытки LLM-вызова; по умолчанию `30` секунд |
+| `SPHERE_LLM_CALL_DEADLINE_S` | Нет | Общий deadline одного модельного ответа с учётом retries; по умолчанию `30` секунд |
 | `JWT_SECRET` | Да (для веб) | Секрет для JWT-токенов длиной не менее 32 байт, генерируется: `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `JWT_EXPIRE_HOURS` | Нет | Время жизни токена, по умолчанию 24 часа |
-| `MAGISTRY_DEV` | Нет | `1` для режима разработки (если `JWT_SECRET` не задан, backend создаёт одноразовый секрет на текущий процесс) |
+| `SPHERE_DEV` | Нет | `1` для режима разработки (если `JWT_SECRET` не задан, backend создаёт одноразовый секрет на текущий процесс) |
 
 ### Установка фронтенда (опционально)
 
@@ -69,19 +69,19 @@ cd ../..
 
 ```bash
 # Минимальный сценарий (YAML)
-magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
+sphere-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
 ```
 
 ### Переопределение числа тиков
 
 ```bash
-magistry-lc run --scenario scenarios/lc_minimal.yaml --ticks 50 --out results/long_run
+sphere-lc run --scenario scenarios/lc_minimal.yaml --ticks 50 --out results/long_run
 ```
 
 ### Генерация сценария из описания (LLM)
 
 ```bash
-magistry-lc compose --description "Кумовство при найме в муниципальном учреждении" --out scenarios/composed.yaml
+sphere-lc compose --description "Кумовство при найме в муниципальном учреждении" --out scenarios/composed.yaml
 ```
 
 Команда генерирует сценарий и обогащает персоны (биография + интервью), поэтому делает несколько LLM-вызовов (примерно 1 на агента).
@@ -89,7 +89,7 @@ magistry-lc compose --description "Кумовство при найме в му�
 Описание можно передать из файла:
 
 ```bash
-magistry-lc compose --description-file docs/scenario_brief.txt --out scenarios/composed.yaml
+sphere-lc compose --description-file docs/scenario_brief.txt --out scenarios/composed.yaml
 ```
 
 ### Анализ нарушений (оракул)
@@ -97,7 +97,7 @@ magistry-lc compose --description-file docs/scenario_brief.txt --out scenarios/c
 Пост-фактум анализ журнала событий чанками через LLM:
 
 ```bash
-magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
+sphere-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
 ```
 
 Полный список аргументов CLI — в [cli_reference.md](./cli_reference.md).
@@ -119,14 +119,14 @@ docker compose up --build -d web
 - использует bind-mount для `results/`, `scenarios/`, `data/`, поэтому уже существующие прогоны сразу видны в UI.
 
 Локальные dev-учётные данные по умолчанию:
-- логин: `magistry_admin`
-- пароль: `MagistryDocker123!`
+- логин: `sphere_admin`
+- пароль: `SphereDocker123!`
 
 Переопределение перед запуском:
 
 ```bash
-export MAGISTRY_ADMIN_USERNAME=my_admin
-export MAGISTRY_ADMIN_PASSWORD='StrongPassword123!'
+export SPHERE_ADMIN_USERNAME=my_admin
+export SPHERE_ADMIN_PASSWORD='StrongPassword123!'
 docker compose up --build -d web
 ```
 
@@ -163,7 +163,7 @@ python -m web.backend.manage_users create --username admin --role admin
 pytest
 
 # Конкретный модуль
-pytest tests/test_magistry_lc_smoke.py
+pytest tests/test_sphere_lc_smoke.py
 
 # По паттерну
 pytest -k "test_arbiter"

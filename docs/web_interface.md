@@ -1,6 +1,6 @@
 # Веб-интерфейс
 
-Веб-интерфейс MAGISTRY состоит из серверной части на FastAPI и клиентской на React 19 с D3.js-визуализацией.
+Веб-интерфейс SPHERE состоит из серверной части на FastAPI и клиентской на React 19 с D3.js-визуализацией.
 
 ## Серверная часть
 
@@ -12,7 +12,7 @@
 docker compose up --build -d web
 ```
 
-Контейнерный launcher собирает фронтенд в image, затем запускает FastAPI, который раздаёт и API, и готовую статику. Bootstrap-пользователь для логина создаётся из `MAGISTRY_ADMIN_USERNAME` / `MAGISTRY_ADMIN_PASSWORD`; по умолчанию это `magistry_admin` / `MagistryDocker123!`.
+Контейнерный launcher собирает фронтенд в image, затем запускает FastAPI, который раздаёт и API, и готовую статику. Bootstrap-пользователь для логина создаётся из `SPHERE_ADMIN_USERNAME` / `SPHERE_ADMIN_PASSWORD`; по умолчанию это `sphere_admin` / `SphereDocker123!`.
 
 ### Структура
 
@@ -46,7 +46,7 @@ web/backend/
 - **admin** — полный доступ: запуск симуляций, управление сценариями, удаление прогонов
 - **viewer** — только чтение: просмотр прогонов, событий, графов
 
-Токен выдаётся через OAuth2 password flow (`POST /api/auth/login`). Время жизни настраивается через `JWT_EXPIRE_HOURS` (по умолчанию 24 часа, при невалидном значении используется fallback). Секрет задаётся через `JWT_SECRET` и должен быть не короче 32 байт; в режиме разработки (`MAGISTRY_DEV=1`) при отсутствии явного секрета backend использует стабильный dev-secret, чтобы токены не отваливались при reload и multi-worker запуске.
+Токен выдаётся через OAuth2 password flow (`POST /api/auth/login`). Время жизни настраивается через `JWT_EXPIRE_HOURS` (по умолчанию 24 часа, при невалидном значении используется fallback). Секрет задаётся через `JWT_SECRET` и должен быть не короче 32 байт; в режиме разработки (`SPHERE_DEV=1`) при отсутствии явного секрета backend использует стабильный dev-secret, чтобы токены не отваливались при reload и multi-worker запуске.
 
 Для event-потока роли различаются не только правами на маршруты, но и видимостью данных. `admin` видит весь `events.jsonl`, включая private/direct сообщения и `llm_call`; `viewer` получает только общий слой (`aud:public`, `aud:internal`). Для shared-событий с потенциально чувствительным payload backend дополнительно редактирует содержимое (`document_created.content`, private `message_sent.text`/`content`). Audience-less legacy stream не считается API-контрактом.
 
@@ -70,10 +70,10 @@ web/backend/
 | GET | `/api/artifacts/{doc_id}` | Артефакты (сгенерированные документы, только `admin`) |
 | DELETE | `/api/runs/{run_name}` | Удалить прогон |
 
-`/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`. CLI `magistry-lc run` по умолчанию пишет прогоны именно в `results/<timestamp>`, поэтому такие запуски сразу видны web UI без дополнительного `--out`.
+`/api/runs` и связанные endpoints читают оба формата артефактов: legacy `results/*_events.jsonl` и directory-based `results/{run_name}/events.jsonl`. CLI `sphere-lc run` по умолчанию пишет прогоны именно в `results/<timestamp>`, поэтому такие запуски сразу видны web UI без дополнительного `--out`.
 Для directory-based LC-run движок дополнительно пишет sidecar-файлы `scenario.json`, `names.json`, `status.json`, `trace.jsonl`, `summary.json`, `environment_summary.json` и `environment_timeline.jsonl`, чтобы web UI и экспорт могли загрузить не только конфиг и итоговые метрики, но и отдельную телеметрию усиленной среды.
 Для активного directory-based прогона `GET /api/run/{name}/scenario` и `GET /api/run/{name}/export` умеют читать и ранний launcher-sidecar `_input_scenario.json`, поэтому конфиг доступен сразу после старта, ещё до записи финального `scenario.json`.
-Для MAGISTRY-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl`, если они вынесены из `events.jsonl`.
+Для SPHERE-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl`, если они вынесены из `events.jsonl`.
 Перед отдачей `GET /api/run/{name}` и `GET /api/run/{name}/export` backend теперь применяет `audience`-policy: viewer не получает point-to-point события, адресованные только конкретным `agent:*`, а admin по-прежнему видит полный поток. Это же правило используется и для построения `graph_state`, чтобы скрытые события не просачивались через побочные изменения графа. В ответ `GET /api/run/{name}` теперь также входит компактный `environment`-блок, а `GET /api/run/{name}/export` дополнительно включает `environment` и `environment_timeline`.
 
 #### Живая симуляция
@@ -85,7 +85,7 @@ web/backend/
 | GET | `/api/runs/active` | Список активных симуляций (`external`, `stop_supported`) |
 | POST | `/api/runs/{run_name}/stop` | Остановить симуляцию |
 
-Web launcher запускает `magistry_lc` как отдельный subprocess и пишет артефакты в `results/{run_name}/`. Backend больше не поддерживает сохранённые legacy-карточки сценариев; пользовательские сценарии должны храниться как полноценный `ScenarioConfig`. Если при сохранении web-карточки поле `sim_config` пусто, backend сначала материализует выбранный шаблон `S/G`, а затем накладывает на него overrides из UI и сохраняет уже полный `ScenarioConfig`.
+Web launcher запускает `sphere_lc` как отдельный subprocess и пишет артефакты в `results/{run_name}/`. Backend больше не поддерживает сохранённые legacy-карточки сценариев; пользовательские сценарии должны храниться как полноценный `ScenarioConfig`. Если при сохранении web-карточки поле `sim_config` пусто, backend сначала материализует выбранный шаблон `S/G`, а затем накладывает на него overrides из UI и сохраняет уже полный `ScenarioConfig`.
 
 `POST /api/runs/launch` принимает также runtime-overrides `parallel_agents`, `parallel_workers` и `parallel_window`. Backend переносит их в `ScenarioConfig.runtime` конкретного запуска, поэтому они отражаются в `_input_scenario.json` и не теряются между UI и subprocess launcher'ом.
 
@@ -191,7 +191,7 @@ WebSocket-поток использует ту же visibility-policy, что и
 | `done` | сервер → клиент | Поток завершён |
 | `error` | сервер → клиент | Ошибка (например, unauthorized/run not found) |
 
-Оптимизация: события пакетируются (`MAGISTRY_WS_EVENT_BATCH_SIZE`, по умолчанию 50 штук каждые 0.15 с), обновления графа троттлятся (`MAGISTRY_LIVE_GRAPH_THROTTLE_S`, по умолчанию 0.25 с). Типы событий из `MAGISTRY_WS_DROP_EVENT_TYPES` (по умолчанию `idle`) фильтруются и не передаются клиенту.
+Оптимизация: события пакетируются (`SPHERE_WS_EVENT_BATCH_SIZE`, по умолчанию 50 штук каждые 0.15 с), обновления графа троттлятся (`SPHERE_LIVE_GRAPH_THROTTLE_S`, по умолчанию 0.25 с). Типы событий из `SPHERE_WS_DROP_EVENT_TYPES` (по умолчанию `idle`) фильтруются и не передаются клиенту.
 
 ## Клиентская часть
 

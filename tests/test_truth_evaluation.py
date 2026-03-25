@@ -4,15 +4,15 @@ import asyncio
 import json
 from pathlib import Path
 
-from magistry_lc.config import ScenarioConfig
-from magistry_lc.engine import RunArtifacts, WorldEngine
-from magistry_lc.entities import EntityRecord, EntityRegistry
-from magistry_lc.evaluation import evaluate_run
-from magistry_lc.events import Event
-from magistry_lc.ids import EntityKind
-from magistry_lc.llm import MockLLMProvider
-from magistry_lc.state import AgentState, WorldState
-from magistry_lc.truth import TruthDetector, TruthLog, TruthRecord
+from sphere_lc.config import ScenarioConfig
+from sphere_lc.engine import RunArtifacts, WorldEngine
+from sphere_lc.entities import EntityRecord, EntityRegistry
+from sphere_lc.evaluation import evaluate_run
+from sphere_lc.events import Event
+from sphere_lc.ids import EntityKind
+from sphere_lc.llm import MockLLMProvider
+from sphere_lc.state import AgentState, WorldState
+from sphere_lc.truth import TruthDetector, TruthLog, TruthRecord
 
 
 def _mk_state() -> WorldState:

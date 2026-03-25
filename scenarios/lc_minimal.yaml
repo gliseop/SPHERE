@@ -1,6 +1,6 @@
 version: 1
 title: "LC Minimal"
-description: "Минимальный пример сценария для MAGISTRY-LC."
+description: "Минимальный пример сценария для SPHERE-LC."
 seed: 42
 ticks: 3
 

@@ -1,8 +1,8 @@
-# Дизайн runtime-auditor для MAGISTRY-LC
+# Дизайн runtime-auditor для SPHERE-LC
 
 ## Цель документа
 
-Документ фиксирует технический дизайн отдельного runtime-аудитора для `magistry_lc`. Речь идёт не о post-hoc анализе и не о расширении существующего `ViolationOracle`, а о компоненте, который работает во время симуляции и влияет на мир как часть governance-режима.
+Документ фиксирует технический дизайн отдельного runtime-аудитора для `sphere_lc`. Речь идёт не о post-hoc анализе и не о расширении существующего `ViolationOracle`, а о компоненте, который работает во время симуляции и влияет на мир как часть governance-режима.
 
 Ключевое различие, на котором строится весь дизайн:
 
@@ -19,10 +19,10 @@
 
 Сейчас в проекте уже есть:
 
-- [arbiter.py](../src/magistry_lc/arbiter.py) — процессуальная проверка допустимости действий;
-- [dao.py](../src/magistry_lc/dao.py) — механизм голосований;
-- [ops.py](../src/magistry_lc/ops.py) — операции вроде `ModifyReputationOp`, `OpenVoteOp`;
-- [oracle.py](../src/magistry_lc/oracle.py) — post-hoc анализ нарушений по `events.jsonl`.
+- [arbiter.py](../src/sphere_lc/arbiter.py) — процессуальная проверка допустимости действий;
+- [dao.py](../src/sphere_lc/dao.py) — механизм голосований;
+- [ops.py](../src/sphere_lc/ops.py) — операции вроде `ModifyReputationOp`, `OpenVoteOp`;
+- [oracle.py](../src/sphere_lc/oracle.py) — post-hoc анализ нарушений по `events.jsonl`.
 
 Сейчас в проекте нет:
 
@@ -122,7 +122,7 @@
 
 Рекомендуемый файл:
 
-- [auditor.py](../src/magistry_lc/auditor.py)
+- [auditor.py](../src/sphere_lc/auditor.py)
 
 ### Основной класс
 
@@ -576,7 +576,7 @@ Post-hoc evaluator считает:
 
 ## Итоговое решение
 
-Для MAGISTRY-LC рекомендуется следующая схема:
+Для SPHERE-LC рекомендуется следующая схема:
 
 - `Arbiter` остаётся процессуальным слоем допустимости действий;
 - `RuntimeAuditor` добавляется как отдельный модуль online-detection;

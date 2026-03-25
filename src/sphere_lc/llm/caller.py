@@ -1,6 +1,6 @@
-"""LLM-обвязка для MAGISTRY-LC.
+"""LLM-обвязка для SPHERE-LC.
 
-Использует ``OpenAICompatibleProvider`` из пакета ``magistry_lc.llm``:
+Использует ``OpenAICompatibleProvider`` из пакета ``sphere_lc.llm``:
 - поддержка OpenAI-compatible API (включая OpenRouter);
 - опциональный ``provider_order`` для OpenRouter provider routing;
 - кеш/логирование/ретраи.

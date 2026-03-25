@@ -297,7 +297,7 @@ class _FakePopen:
 
 
 class TestLaunchSimulation:
-    """Тесты для запуска MAGISTRY-LC через subprocess."""
+    """Тесты для запуска SPHERE-LC через subprocess."""
 
     def test_launch_simulation_from_config_writes_input_and_registers_process(self, results_dir: Path):
         """launch_simulation_from_config создаёт input-config и регистрирует процесс."""
@@ -316,7 +316,7 @@ class TestLaunchSimulation:
         assert (run_dir / "_input_scenario.json").exists()
         assert run_name in runner._active
         proc = runner._active[run_name]
-        assert proc.cmd[:3] == [runner.sys.executable, "-m", "magistry_lc.cli"]
+        assert proc.cmd[:3] == [runner.sys.executable, "-m", "sphere_lc.cli"]
 
     def test_launch_simulation_from_config_applies_parallel_runtime_overrides(self, results_dir: Path):
         """Параллельные параметры попадают и в input-config, и в env subprocess."""
@@ -338,9 +338,9 @@ class TestLaunchSimulation:
         assert payload["runtime"]["parallel_agents"] is False
         assert payload["runtime"]["parallel_workers"] == 3
         assert payload["runtime"]["parallel_window_seconds"] == 90.0
-        assert proc.env["MAGISTRY_PARALLEL_AGENTS"] == "0"
-        assert proc.env["MAGISTRY_PARALLEL_WORKERS"] == "3"
-        assert proc.env["MAGISTRY_PARALLEL_WINDOW"] == "90.0"
+        assert proc.env["SPHERE_PARALLEL_AGENTS"] == "0"
+        assert proc.env["SPHERE_PARALLEL_WORKERS"] == "3"
+        assert proc.env["SPHERE_PARALLEL_WINDOW"] == "90.0"
 
     def test_launch_simulation_uses_template_loader(self, results_dir: Path):
         """launch_simulation загружает template-конфиг и делегирует в config-launcher."""

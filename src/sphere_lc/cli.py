@@ -1,4 +1,4 @@
-"""CLI для MAGISTRY-LC."""
+"""CLI для SPHERE-LC."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
     out_dir = Path(args.out) if args.out else Path("results") / datetime.now().strftime("%Y%m%d_%H%M%S")
     artifacts = default_artifacts(out_dir)
     engine = WorldEngine(cfg=cfg, artifacts=artifacts)
-    console.print(f"[bold]MAGISTRY-LC run[/bold] scenario={args.scenario} ticks={cfg.ticks} out={out_dir}")
+    console.print(f"[bold]SPHERE-LC run[/bold] scenario={args.scenario} ticks={cfg.ticks} out={out_dir}")
     asyncio.run(engine.run())
     console.print(
         f"[green]Done[/green] events={artifacts.events_path} trace={artifacts.trace_path} "
@@ -118,7 +118,7 @@ def _cmd_oracle(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     """Построить parser CLI."""
     parser = _SafeArgumentParser(
-        description="MAGISTRY-LC: greenfield-движок на LangChain/LangGraph"
+        description="SPHERE-LC: greenfield-движок на LangChain/LangGraph"
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 

@@ -1,4 +1,4 @@
-"""Движок симуляции MAGISTRY-LC."""
+"""Движок симуляции SPHERE-LC."""
 
 from __future__ import annotations
 

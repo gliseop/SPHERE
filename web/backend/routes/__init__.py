@@ -1,4 +1,4 @@
-"""Маршруты API MAGISTRY — агрегирующий пакет."""
+"""Маршруты API SPHERE — агрегирующий пакет."""
 
 from __future__ import annotations
 

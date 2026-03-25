@@ -4,16 +4,16 @@ import asyncio
 import json
 from pathlib import Path
 
-from magistry_lc.events import Event
-from magistry_lc.agent import AgentRunner
-from magistry_lc.config import MemoryConfig, RuntimeConfig, ScenarioConfig
-from magistry_lc.engine import RunArtifacts, WorldEngine
-from magistry_lc.entities import EntityRegistry
-from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
-from magistry_lc.persona import ExpertReflection, PersonaArtifact
-from magistry_lc.state import AgentState, WorkItem, WorldState
-from magistry_lc.tracing import TraceLog
-from magistry_lc.worldgen import WorldGenerator
+from sphere_lc.events import Event
+from sphere_lc.agent import AgentRunner
+from sphere_lc.config import MemoryConfig, RuntimeConfig, ScenarioConfig
+from sphere_lc.engine import RunArtifacts, WorldEngine
+from sphere_lc.entities import EntityRegistry
+from sphere_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
+from sphere_lc.persona import ExpertReflection, PersonaArtifact
+from sphere_lc.state import AgentState, WorkItem, WorldState
+from sphere_lc.tracing import TraceLog
+from sphere_lc.worldgen import WorldGenerator
 
 
 def _mk_cfg(

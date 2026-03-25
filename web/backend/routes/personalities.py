@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from magistry_lc.persona import INTERVIEW_QUESTIONS_V2
+from sphere_lc.persona import INTERVIEW_QUESTIONS_V2
 
 from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User
@@ -69,7 +69,7 @@ def _interview_generation_prompts(
     techniques = ", ".join(str(item).strip() for item in list(personality.get("neutralization_techniques") or []) if str(item).strip())
 
     system_prompt = (
-        "Ты — модуль генерации глубинного интервью личности для MAGISTRY.\n"
+        "Ты — модуль генерации глубинного интервью личности для SPHERE.\n"
         "Нужно вернуть:\n"
         "- ответы на все вопросы интервью;\n"
         "- отдельную экспертную интерпретацию от психолога;\n"

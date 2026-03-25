@@ -1,7 +1,7 @@
-"""Константы, ранее получавшиеся из magistry_sim.enums и magistry_sim.personality.
+"""Константы, ранее получавшиеся из удалённого legacy-пакета симуляции.
 
-После удаления magistry_sim значения перечислений вынесены сюда, чтобы
-web-backend мог продолжать работать для CRUD-операций без старого движка.
+После выноса движка в `sphere_lc` значения перечислений оставлены здесь, чтобы
+web-backend мог продолжать работать для CRUD-операций.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from enum import Enum
 
 
 class GovernanceMode(str, Enum):
-    """Режим управления организацией (зеркало бывшего magistry_sim.enums)."""
+    """Режим управления организацией (legacy enum для web CRUD)."""
 
     G0 = "G0"
     G1 = "G1"
@@ -24,7 +24,7 @@ class GovernanceMode(str, Enum):
 
 
 class ScenarioId(str, Enum):
-    """Идентификаторы встроенных сценариев (зеркало бывшего magistry_sim.enums)."""
+    """Идентификаторы встроенных сценариев (legacy enum для web CRUD)."""
 
     S0 = "S0"
     S1 = "S1"

@@ -3,30 +3,30 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
-    image: magistry-web:dev
+    image: sphere-web:dev
     ports:
       - "8765:8765"
     environment:
       PORT: 8765
-      MAGISTRY_DEV: ${MAGISTRY_DEV:-1}
+      SPHERE_DEV: ${SPHERE_DEV:-1}
       JWT_SECRET: ${JWT_SECRET:-}
       JWT_EXPIRE_HOURS: ${JWT_EXPIRE_HOURS:-24}
       ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:8765}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       OPENROUTER_PROVIDER_ORDER: ${OPENROUTER_PROVIDER_ORDER:-}
-      MAGISTRY_LLM_REQUEST_TIMEOUT_S: ${MAGISTRY_LLM_REQUEST_TIMEOUT_S:-30}
-      MAGISTRY_LLM_CALL_DEADLINE_S: ${MAGISTRY_LLM_CALL_DEADLINE_S:-30}
-      MAGISTRY_USERS_DB: /data/users.db
-      MAGISTRY_ADMIN_USERNAME: ${MAGISTRY_ADMIN_USERNAME:-magistry_admin}
-      MAGISTRY_ADMIN_PASSWORD: ${MAGISTRY_ADMIN_PASSWORD:-MagistryDocker123!}
-      MAGISTRY_ADMIN_ROLE: ${MAGISTRY_ADMIN_ROLE:-admin}
-      MAGISTRY_ADMIN_FORCE_UPDATE: ${MAGISTRY_ADMIN_FORCE_UPDATE:-1}
+      SPHERE_LLM_REQUEST_TIMEOUT_S: ${SPHERE_LLM_REQUEST_TIMEOUT_S:-30}
+      SPHERE_LLM_CALL_DEADLINE_S: ${SPHERE_LLM_CALL_DEADLINE_S:-30}
+      SPHERE_USERS_DB: /data/users.db
+      SPHERE_ADMIN_USERNAME: ${SPHERE_ADMIN_USERNAME:-sphere_admin}
+      SPHERE_ADMIN_PASSWORD: ${SPHERE_ADMIN_PASSWORD:-SphereDocker123!}
+      SPHERE_ADMIN_ROLE: ${SPHERE_ADMIN_ROLE:-admin}
+      SPHERE_ADMIN_FORCE_UPDATE: ${SPHERE_ADMIN_FORCE_UPDATE:-1}
     volumes:
       - ./results:/app/results
       - ./scenarios:/app/scenarios
       - ./data:/app/data
-      - magistry_users:/data
+      - sphere_users:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/').read()"]
@@ -36,4 +36,4 @@ services:
       start_period: 20s
 
 volumes:
-  magistry_users:
+  sphere_users:

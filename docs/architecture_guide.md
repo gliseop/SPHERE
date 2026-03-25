@@ -1,6 +1,6 @@
 # Навигатор по архитектуре
 
-Этот документ помогает ориентироваться в архитектуре MAGISTRY: карта модулей, зависимости между ними и путь данных в веб-интерфейсе. Документ не дублирует содержание кода, а указывает, куда читать.
+Этот документ помогает ориентироваться в архитектуре SPHERE: карта модулей, зависимости между ними и путь данных в веб-интерфейсе. Документ не дублирует содержание кода, а указывает, куда читать.
 
 ## Карта модулей
 
@@ -53,7 +53,7 @@ graph TB
         TRACING[tracing.py<br/>TraceLog JSONL]
         SCENARIO[scenario.py<br/>load/save YAML]
         GRAPHS[graphs.py<br/>LangGraph]
-        CLI[cli.py<br/>magistry-lc]
+        CLI[cli.py<br/>sphere-lc]
     end
 
     subgraph Веб["Веб-интерфейс"]
@@ -216,4 +216,4 @@ sequenceDiagram
     R->>Б: JSON (события, граф, мета)
 ```
 
-Браузер подключается по WebSocket после аутентификации. Сервер пакетирует события (по `MAGISTRY_WS_EVENT_BATCH_SIZE` штук каждые `MAGISTRY_WS_EVENT_BATCH_INTERVAL_S` секунд) и троттлит обновления графа (не чаще `MAGISTRY_LIVE_GRAPH_THROTTLE_S`). При подключении к уже идущей симуляции клиент получает буфер последних `MAGISTRY_LIVE_HISTORY_EVENTS` событий.
+Браузер подключается по WebSocket после аутентификации. Сервер пакетирует события (по `SPHERE_WS_EVENT_BATCH_SIZE` штук каждые `SPHERE_WS_EVENT_BATCH_INTERVAL_S` секунд) и троттлит обновления графа (не чаще `SPHERE_LIVE_GRAPH_THROTTLE_S`). При подключении к уже идущей симуляции клиент получает буфер последних `SPHERE_LIVE_HISTORY_EVENTS` событий.

@@ -1,4 +1,4 @@
-"""Персоны для MAGISTRY-LC (PersonaLibrary / PersonaGenerator).
+"""Персоны для SPHERE-LC (PersonaLibrary / PersonaGenerator).
 
 Персона в greenfield-ветке — это не одна строка, а набор артефактов:
 - краткая сводка (summary) для быстрого контекста;
@@ -514,7 +514,7 @@ class PersonaGenerator:
         language: str,
     ) -> PersonaArtifact:
         system = (
-            "Ты — генератор персоны агента для симуляции организационных процессов (MAGISTRY-LC).\n"
+            "Ты — генератор персоны агента для симуляции организационных процессов (SPHERE-LC).\n"
             "Сгенерируй:\n"
             "- краткую сводку (summary) 3–6 предложений;\n"
             "- биографию (biography) 1000–2000 слов.\n"
@@ -579,7 +579,7 @@ class PersonaGenerator:
             nonlocal structured_calls
             q_lines = "\n".join(f"{i+1}. {q}" for i, q in enumerate(qs))
             system = (
-                "Ты — генератор интервью персоны (MAGISTRY-LC).\n"
+                "Ты — генератор интервью персоны (SPHERE-LC).\n"
                 "Дай ответы на вопросы, каждый ответ 2–6 предложений.\n"
                 f"Пиши на языке: {language!r}.\n"
                 "Ответ: строго JSON по схеме.\n"
@@ -727,7 +727,7 @@ class PersonaGenerator:
     ) -> PersonaArtifact:
         questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(INTERVIEW_QUESTIONS_V2))
         system = (
-            "Ты — генератор персоны агента для симуляции организационных процессов (MAGISTRY-LC).\n"
+            "Ты — генератор персоны агента для симуляции организационных процессов (SPHERE-LC).\n"
             "Сгенерируй:\n"
             "- краткую сводку (summary) 3–6 предложений;\n"
             "- биографию (biography) 1000–2000 слов;\n"

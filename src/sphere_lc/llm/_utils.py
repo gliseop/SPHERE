@@ -56,7 +56,7 @@ def _project_root() -> Path:
 
 def _resolve_llm_log_path() -> Path | None:
     """Вернуть путь для debug-лога LLM, если логирование включено."""
-    explicit = (os.getenv("MAGISTRY_LLM_LOG_PATH") or "").strip()
+    explicit = (os.getenv("SPHERE_LLM_LOG_PATH") or "").strip()
     if explicit:
         return Path(explicit).expanduser()
     if not (_should_log_success() or _should_log_errors()):
@@ -65,12 +65,12 @@ def _resolve_llm_log_path() -> Path | None:
 
 
 def _should_log_success() -> bool:
-    return (os.getenv("MAGISTRY_LLM_LOG") or "").strip().lower() in ("1", "true", "yes", "on")
+    return (os.getenv("SPHERE_LLM_LOG") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _should_log_errors() -> bool:
     # По умолчанию пишем ошибки (не мусорит при нормальной работе, но помогает дебажить).
-    raw = (os.getenv("MAGISTRY_LLM_LOG_ERRORS") or "").strip()
+    raw = (os.getenv("SPHERE_LLM_LOG_ERRORS") or "").strip()
     if raw == "":
         return True
     return raw.lower() in ("1", "true", "yes", "on")

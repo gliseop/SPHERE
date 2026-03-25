@@ -1,4 +1,4 @@
-"""CLI управления учётными записями пользователей MAGISTRY.
+"""CLI управления учётными записями пользователей SPHERE.
 
 Использование:
     python -m web.backend.manage_users create --username admin --role admin
@@ -105,7 +105,7 @@ def cmd_change_role(args: argparse.Namespace) -> None:
 def main() -> None:
     """Точка входа CLI."""
     parser = argparse.ArgumentParser(
-        description="Управление пользователями MAGISTRY",
+        description="Управление пользователями SPHERE",
         prog="python -m web.backend.manage_users",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

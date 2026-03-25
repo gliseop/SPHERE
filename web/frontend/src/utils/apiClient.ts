@@ -4,7 +4,7 @@
  * При 401 очищает токен и перенаправляет на главную страницу.
  */
 
-const TOKEN_KEY = 'magistry_token'
+const TOKEN_KEY = 'sphere_token'
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
