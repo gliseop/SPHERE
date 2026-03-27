@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from pydantic import TypeAdapter, ValidationError
 
-from .actions import Action, ActionType, actions_json_schema
+from .actions import Action, agent_actions_json_schema
 from .config import MemoryConfig
 from .config import RuntimeConfig
 from .events import Event
@@ -26,7 +27,6 @@ from .utils import redact_numbers
 _WS_RE = re.compile(r"\s+")
 _ACTION_ADAPTER = TypeAdapter(Action)
 _ACTION_WORK_ID_RE = re.compile(r"'work_id': '([^']+)'")
-_ACTION_TO_ID_RE = re.compile(r"'to_id': '([^']+)'")
 
 
 def _norm(text: str) -> str:
@@ -34,7 +34,13 @@ def _norm(text: str) -> str:
 
 
 def _truncate(text: str, max_chars: int) -> str:
-    text = text.strip()
+    if isinstance(text, str):
+        rendered = text
+    elif isinstance(text, (dict, list, tuple)):
+        rendered = json.dumps(text, ensure_ascii=False, sort_keys=True)
+    else:
+        rendered = str(text)
+    text = _norm(rendered)
     if len(text) <= max_chars:
         return text
     return text[: max(0, max_chars - 1)].rstrip() + "…"
@@ -321,6 +327,9 @@ def _recent_rejection_hints(visible_events: list[Event]) -> list[str]:
         elif reason.startswith("public_message_requires_chan_or_org_target:"):
             to_id = reason.split(":", 1)[1].strip()
             hint = f"private=false нельзя использовать для {to_id}; публичные сообщения адресуются только chan:* или org:*"
+        elif reason.startswith("private_contact_requires_shared_zone:"):
+            zones = reason.split(":", 1)[1].strip()
+            hint = f"для приватного контакта нужно пространственное пересечение; текущие зоны не совпадают ({zones})"
         elif reason.startswith("missing_capability:work"):
             match = _ACTION_WORK_ID_RE.search(action)
             if match:
@@ -328,10 +337,6 @@ def _recent_rejection_hints(visible_events: list[Event]) -> list[str]:
                     f"у тебя нет capability work; не пытайся работать с {match.group(1)} "
                     "через create_work_item/add_work_note/submit_work_proposal"
                 )
-        elif reason.startswith("missing_capability:message"):
-            match = _ACTION_TO_ID_RE.search(action)
-            if match:
-                hint = f"у тебя нет capability message; не пытайся отправлять сообщения в {match.group(1)}"
         if not hint or hint in seen:
             continue
         seen.add(hint)
@@ -428,34 +433,6 @@ class AgentRunner:
         max_actions = max(1, int(max_actions_override or self.runtime.max_actions_per_turn))
         votes_line = f"- Open votes: {vote_ids}\n"
 
-        # Строим список доступных типов действий на основе capabilities.
-        action_types: list[str] = []
-        if "message" in agent.capabilities:
-            action_types.append("send_message (to_id, text, private) — отправить приватное сообщение агенту (private=true) или публичное в канал/орг (private=false, to_id=chan:*/org:*)")
-            action_types.append("publish (channel_id, text) — опубликовать сообщение в канале")
-        if "work" in agent.capabilities:
-            action_types.append("create_work_item (work_type, title, description, participants) — создать дело/задачу")
-            action_types.append("add_work_note (work_id, text) — добавить заметку к делу")
-            action_types.append("submit_work_proposal (work_id, text) — подать предложение по делу")
-        if "dao" in agent.capabilities:
-            action_types.append("nominate_position_change (target_agent_id, new_title, reason) — номинировать на должность")
-            action_types.append("cast_vote (vote_id, choice: yes/no/abstain) — проголосовать")
-        action_types.append("respond_nomination (vote_id, accept: true/false) — принять/отклонить номинацию")
-        if "spawn" in agent.capabilities:
-            action_types.append(
-                "spawn_agent (slug, name, internal, persona_hint, capabilities) — ввести нового участника с базовой персоной"
-            )
-        action_types.append("perform (description, target_id) — свободное действие (когда нет подходящего типа выше)")
-        if agent.internal or not self.runtime.request_entity_internal_only:
-            action_types.append("request_entity (kind: org/chan, slug, description) — запросить создание организации/канала")
-        action_types.append("noop — пропустить ход")
-        actions_block = "\n".join(f"  - {a}" for a in action_types)
-        request_entity_rule = (
-            "- не выдумывай новые ID; если нужна новая организация/канал — используй request_entity\n"
-            if (agent.internal or not self.runtime.request_entity_internal_only)
-            else ""
-        )
-
         return (
             f"Раунд (tick): {state.tick}\n"
             f"Ты: {agent.name} ({agent.agent_id}).\n"
@@ -483,21 +460,22 @@ class AgentRunner:
             f"{pending_interactions_brief}"
             f"{spawn_context_brief}"
             f"Память:\n{mem_text}\n\n"
-            "Доступные типы действий:\n"
-            f"{actions_block}\n\n"
+            "Формат ответа:\n"
+            "- Основной путь: `perform(description, target_id?)`.\n"
+            "- Если осмысленного шага нет: `noop`.\n"
+            "- Не выбирай из меню формальных команд. Описывай намерение как свободное действие, а арбитр сам переведёт его в формальные последствия мира.\n"
+            "- Если нужен формальный эффект, всё равно описывай его как намерение обычного участника процесса: поговорить, подать, сообщить, инициировать, проголосовать, ответить, попросить создать канал, донести документ, вывести вопрос на рассмотрение.\n\n"
             f"{(turn_note.strip() + chr(10)) if turn_note else ''}"
             "Сгенерируй действия на этот тик.\n"
             f"Правила:\n"
             f"- максимум {max_actions} действий\n"
             "- если упоминаешь даты или сроки, не противоречь канонической дате мира\n"
-            "- структурированные действия — это формальные каналы, но они не обязательны во всех ситуациях\n"
-            "- если реальный шаг лучше описывается неформально (намёк, давление, просьба, скрытая договорённость, обходной ход), используй perform\n"
+            "- каждое осмысленное действие описывай через `perform`; это основной интерфейс\n"
             "- избегай ритуальных повторов: не дублируй один и тот же формальный ход без нового эффекта или новой ставки\n"
             "- предпочитай действия, которые реально меняют ситуацию, а не только повторно фиксируют уже известное\n"
-            f"{request_entity_rule}"
-            "- если у тебя есть capability spawn, создавай новых агентов только через spawn_agent и с кратким persona_hint\n"
+            "- не выдумывай новые typed-id; используй только реально существующие сущности мира\n"
             "- самономинация на должность запрещена; инициировать голосование можно только за другого агента\n"
-            "- цель голосования не голосует сама за себя; если тебя номинировали, используй respond_nomination\n"
+            "- цель голосования не голосует сама за себя; если тебя номинировали, явно опиши согласие или отказ как свободное действие\n"
             "- если контекст дня и формальная процедура конфликтуют, ты вправе выбрать любой правдоподобный путь\n"
         )
 
@@ -618,7 +596,7 @@ class AgentRunner:
     ) -> list[Action]:
         """Сгенерировать список действий агента на тик."""
         max_actions = max(1, int(max_actions_override or self.runtime.max_actions_per_turn))
-        schema = actions_json_schema(max_actions=max_actions)
+        schema = agent_actions_json_schema(max_actions=max_actions)
         system = self._build_system(agent)
         mem_text = await self._render_memory(agent=agent, state=state, visible_events=visible_events)
         user = self._build_user(

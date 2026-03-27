@@ -534,14 +534,19 @@ class Arbiter:
             return ActionResult(action_index, False, temporal_error, [])
 
         if isinstance(action, SendMessageAction):
-            missing = _require("message")
-            if missing:
-                return ActionResult(action_index, False, missing, [])
             if not state.registry.exists(action.to_id):
                 return ActionResult(action_index, False, f"unknown to_id: {action.to_id}", [])
             target_error = self._validate_message_target(to_id=action.to_id, private=bool(action.private))
             if target_error:
                 return ActionResult(action_index, False, target_error, [])
+            contact_error = self._validate_private_contact_feasibility(
+                state=state,
+                from_id=agent_id,
+                to_id=action.to_id,
+                private=bool(action.private),
+            )
+            if contact_error:
+                return ActionResult(action_index, False, contact_error, [])
             return ActionResult(
                 action_index,
                 True,
@@ -557,9 +562,6 @@ class Arbiter:
             )
 
         if isinstance(action, PublishAction):
-            missing = _require("message")
-            if missing:
-                return ActionResult(action_index, False, missing, [])
             if not state.registry.exists(action.channel_id):
                 return ActionResult(action_index, False, f"unknown channel_id: {action.channel_id}", [])
             return ActionResult(
@@ -831,6 +833,8 @@ class Arbiter:
             "которые детерминированно изменят мир.\n"
             "Политика должностей: только через DAO (vote + consent). Не меняй должности напрямую.\n"
             "Нельзя выдумывать новых агентов. Нельзя писать приватно неизвестным ID.\n"
+            "Базовая коммуникация агента не требует отдельного capability: send_message можно использовать как естественное действие,\n"
+            "но оно всё равно подчиняется физике мира, typed-id и пространственным ограничениям.\n"
             f"Actor capabilities: {sorted(agent_caps)}\n"
             "ВАЖНО: в op_type используй только snake_case-значения из JSON-схемы, а не Python-классы вроде SendMessageOp.\n"
             "Ответ: только JSON по схеме.\n"
@@ -925,8 +929,6 @@ class Arbiter:
     @staticmethod
     def _missing_capability_for_op(op: StateOp, caps: set[str]) -> str | None:
         """Вернуть недостающую capability для op (или None)."""
-        if isinstance(op, SendMessageOp) and "message" not in caps:
-            return "message"
         if isinstance(op, (CreateWorkItemOp, AddWorkNoteOp, SubmitWorkProposalOp)) and "work" not in caps:
             return "work"
         if isinstance(op, (OpenVoteOp, CastVoteOp)) and "dao" not in caps:
@@ -943,6 +945,24 @@ class Arbiter:
             return f"private_message_requires_agent_target:{to_id}"
         if not private and target_kind not in (EntityKind.CHANNEL, EntityKind.ORG):
             return f"public_message_requires_chan_or_org_target:{to_id}"
+        return None
+
+    @staticmethod
+    def _validate_private_contact_feasibility(
+        *,
+        state: WorldState,
+        from_id: str,
+        to_id: str,
+        private: bool,
+    ) -> str | None:
+        if not private:
+            return None
+        sender = state.agents.get(from_id)
+        recipient = state.agents.get(to_id)
+        if sender is None or recipient is None:
+            return None
+        if sender.zone_id and recipient.zone_id and sender.zone_id != recipient.zone_id:
+            return f"private_contact_requires_shared_zone:{sender.zone_id}!={recipient.zone_id}"
         return None
 
     @staticmethod
@@ -1010,6 +1030,14 @@ class Arbiter:
             )
             if target_error:
                 raise ValueError(target_error)
+            contact_error = self._validate_private_contact_feasibility(
+                state=state,
+                from_id=agent_id,
+                to_id=to_id,
+                private=bool(args.get("private", True)),
+            )
+            if contact_error:
+                raise ValueError(contact_error)
             return [
                 SendMessageOp(
                     from_id=agent_id,

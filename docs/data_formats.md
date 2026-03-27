@@ -212,7 +212,7 @@ scripted_events:
 | `spawn_secondary` | `bool` | Извлекать вторичных агентов из социального графа биографий до первого тика |
 | `max_secondary_per_agent` | `int` | Лимит социальных связей, извлекаемых из одной персоны |
 | `max_agents` | `int` | Общий потолок на количество агентов в мире |
-| `allow_runtime_spawn` | `bool` | Разрешить `spawn_agent` и worldgen-spawn в ходе симуляции |
+| `allow_runtime_spawn` | `bool` | Разрешить legacy/runtime-spawn и worldgen-spawn в ходе симуляции; основной когнитивный интерфейс агента при этом остаётся freeform |
 | `request_entity_internal_only` | `bool` | При `true` только внутренние акторы могут создавать `chan:*`/`org:*` через `request_entity` |
 | `ecology_activation_window_ticks` | `int` | Если `> 0`, не-core ecology-акторы ходят только при недавней релевантности |
 | `worldgen_allow_internal_spawns` | `bool` | Разрешить worldgen порождать внутренних акторов; по умолчанию выключено |
@@ -442,14 +442,16 @@ Post-worldgen может дополнительно вернуть `environment_
 
 ### Полномочия агентов
 
-| Полномочие | Действия |
+| Полномочие | Где реально используется |
 |---|---|
-| `message` | `send_message`, `publish` |
-| `work` | `create_work_item`, `add_work_note`, `submit_work_proposal` |
-| `dao` | `nominate_position_change`, `cast_vote` |
-| `spawn` | `spawn_agent` — создать нового участника в рантайме |
+| `message` | legacy/internal typed-ops и совместимость старых сценариев; базовая коммуникация больше не должна рассматриваться как отдельный capability-gate |
+| `work` | внутренние work-операции арбитра (`create_work_item`, `add_work_note`, `submit_work_proposal`) |
+| `dao` | внутренние DAO-операции арбитра (`nominate_position_change`, `cast_vote`) |
+| `spawn` | legacy/runtime `spawn_agent` для совместимости и системных сценариев |
 
 Нарративные агенты с capability `audit` больше не поддерживаются. Аудит выполняется отдельным runtime-layer (`RuntimeAuditor`), а не обычным `AgentRunner`.
+
+Когнитивный агент в нормальном режиме больше не выбирает typed action из меню. Он возвращает только freeform `perform`/`noop`, а арбитр уже материализует это намерение во внутренние typed operations.
 
 Вторичные и runtime-спавненные агенты проходят фильтрацию capability-набора: движок оставляет только безопасный поднабор `message`/`work`, чтобы новые агенты не получали специальных governance-полномочий или право порождать следующих агентов.
 
@@ -496,7 +498,7 @@ Runtime-аудит реализован отдельным модулем `audit
 | `case_repeat_escalation_threshold` | `int` | После скольких эпизодов повторяющийся кейс автоматически уходит в review/monitoring |
 | `external_subject_confidence_cap` | `float` | Верхняя граница confidence для внешних субъектов finding’ов |
 | `reputation_freeze_enabled` | `bool` | Разрешить `SetReputationFreezeOp` |
-| `reputation_penalty_delta` | `float \| null` | Опциональный отрицательный штраф к репутации |
+| `reputation_penalty_delta` | `float \| null` | Legacy/custom поле; built-in `G0–G3` больше не используют штрафную семантику |
 | `collegial_review_enabled` | `bool` | Разрешить route в `audit_review` |
 | `review_jury_size` | `int` | Размер review-jury для collegial review |
 

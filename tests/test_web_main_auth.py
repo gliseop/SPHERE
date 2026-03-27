@@ -936,6 +936,29 @@ def test_template_scenario_returns_normalized_config(tmp_path: Path):
     assert payload["ticks"] == 6
     assert payload["governance"]["audit"]["enabled"] is True
     assert payload["governance"]["audit"]["reputation_freeze_enabled"] is True
+    assert payload["governance"]["audit"]["collegial_review_enabled"] is False
+
+
+def test_template_scenario_maps_g3_to_collegial_review(tmp_path: Path):
+    (tmp_path / "seed_s1_g1.json").write_text(
+        json.dumps(_template_config(title="Прямой сговор", ticks=4), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            r = client.get(
+                "/api/templates/scenarios/S1?governance=G3",
+                headers={"Authorization": f"Bearer {viewer_token()}"},
+            )
+
+    assert r.status_code == 200
+    payload = r.json()
+    audit = payload["governance"]["audit"]
+    assert audit["enabled"] is True
+    assert audit["reputation_freeze_enabled"] is True
+    assert audit["collegial_review_enabled"] is True
+    assert audit["reputation_penalty_delta"] is None
 
 
 def test_template_scenario_applies_custom_governance_mode(tmp_path: Path):

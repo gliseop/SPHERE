@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from sphere_lc.config import AgentConfig, ChannelConfig, GovernanceConfig, ScenarioConfig
+from sphere_lc.governance_modes import apply_builtin_governance_mode, infer_builtin_governance_mode
 from sphere_lc.ids import EntityKind, make_id, normalize_slug
 from sphere_lc.persona import PersonaArtifact
 from sphere_lc.scenario import save_scenario
@@ -39,6 +40,7 @@ _TEMPLATE_FILE_MAP = {
     "S0": "seed_s0_g0.json",
     "S1": "seed_s1_g1.json",
     "S2": "seed_s2_g2.json",
+    "S3": "seed_s3_g3.json",
 }
 _BUILTIN_SCENARIO_FILES = frozenset(_TEMPLATE_FILE_MAP.values())
 _GOVERNANCE_METADATA_KEYS = frozenset({"id", "label", "description", "custom"})
@@ -194,38 +196,12 @@ def _ensure_default_public_channel(cfg: ScenarioConfig) -> None:
     cfg.world.channels.insert(0, ChannelConfig.model_validate(_DEFAULT_PUBLIC_CHANNEL))
 
 
-def _apply_builtin_governance_mode(cfg: ScenarioConfig, normalized: str) -> None:
-    audit = cfg.governance.audit
-    audit.mode = "rules"
-    if normalized == "G0":
-        audit.enabled = False
-        audit.reputation_freeze_enabled = False
-        audit.reputation_penalty_delta = None
-    elif normalized == "G1":
-        audit.enabled = True
-        audit.reputation_freeze_enabled = False
-        audit.reputation_penalty_delta = None
-    elif normalized == "G2":
-        audit.enabled = True
-        audit.reputation_freeze_enabled = True
-        audit.reputation_penalty_delta = None
-    else:
-        audit.enabled = True
-        audit.reputation_freeze_enabled = True
-        audit.reputation_penalty_delta = (
-            float(audit.reputation_penalty_delta)
-            if audit.reputation_penalty_delta is not None
-            else -0.75
-        )
-    cfg.governance.audit = audit
-
-
 def _apply_governance_mode(cfg: ScenarioConfig, governance_mode: str | None) -> None:
     normalized = (governance_mode or "").strip().upper()
     if not normalized:
         return
     if normalized in BUILTIN_GOVERNANCE_IDS:
-        _apply_builtin_governance_mode(cfg, normalized)
+        apply_builtin_governance_mode(cfg, normalized)
         return
 
     raw = _load_governance_mode_record(normalized)
@@ -482,14 +458,7 @@ def _infer_governance_mode(cfg: ScenarioConfig) -> str:
         if candidate.model_dump(mode="json") == current:
             return mode_id
 
-    audit = cfg.governance.audit
-    if not audit.enabled:
-        return "G0"
-    if audit.reputation_penalty_delta is not None:
-        return "G3"
-    if audit.reputation_freeze_enabled:
-        return "G2"
-    return _DEFAULT_GOVERNANCE_MODE
+    return infer_builtin_governance_mode(cfg, default_mode=_DEFAULT_GOVERNANCE_MODE)
 
 
 def _to_ui_agent_id(agent_id: str, *, fallback: str) -> str:

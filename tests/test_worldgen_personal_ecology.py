@@ -892,7 +892,8 @@ def test_agent_prompt_includes_story_state_daily_context_and_soft_perform(tmp_pa
     assert "Контекст начала дня:" in prompt
     assert "Личная линия (story state):" not in prompt  # story_state идёт через память/мотивацию, не как отдельный дубль
     assert "Лёгкие контакты не имеют typed-id" in prompt
-    assert "если реальный шаг лучше описывается неформально" in prompt
+    assert "Основной путь: `perform(description, target_id?)`." in prompt
+    assert "каждое осмысленное действие описывай через `perform`" in prompt
     assert "ПРЕДПОЧИТАЙ структурированные действия" not in prompt
 
 

@@ -120,13 +120,14 @@ const FALLBACK_SCENARIOS: TemplateScenario[] = [
   { id: 'S0', title: 'Чистая сделка' },
   { id: 'S1', title: 'Прямой сговор' },
   { id: 'S2', title: 'Кумовство при найме' },
+  { id: 'S3', title: 'Кумовство при найме: коллегиальное review' },
 ]
 
 const FALLBACK_GOVERNANCE: GovernanceModeItem[] = [
   { id: 'G0', label: 'G0 — Без контроля' },
   { id: 'G1', label: 'G1 — Аудитор (рекомендательный)' },
-  { id: 'G2', label: 'G2 — Аудитор (санкции по репутации)' },
-  { id: 'G3', label: 'G3 — Полный контроль (трибунал)' },
+  { id: 'G2', label: 'G2 — Аудитор (freeze роста репутации)' },
+  { id: 'G3', label: 'G3 — Аудитор + коллегиальное review' },
 ]
 
 export function ScenariosView({ onLaunch, onGoLive, user }: {

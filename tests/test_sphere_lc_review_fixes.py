@@ -123,7 +123,7 @@ class _FailingProposeProvider(MockLLMProvider):
         return super().generate_structured(system, user, schema, temperature)
 
 
-def test_arbiter_enforces_message_capability(tmp_path: Path) -> None:
+def test_arbiter_allows_basic_communication_without_message_capability(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=[], off_2_caps=["message"])
     arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
 
@@ -135,8 +135,8 @@ def test_arbiter_enforces_message_capability(tmp_path: Path) -> None:
         justification="",
     )
     res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
-    assert res[0].approved is False
-    assert "missing_capability:message" in res[0].reason
+    assert res[0].approved is True
+    assert res[0].reason == "send_message"
 
 
 def test_arbiter_rejects_private_message_to_non_agent_target(tmp_path: Path) -> None:
@@ -153,6 +153,30 @@ def test_arbiter_rejects_private_message_to_non_agent_target(tmp_path: Path) -> 
     res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
     assert res[0].approved is False
     assert "private_message_requires_agent_target" in res[0].reason
+
+
+def test_arbiter_rejects_private_message_across_known_zones(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=[], off_2_caps=[])
+    state.agents["agent:off_1"].zone_id = "zone:left"
+    state.agents["agent:off_2"].zone_id = "zone:right"
+    state.registry.register(
+        EntityRecord(entity_id="zone:left", kind=EntityKind.ZONE, created_by=None, created_tick=0)
+    )
+    state.registry.register(
+        EntityRecord(entity_id="zone:right", kind=EntityKind.ZONE, created_by=None, created_tick=0)
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+
+    act = SendMessageAction(
+        type=ActionType.SEND_MESSAGE,
+        to_id="agent:off_2",
+        text="hi",
+        private=True,
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+    assert res[0].approved is False
+    assert "private_contact_requires_shared_zone" in res[0].reason
 
 
 def test_arbiter_rejects_public_message_to_non_channel_target(tmp_path: Path) -> None:
@@ -1431,7 +1455,9 @@ def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path
     )
 
     assert "Open votes: vote:1" in prompt
-    assert "respond_nomination (vote_id, accept: true/false)" in prompt
+    assert "Основной путь: `perform(description, target_id?)`." in prompt
+    assert "если тебя номинировали, явно опиши согласие или отказ как свободное действие" in prompt
+    assert "respond_nomination (vote_id, accept: true/false)" not in prompt
 
 
 def test_langgraph_world_graph_supports_checkpoint_path(tmp_path: Path) -> None:

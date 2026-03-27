@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "title": "Кумовство при найме",
-  "description": "Найм сотрудника с давлением со стороны внутренних связей. Runtime-аудит в G2 может замораживать траекторию доверия к участникам процесса.",
+  "title": "Кумовство при найме: коллегиальное review",
+  "description": "Найм сотрудника с давлением со стороны внутренних связей. Runtime-аудит в G3 сочетает freeze роста репутации с коллегиальным review спорных кейсов.",
   "seed": 99,
   "ticks": 25,
   "governance": {
@@ -9,7 +9,7 @@
       "enabled": true,
       "actor_id": null,
       "reputation_freeze_enabled": true,
-      "collegial_review_enabled": false,
+      "collegial_review_enabled": true,
       "reputation_penalty_delta": null
     }
   },

@@ -168,7 +168,14 @@ Web launcher запускает `sphere_lc` как отдельный subprocess
 | GET | `/api/templates/governance` | Шаблоны режимов управления |
 | GET | `/api/debug/llm-log` | Журнал LLM-вызовов |
 
-Шаблоны сценариев собираются из поддерживаемых `seed_s*_g*.json` сценариев репозитория, которые также хранятся как валидный `ScenarioConfig`. Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G*` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора. Для built-in режимов (`G0..G3`) backend применяет жёстко заданные пресеты; для пользовательских `G*` он загружает конфиг из `data/governance_modes/{id}.json`.
+Шаблоны сценариев собираются из поддерживаемых `seed_s*_g*.json` сценариев репозитория, которые также хранятся как валидный `ScenarioConfig` (включая built-in `S3 -> seed_s3_g3.json` для коллегиального review). Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G*` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора. Для built-in режимов (`G0..G3`) backend теперь использует canonical mapping из `sphere_lc.governance_modes`:
+
+- `G0`: аудит выключен;
+- `G1`: аудит включён, но без freeze и без collegial review;
+- `G2`: аудит включён, freeze включён, collegial review выключен;
+- `G3`: аудит включён, freeze включён, collegial review включён.
+
+Для пользовательских `G*` backend по-прежнему загружает конфиг из `data/governance_modes/{id}.json`.
 Идентификатор `governance` валидируется как безопасный library-id: backend не читает произвольные JSON-файлы вне `data/governance_modes/`, даже если в query передать path-like строку.
 
 ### WebSocket-протокол

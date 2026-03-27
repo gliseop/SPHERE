@@ -79,8 +79,8 @@ const FALLBACK_SCENARIOS: TemplateScenario[] = [
 const FALLBACK_GOVERNANCE: GovernanceModeItem[] = [
   { id: 'G0', label: 'G0 — Без контроля' },
   { id: 'G1', label: 'G1 — Аудитор (рекомендательный)' },
-  { id: 'G2', label: 'G2 — Аудитор (санкции по репутации)' },
-  { id: 'G3', label: 'G3 — Полный контроль (трибунал)' },
+  { id: 'G2', label: 'G2 — Аудитор (freeze роста репутации)' },
+  { id: 'G3', label: 'G3 — Аудитор + коллегиальное review' },
 ]
 
 export function RunsView({ onPlayback, onOpenRun, onLive, speed, mode, user, activeRuns }: Props) {

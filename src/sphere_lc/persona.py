@@ -445,7 +445,6 @@ class SocialGraphExtractor:
         if not isinstance(raw_links, list):
             return []
 
-        existing_name_keys = {social_link_name_key(name) for name in existing_agent_names if social_link_name_key(name)}
         links: list[SocialLink] = []
         for item in raw_links:
             if not isinstance(item, dict):
@@ -454,8 +453,6 @@ class SocialGraphExtractor:
             relation = str(item.get("relation") or "").strip()
             persona_hint = str(item.get("persona_hint") or "").strip()
             if not name or not relation or not persona_hint:
-                continue
-            if social_link_name_key(name) in existing_name_keys:
                 continue
             links.append(
                 SocialLink(

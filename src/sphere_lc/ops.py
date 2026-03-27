@@ -191,6 +191,18 @@ class SendMessageOp:
         # Private сообщения разрешены только агентам.
         if self.private:
             ensure_kind(self.to_id, EntityKind.AGENT)
+            sender = state.agents.get(self.from_id)
+            recipient = state.agents.get(self.to_id)
+            if sender is None or recipient is None:
+                raise ValueError("Private message requires agent sender and recipient")
+            if (
+                sender.zone_id is not None
+                and recipient.zone_id is not None
+                and sender.zone_id != recipient.zone_id
+            ):
+                raise ValueError(
+                    f"private_contact_requires_shared_zone:{self.from_id}:{self.to_id}:{sender.zone_id}!={recipient.zone_id}"
+                )
             audience = [self.from_id, self.to_id]
         else:
             # Публикация в канал (chan:*) или org:* трактуем как "public-ish".
@@ -1358,18 +1370,22 @@ class OpenVoteOp:
             "new_title": self.new_title,
             "reason": self.reason,
             "summary": self.summary,
-            "voters": list(self.voters),
             "closes_tick": self.closes_tick,
         }
+        if self.vote_type != "audit_review":
+            payload["voters"] = list(self.voters)
         if self.metadata:
             payload["metadata"] = dict(self.metadata)
+        vote_opened_audience = [INTERNAL_AUDIENCE]
+        if self.vote_type == "audit_review":
+            vote_opened_audience = list(self.voters)
         events = [
             Event(
                 tick=state.tick,
                 event_type="vote_opened",
                 actor_id=self.created_by,
                 payload=payload,
-                audience=[INTERNAL_AUDIENCE],
+                audience=vote_opened_audience,
             )
         ]
         if self.vote_type == "audit_review":

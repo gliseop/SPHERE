@@ -700,7 +700,7 @@ class RuntimeAuditor:
                 "risk_family": finding.risk_family,
                 "route": "collegial_review",
                 "review_vote_id": vote_id,
-                "reviewers": list(reviewers),
+                "reviewer_count": len(reviewers),
             },
             audience=[INTERNAL_AUDIENCE],
         )
@@ -720,6 +720,12 @@ class RuntimeAuditor:
             agent = state.agents[aid]
             if not agent.internal or "dao" not in agent.capabilities:
                 continue
+            if self._has_conflicting_informal_link(
+                state=state,
+                candidate_agent_id=aid,
+                exclude_agent_ids=exclude_agent_ids,
+            ):
+                continue
             candidates.append(aid)
         if len(candidates) <= self.cfg.review_jury_size:
             return candidates
@@ -727,6 +733,26 @@ class RuntimeAuditor:
         picked = list(candidates)
         rnd.shuffle(picked)
         return sorted(picked[: self.cfg.review_jury_size])
+
+    @staticmethod
+    def _has_conflicting_informal_link(
+        *,
+        state: WorldState,
+        candidate_agent_id: str,
+        exclude_agent_ids: set[str],
+    ) -> bool:
+        for link in state.environment.informal_links.values():
+            if candidate_agent_id not in {link.agent_a_id, link.agent_b_id}:
+                continue
+            counterpart = link.agent_b_id if link.agent_a_id == candidate_agent_id else link.agent_a_id
+            if counterpart not in exclude_agent_ids:
+                continue
+            if float(link.strength) >= 0.55:
+                return True
+            visibility = str(link.visibility or "").strip().lower()
+            if visibility in {"visible", "known", "open", "explicit"}:
+                return True
+        return False
 
     def _state_snapshot(self, state: WorldState) -> dict[str, Any]:
         agents = []

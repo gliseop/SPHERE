@@ -10,6 +10,7 @@ graph TB
         ENGINE[engine.py<br/>WorldEngine]
         STATE[state.py<br/>WorldState]
         CONFIG[config.py<br/>ScenarioConfig]
+        GMODES[governance_modes.py<br/>Builtin G0-G3 mapping]
         IDS[ids.py<br/>TypedId, EntityKind]
         ENTITIES[entities.py<br/>EntityRegistry]
         IDALLOC[id_alloc.py<br/>IdAllocator]
@@ -19,7 +20,7 @@ graph TB
     subgraph Агент["Агент"]
         AGENT[agent.py<br/>AgentRunner]
         MEMORY[memory.py<br/>AgentMemory]
-        ACTIONS[actions.py<br/>Action + spawn_agent + perform]
+        ACTIONS[actions.py<br/>Action + freeform agent schema + perform]
         PERSONA[persona.py<br/>PersonaArtifact + SocialGraphExtractor]
         BM25[bm25.py<br/>BM25]
     end
@@ -69,6 +70,7 @@ graph TB
     ENGINE --> ARBITER
     ENGINE --> AUDITOR
     ENGINE --> OPS
+    ENGINE --> GMODES
     ENGINE --> EVENTS
     ENGINE --> WORLDGEN
 
@@ -115,8 +117,9 @@ graph TB
 |---|---|
 | Как устроен тик симуляции | `engine.py` → `WorldEngine.run()`; обрати внимание на environment init/snapshot + scripted events + pending queues + pre/post worldgen |
 | Как агент принимает решение | `agent.py` → `AgentRunner`, `memory.py` → гибридный retrieval |
-| Какие действия доступны агенту | `actions.py` → structured actions, `spawn_agent`, `perform` |
-| Как арбитр проверяет действия | `arbiter.py` → полномочия + антифантомы + LLM-perform |
+| Какие действия доступны когнитивному агенту | `agent.py` → freeform `perform` / `noop`, `actions.py` → `agent_actions_json_schema()` |
+| Как арбитр проверяет действия | `arbiter.py` → антифантомы + пространственные ограничения + LLM-perform |
+| Где зафиксирована canonical семантика `G0–G3` | `governance_modes.py` → built-in mapping для runtime/web/launcher |
 | Как runtime-аудитор выявляет сигналы риска | `auditor.py` → LLM-first detection + deterministic actuator + collegial review, включая queue-driven complaint/media obligations |
 | Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра, включая environment-layer, `art:*`-артефакты и informal links |
 | Как устроено DAO-голосование | `dao.py` → кворум, порог, закрытие голосования |
@@ -159,7 +162,7 @@ sequenceDiagram
     E->>A: decide(agent, state, tick, context-layer)
     A->>M: retrieve(situation)
     M-->>A: релевантные воспоминания
-    A-->>E: Action[]
+    A-->>E: freeform Action[] (`perform` / `noop`)
 
     loop Каждое действие
         E->>Arb: evaluate(action, state)
@@ -178,7 +181,7 @@ sequenceDiagram
     E->>Aud: inspect_tick(tick_events, recent_events)
     Aud-->>E: audit events + StateOp[]
     E->>O: apply(audit ops, state)
-    O->>S: update reputation freeze/penalties
+    O->>S: update reputation freeze / review effects
     O-->>E: Event
     E->>EL: запись audit-событий
 

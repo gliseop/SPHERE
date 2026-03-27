@@ -8,6 +8,7 @@
     "audit": {
       "enabled": false,
       "reputation_freeze_enabled": false,
+      "collegial_review_enabled": false,
       "reputation_penalty_delta": null
     }
   },

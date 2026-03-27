@@ -55,7 +55,8 @@ governance:
     min_confidence_to_freeze: 0.85
     freeze_duration_ticks: 4
     reputation_freeze_enabled: true
-    reputation_penalty_delta: -0.75
+    collegial_review_enabled: true
+    reputation_penalty_delta: null
 
 agents:
   - agent_id: "agent:head"

@@ -46,6 +46,7 @@ governance:
   audit:
     enabled: true
     actor_id: null
+    collegial_review_enabled: true
 
 agents:
   - agent_id: "agent:head"
