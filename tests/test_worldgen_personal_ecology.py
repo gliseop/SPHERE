@@ -892,9 +892,46 @@ def test_agent_prompt_includes_story_state_daily_context_and_soft_perform(tmp_pa
     assert "Контекст начала дня:" in prompt
     assert "Личная линия (story state):" not in prompt  # story_state идёт через память/мотивацию, не как отдельный дубль
     assert "Лёгкие контакты не имеют typed-id" in prompt
-    assert "Основной путь: `perform(description, target_id?)`." in prompt
-    assert "каждое осмысленное действие описывай через `perform`" in prompt
+    assert "Верни одно поле `proposal` со свободным описанием своего хода на этот тик." in prompt
+    assert "Не используй menu/action-type, не пиши `perform`, `noop`, enum-значения" in prompt
     assert "ПРЕДПОЧИТАЙ структурированные действия" not in prompt
+
+
+def test_agent_runner_wraps_freeform_proposal_into_single_perform(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Хочет аккуратно повлиять на процесс."),
+        capabilities=["message", "work"],
+    )
+    state = WorldState(tick=0, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    runner = AgentRunner(
+        llm=LLMCaller(
+            provider=MockLLMProvider(
+                structured_responses={
+                    "Раунд (tick): 0\nТы: Off 1": {
+                        "proposal": "Сначала коротко созвонюсь с коллегой, затем попрошу вынести вопрос на формальное рассмотрение."
+                    }
+                }
+            ),
+            trace=TraceLog(tmp_path / "trace.jsonl"),
+        ),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    actions = asyncio.run(
+        runner.propose_actions(
+            agent=agent,
+            state=state,
+            visible_events=[],
+        )
+    )
+
+    assert len(actions) == 1
+    assert str(actions[0].type) == "perform"
+    assert "формальное рассмотрение" in actions[0].description
 
 
 def test_agent_prompt_includes_relevant_environment_brief(tmp_path: Path) -> None:

@@ -48,10 +48,10 @@ SPHERE/
 │   ├── state.py                # WorldState (agents/work_items/artifacts/pending_interactions/votes + environment-layer incl. operational_queues) + AgentState.story_state + org/zone binding
 │   ├── persona.py              # PersonaArtifact/Library/Generator + SocialGraphExtractor
 │   ├── memory.py               # Память агента (buffer + hybrid retrieval)
-│   ├── actions.py              # Action[] (structured + spawn_agent + perform)
-│   ├── agent.py                # AgentRunner (1 LLM-вызов на ход, motivation block, daily context)
+│   ├── actions.py              # Внутренний Action-vocabulary + freeform `proposal` schema для агента
+│   ├── agent.py                # AgentRunner (1 LLM-вызов на ход, freeform turn proposal, motivation block, daily context)
 │   ├── ops.py                  # Детерминированные StateOp -> Event, включая CreateAgentOp
-│   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM perform)
+│   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM materialization of freeform proposal)
 │   ├── auditor.py              # RuntimeAuditor (LLM-first detection + deterministic audit actuator + collegial review)
 │   ├── dao.py                  # DAO vote closure + position policy
 │   ├── engine.py               # WorldEngine (environment/artifact/operational-queue init, scripted events, pending follow-up queues, micro-reactions, pre/post worldgen, deterministic apply)
@@ -304,7 +304,7 @@ cd web/frontend && npm run test:e2e
 - **Дешёвые модели и плотная ecology**: наличие очень дешёвых моделей делает допустимым большое количество мелких параллельных агентов. Неприемлемо не само масштабирование агентности, а замена потенциально полноценных акторов жёстко зашитыми суррогатами только ради упрощения рантайма.
 - **Эмбеддинги**: в обычных прогонах по умолчанию используются реальные embeddings через OpenAI-совместимый API; при отсутствии ключа движок деградирует в BM25-only retrieval. `MockEmbeddingProvider` и `embeddings_mock=true` оставлены для тестов и дешёвых smoke-прогонов.
 - **Агентские промпты**: `AgentRunner` сообщает агенту текущее время мира (`tick` и каноническую дату, если она задана), но не говорит агенту, что он находится в симуляции.
-- **Freeform-интерфейс агента**: когнитивный агент должен описывать намерения как свободные действия (`perform`/`noop`), а не выбирать из меню типизированных команд. Typed actions остаются внутренним исполнительным слоем арбитра и runtime.
+- **Freeform-интерфейс агента**: когнитивный агент должен возвращать один свободный `proposal` на тик, а не выбирать typed action из меню. Typed actions остаются внутренним/legacy-слоем арбитра и runtime; арбитр сам материализует `proposal` в формальные операции мира. Если содержательный `proposal` на первой попытке даёт `approved=true` и пустой `ops`, арбитр делает один semantic retry с более жёсткой инструкцией; только human-noop/наблюдение могут пройти с пустым `ops` без повтора.
 - **Canonical built-in governance mapping**: встроенные режимы трактуются так: `G0` — без аудита, `G1` — аудит без freeze и без collegial review, `G2` — аудит + freeze, `G3` — аудит + freeze + collegial review. Для runtime, web presets и baseline-launcher источником истины служит `governance_modes.py`.
 - **Объём prompt-контекста**: не сжимать агентские и worldgen-промпты вручную только ради уменьшения токенов. Для ведения большого контекста полагаться на штатные механизмы памяти, суммаризации, compaction (компакции) и другие встроенные алгоритмы управления контекстом; большой объём сам по себе не считается дефектом.
 - **Temporal contract runtime**: `RuntimeConfig` поддерживает `tick_granularity` (`hour` / `half_day` / `day` / `week`) и каноническое world-time. `tick_duration_days` теперь трактуется как множитель выбранной гранулярности; для legacy-конфигов с `day` поведение остаётся прежним.

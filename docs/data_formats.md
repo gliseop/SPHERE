@@ -451,7 +451,7 @@ Post-worldgen может дополнительно вернуть `environment_
 
 Нарративные агенты с capability `audit` больше не поддерживаются. Аудит выполняется отдельным runtime-layer (`RuntimeAuditor`), а не обычным `AgentRunner`.
 
-Когнитивный агент в нормальном режиме больше не выбирает typed action из меню. Он возвращает только freeform `perform`/`noop`, а арбитр уже материализует это намерение во внутренние typed operations.
+Когнитивный агент в нормальном режиме больше не выбирает typed action из меню. Он возвращает один свободный `proposal` на тик, а арбитр уже материализует это намерение во внутренние typed operations.
 
 Вторичные и runtime-спавненные агенты проходят фильтрацию capability-набора: движок оставляет только безопасный поднабор `message`/`work`, чтобы новые агенты не получали специальных governance-полномочий или право порождать следующих агентов.
 
@@ -640,7 +640,7 @@ JSON-файлы с результатами нарративных интерв�
 {"tick": 1, "round": 1, "event_type": "entity_created", "actor_id": null, "agent_id": "", "payload": {"entity_id": "agent:off_1", "kind": "agent", "meta": {"name": "Козлов И.М.", "internal": true, "capabilities": ["message", "work", "dao"]}}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
 {"tick": 1, "round": 1, "event_type": "reputation_snapshot", "actor_id": null, "agent_id": "agent:off_1", "payload": {"target_agent_id": "agent:off_1", "score": 0.0, "internal": true, "frozen": false, "title": "специалист"}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
 {"tick": 2, "round": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"to_id": "agent:off_2", "text": "..."}, "audience": ["agent:off_1", "agent:off_2"], "timestamp": "..."}
-{"tick": 2, "round": 2, "event_type": "audit_flagged", "actor_id": null, "agent_id": "", "payload": {"finding_id": "finding:abc", "case_id": "audit_case:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_2", "counterparty_agent_id": "agent:off_2", "related_target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact", "evidence_refs": [{"tick": 2, "event_type": "vote_cast", "target_agent_id": "agent:off_2"}]}, "audience": ["aud:internal"], "timestamp": "..."}
+{"tick": 2, "round": 2, "event_type": "audit_flagged", "actor_id": null, "agent_id": "", "payload": {"finding_id": "finding:abc", "case_id": "audit_case:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_2", "counterparty_agent_id": "agent:off_2", "related_target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact", "violation_type_freeform": "координация перед голосованием после приватного контакта", "evidence_refs": [{"tick": 2, "event_type": "vote_cast", "target_agent_id": "agent:off_2"}]}, "audience": ["aud:internal"], "timestamp": "..."}
 {"tick": 2, "round": 2, "event_type": "audit_case_updated", "actor_id": null, "agent_id": "", "payload": {"case_id": "audit_case:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact", "episode_count": 2, "response_due_tick": 4, "monitoring": true}, "audience": ["aud:internal"], "timestamp": "..."}
 {"tick": 2, "round": 2, "event_type": "arbiter_approved", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"action_type": "send_message"}, "audience": ["aud:internal"], "timestamp": "..."}
 ```
@@ -681,6 +681,11 @@ JSON-файлы с результатами нарративных интерв�
 | `arbiter_rejected` | Арбитр отклонил действие |
 | `arbiter_op_failed` | Операция не удалась (ошибка apply) |
 | `world_event` | Внешнее событие от WorldGenerator |
+
+Для `audit_flagged` и связанных audit-case событий актуален двухслойный контракт:
+
+- `violation_type` — внутренний канонический тип, который нужен для строгого matching, case aggregation и policy-layer;
+- `violation_type_freeform` — свободная формулировка LLM-сигнала, если runtime-аудитор сначала увидел риск содержательно, а не через готовый taxonomy label.
 
 ### Трассировка LLM (trace.jsonl)
 

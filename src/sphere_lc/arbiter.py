@@ -65,6 +65,24 @@ _WORK_TOKEN_RE = re.compile(r"[^A-Za-zА-Яа-я0-9_]+")
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _DOTTED_DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
 _CAMEL_TO_SNAKE_RE = re.compile(r"(?<!^)(?=[A-Z])")
+_IDLE_PROPOSAL_NEEDLES = (
+    "ничего не делать",
+    "ничего нового не делать",
+    "не предпринимать новых шагов",
+    "не предпринимаю новых шагов",
+    "воздержаться от действий",
+    "воздержусь от действий",
+    "подождать",
+    "подожду",
+    "наблюдать",
+    "наблюдаю",
+    "пока без действий",
+    "сохранить статус-кво",
+    "no action",
+    "wait and see",
+    "hold position",
+    "stay idle",
+)
 
 
 def _work_tokens(text: str) -> set[str]:
@@ -826,28 +844,102 @@ class Arbiter:
         if target_id and not state.registry.exists(target_id):
             return _PerformArbiterOutput(approved=False, reason=f"unknown target_id: {target_id}", ops=[])
 
+        proposal = action.description.strip()
         system = (
             "Ты — арбитр симуляции SPHERE-LC.\n"
-            "На вход: YAML-журнал мира и свободное действие агента.\n"
-            "Твоя задача: либо отклонить действие с причиной, либо выдать список StateOp,\n"
+            "На вход: YAML-журнал мира и свободное turn-proposal агента.\n"
+            "Твоя задача: либо отклонить предложение с причиной, либо выдать список StateOp,\n"
             "которые детерминированно изменят мир.\n"
+            "Proposal может содержать несколько связанных намерений в одном описании; материализуй только те ops,\n"
+            "которые действительно следуют из текста и допустимы по состоянию мира.\n"
             "Политика должностей: только через DAO (vote + consent). Не меняй должности напрямую.\n"
             "Нельзя выдумывать новых агентов. Нельзя писать приватно неизвестным ID.\n"
             "Базовая коммуникация агента не требует отдельного capability: send_message можно использовать как естественное действие,\n"
             "но оно всё равно подчиняется физике мира, typed-id и пространственным ограничениям.\n"
+            "Если proposal действительно означает осознанное бездействие/наблюдение, допустимо вернуть approved=true и пустой список ops.\n"
+            "Если proposal содержательный, но ты не можешь честно материализовать его в ops, отклони его с ясной reason,\n"
+            "а не возвращай approved=true с пустым списком ops.\n"
             f"Actor capabilities: {sorted(agent_caps)}\n"
             "ВАЖНО: в op_type используй только snake_case-значения из JSON-схемы, а не Python-классы вроде SendMessageOp.\n"
             "Ответ: только JSON по схеме.\n"
         )
-        user = (
-            "YAML JOURNAL:\n"
-            f"{journal_yaml}\n\n"
-            "ACTION:\n"
-            f"- actor_id: {agent_id}\n"
-            f"- description: {action.description}\n"
-            f"- target_id: {target_id}\n"
+        user = self._perform_llm_user_prompt(
+            journal_yaml=journal_yaml,
+            agent_id=agent_id,
+            proposal=proposal,
+            target_id=target_id,
         )
 
+        decision = await self._call_perform_llm_once(
+            state=state,
+            system=system,
+            user=user,
+        )
+        if not self._should_retry_unmaterialized_proposal(proposal=proposal, decision=decision):
+            return decision
+
+        retry_system = (
+            f"{system}"
+            "ПРЕДЫДУЩАЯ ПОПЫТКА materialization вернула approved=true и пустой ops для содержательного proposal.\n"
+            "Сделай повторную попытку более строго:\n"
+            "- если из proposal следуют наблюдаемые шаги мира, выдай хотя бы один конкретный op;\n"
+            "- если proposal слишком абстрактен, не grounded в world state или не может быть честно материализован, отклони его.\n"
+            "- не оставляй содержательный proposal в approved=true с пустым ops.\n"
+        )
+        retry_user = self._perform_llm_user_prompt(
+            journal_yaml=journal_yaml,
+            agent_id=agent_id,
+            proposal=proposal,
+            target_id=target_id,
+            previous_decision=decision,
+        )
+        retried = await self._call_perform_llm_once(
+            state=state,
+            system=retry_system,
+            user=retry_user,
+        )
+        if self._should_retry_unmaterialized_proposal(proposal=proposal, decision=retried):
+            return _PerformArbiterOutput(
+                approved=False,
+                reason="proposal_not_materialized_after_retry",
+                ops=[],
+            )
+        return retried
+
+    def _perform_llm_user_prompt(
+        self,
+        *,
+        journal_yaml: str,
+        agent_id: str,
+        proposal: str,
+        target_id: str,
+        previous_decision: _PerformArbiterOutput | None = None,
+    ) -> str:
+        text = (
+            "YAML JOURNAL:\n"
+            f"{journal_yaml}\n\n"
+            "TURN PROPOSAL:\n"
+            f"- actor_id: {agent_id}\n"
+            f"- proposal: {proposal}\n"
+            f"- target_id: {target_id}\n"
+        )
+        if previous_decision is None:
+            return text
+        return (
+            f"{text}\n"
+            "PREVIOUS ATTEMPT:\n"
+            f"- approved: {previous_decision.approved}\n"
+            f"- reason: {previous_decision.reason}\n"
+            f"- ops_count: {len(previous_decision.ops)}\n"
+        )
+
+    async def _call_perform_llm_once(
+        self,
+        *,
+        state: WorldState,
+        system: str,
+        user: str,
+    ) -> _PerformArbiterOutput:
         resp = await self.llm.generate_structured(
             role="arbiter",
             name="perform",
@@ -861,6 +953,19 @@ class Arbiter:
             return _PerformArbiterOutput.model_validate(resp.data)
         except Exception as exc:
             return _PerformArbiterOutput(approved=False, reason=f"arbiter_parse_error:{exc}", ops=[])
+
+    def _should_retry_unmaterialized_proposal(
+        self,
+        *,
+        proposal: str,
+        decision: _PerformArbiterOutput,
+    ) -> bool:
+        text = " ".join((proposal or "").casefold().split())
+        if not text:
+            return False
+        if not decision.approved or decision.ops:
+            return False
+        return not any(needle in text for needle in _IDLE_PROPOSAL_NEEDLES)
 
     def _convert_perform_decision(
         self,

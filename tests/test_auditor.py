@@ -116,6 +116,33 @@ class _ReviewAuditorProvider(MockLLMProvider):
         )
 
 
+class _FreeformSignalAuditorProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data={
+                "findings": [
+                    {
+                        "subject_agent_id": "agent:off_1",
+                        "target_agent_id": "agent:off_2",
+                        "violation_type_freeform": "координация перед голосованием после приватного контакта",
+                        "risk_family": "preferential_treatment",
+                        "confidence": 0.86,
+                        "summary": "Есть признаки координации перед голосованием в пользу собеседника.",
+                        "mechanism": "private coordination followed by support vote",
+                        "related_agent_ids": ["agent:off_2"],
+                    }
+                ]
+            },
+            model="mock",
+        )
+
+
 def test_modify_reputation_positive_gain_blocked_while_frozen() -> None:
     state = _mk_state()
     state.tick = 2
@@ -228,6 +255,57 @@ def test_runtime_auditor_flags_support_vote_after_private_contact() -> None:
     assert not any(event.event_type == "audit_escalated" for event in outcome.events)
     assert not any(op.__class__.__name__ == "SetReputationFreezeOp" for op in outcome.ops)
     assert any(op.__class__.__name__ == "OpenAuditCaseOp" for op in outcome.ops)
+
+
+def test_runtime_auditor_maps_freeform_llm_signal_to_canonical_vote_pattern(tmp_path: Path) -> None:
+    state = _mk_state()
+    state.tick = 2
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_2",
+        created_tick=1,
+        closes_tick=3,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1"],
+    )
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm"),
+        llm=LLMCaller(provider=_FreeformSignalAuditorProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+    )
+
+    recent_events = [
+        Event(
+            tick=1,
+            event_type="message_sent",
+            actor_id="agent:off_1",
+            payload={"to_id": "agent:off_2", "private": True, "text": "Нужно согласовать поддержку."},
+            audience=["agent:off_1", "agent:off_2"],
+        )
+    ]
+    tick_events = [
+        Event(
+            tick=2,
+            event_type="vote_cast",
+            actor_id="agent:off_1",
+            payload={"vote_id": "vote:1", "choice": "yes"},
+        )
+    ]
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=tick_events,
+            recent_events=recent_events + tick_events,
+        )
+    )
+
+    assert outcome.findings
+    assert outcome.findings[0].violation_type == "support_vote_after_private_contact"
+    assert outcome.findings[0].violation_type_freeform == "координация перед голосованием после приватного контакта"
+    assert outcome.findings[0].recommended_action == "route_to_collegial_review"
+    assert any(event.event_type == "audit_flagged" for event in outcome.events)
 
 
 def test_runtime_auditor_flags_due_external_queue_complaint_response() -> None:

@@ -20,7 +20,7 @@ graph TB
     subgraph Агент["Агент"]
         AGENT[agent.py<br/>AgentRunner]
         MEMORY[memory.py<br/>AgentMemory]
-        ACTIONS[actions.py<br/>Action + freeform agent schema + perform]
+        ACTIONS[actions.py<br/>internal Action vocabulary + freeform proposal schema]
         PERSONA[persona.py<br/>PersonaArtifact + SocialGraphExtractor]
         BM25[bm25.py<br/>BM25]
     end
@@ -117,8 +117,8 @@ graph TB
 |---|---|
 | Как устроен тик симуляции | `engine.py` → `WorldEngine.run()`; обрати внимание на environment init/snapshot + scripted events + pending queues + pre/post worldgen |
 | Как агент принимает решение | `agent.py` → `AgentRunner`, `memory.py` → гибридный retrieval |
-| Какие действия доступны когнитивному агенту | `agent.py` → freeform `perform` / `noop`, `actions.py` → `agent_actions_json_schema()` |
-| Как арбитр проверяет действия | `arbiter.py` → антифантомы + пространственные ограничения + LLM-perform |
+| Какой контракт у когнитивного агента | `agent.py` → freeform `proposal`, `actions.py` → `agent_turn_json_schema()` |
+| Как арбитр проверяет и материализует ход | `arbiter.py` → антифантомы + пространственные ограничения + LLM-materialization of proposal |
 | Где зафиксирована canonical семантика `G0–G3` | `governance_modes.py` → built-in mapping для runtime/web/launcher |
 | Как runtime-аудитор выявляет сигналы риска | `auditor.py` → LLM-first detection + deterministic actuator + collegial review, включая queue-driven complaint/media obligations |
 | Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра, включая environment-layer, `art:*`-артефакты и informal links |
@@ -162,7 +162,7 @@ sequenceDiagram
     E->>A: decide(agent, state, tick, context-layer)
     A->>M: retrieve(situation)
     M-->>A: релевантные воспоминания
-    A-->>E: freeform Action[] (`perform` / `noop`)
+    A-->>E: freeform turn proposal (`proposal`)
 
     loop Каждое действие
         E->>Arb: evaluate(action, state)

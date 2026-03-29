@@ -10,7 +10,7 @@ from typing import Callable, Iterable
 
 from pydantic import TypeAdapter, ValidationError
 
-from .actions import Action, agent_actions_json_schema
+from .actions import Action, ActionType, PerformAction, agent_turn_json_schema
 from .config import MemoryConfig
 from .config import RuntimeConfig
 from .events import Event
@@ -461,16 +461,18 @@ class AgentRunner:
             f"{spawn_context_brief}"
             f"Память:\n{mem_text}\n\n"
             "Формат ответа:\n"
-            "- Основной путь: `perform(description, target_id?)`.\n"
-            "- Если осмысленного шага нет: `noop`.\n"
-            "- Не выбирай из меню формальных команд. Описывай намерение как свободное действие, а арбитр сам переведёт его в формальные последствия мира.\n"
-            "- Если нужен формальный эффект, всё равно описывай его как намерение обычного участника процесса: поговорить, подать, сообщить, инициировать, проголосовать, ответить, попросить создать канал, донести документ, вывести вопрос на рассмотрение.\n\n"
+            "- Верни одно поле `proposal` со свободным описанием своего хода на этот тик.\n"
+            "- Не используй menu/action-type, не пиши `perform`, `noop`, enum-значения или JSON-массивы действий.\n"
+            "- Если нужен формальный эффект, всё равно описывай его как намерение обычного участника процесса: поговорить, подать, сообщить, инициировать, проголосовать, ответить, попросить создать канал, донести документ, вывести вопрос на рассмотрение.\n"
+            "- Если не хочешь делать ничего существенного, так и опиши это человеческим языком внутри `proposal`.\n"
+            "- Пиши достаточно конкретно, чтобы из `proposal` можно было вывести наблюдаемый шаг мира; избегай абстракций вроде «укреплю позиции», «разберусь» или «проработаю вопрос» без конкретного действия.\n\n"
             f"{(turn_note.strip() + chr(10)) if turn_note else ''}"
             "Сгенерируй действия на этот тик.\n"
+            "Но верни их не как menu-команды, а как единый свободный `proposal`.\n"
             f"Правила:\n"
-            f"- максимум {max_actions} действий\n"
+            f"- в одном `proposal` можно описать до {max_actions} осмысленных шагов, если они составляют один связный ход\n"
             "- если упоминаешь даты или сроки, не противоречь канонической дате мира\n"
-            "- каждое осмысленное действие описывай через `perform`; это основной интерфейс\n"
+            "- не расписывай внутреннюю механику движка; описывай только то, что намерен сделать как участник процесса\n"
             "- избегай ритуальных повторов: не дублируй один и тот же формальный ход без нового эффекта или новой ставки\n"
             "- предпочитай действия, которые реально меняют ситуацию, а не только повторно фиксируют уже известное\n"
             "- не выдумывай новые typed-id; используй только реально существующие сущности мира\n"
@@ -596,7 +598,7 @@ class AgentRunner:
     ) -> list[Action]:
         """Сгенерировать список действий агента на тик."""
         max_actions = max(1, int(max_actions_override or self.runtime.max_actions_per_turn))
-        schema = agent_actions_json_schema(max_actions=max_actions)
+        schema = agent_turn_json_schema()
         system = self._build_system(agent)
         mem_text = await self._render_memory(agent=agent, state=state, visible_events=visible_events)
         user = self._build_user(
@@ -621,13 +623,32 @@ class AgentRunner:
         )
 
         raw = resp.data
+        if isinstance(raw, dict) and isinstance(raw.get("proposal"), str):
+            proposal = _norm(str(raw.get("proposal") or ""))
+            if not proposal:
+                return []
+            return [
+                PerformAction(
+                    type=ActionType.PERFORM,
+                    description=proposal,
+                    justification="freeform_turn_proposal",
+                )
+            ]
+
+        # Legacy-compat: старые mock-тесты и transitional providers ещё могут
+        # возвращать Action[] вместо freeform `proposal`.
+        legacy_raw: list[object] | None = None
         if isinstance(raw, dict):
-            raw = raw.get("actions", [])
-        if not isinstance(raw, list):
+            maybe_actions = raw.get("actions", [])
+            if isinstance(maybe_actions, list):
+                legacy_raw = list(maybe_actions)
+        elif isinstance(raw, list):
+            legacy_raw = list(raw)
+        if legacy_raw is None:
             return []
 
         validated: list[Action] = []
-        for item in raw[:max_actions]:
+        for item in legacy_raw[:max_actions]:
             try:
                 validated.append(_ACTION_ADAPTER.validate_python(item))
             except ValidationError:

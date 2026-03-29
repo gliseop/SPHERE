@@ -159,6 +159,7 @@ class AuditFinding(BaseModel):
     tick: int
     subject_agent_id: str
     violation_type: str
+    violation_type_freeform: str = ""
     severity: str
     confidence: float
     evidence_refs: list[dict[str, object]]
@@ -168,8 +169,9 @@ class AuditFinding(BaseModel):
 
 Ключевая идея:
 
-- LLM или rules-layer выдают findings;
-- преобразование findings в реальные `Event` и `StateOp` делается детерминированно по policy-правилам.
+- rules-layer сразу может выдавать канонические findings;
+- LLM-layer должен прежде всего выдавать свободный риск-сигнал (`violation_type_freeform`, `summary`, `mechanism`), не будучи обязанным подбирать точный `violation_type`;
+- преобразование freeform-findings в канонический `violation_type` и затем в реальные `Event` / `StateOp` делается детерминированно по policy-правилам.
 
 ## Предлагаемые конфигурации
 

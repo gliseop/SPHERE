@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from sphere_lc.agent import AgentRunner
 from sphere_lc.auditor import RuntimeAuditor
-from sphere_lc.llm import MockLLMProvider
+from sphere_lc.llm import MockLLMProvider, StructuredLLMResponse
 
 from sphere_lc.actions import (
     ActionType,
@@ -102,6 +102,83 @@ class _FailingPerformProvider(MockLLMProvider):
         if "- actor_id: agent:off_1" in user and not self._failed:
             self._failed = True
             raise RuntimeError("perform-llm-failure")
+        return super().generate_structured(system, user, schema, temperature)
+
+
+class _RetryingMaterializationProvider(MockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.perform_calls = 0
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "- actor_id: agent:off_1" in user:
+            self.perform_calls += 1
+            if "PREVIOUS ATTEMPT:" in user:
+                return StructuredLLMResponse(
+                    data={
+                        "approved": True,
+                        "reason": "materialized_after_retry",
+                        "ops": [
+                            {
+                                "op_type": "send_message",
+                                "args": {"to_id": "agent:off_2", "text": "Нужно вынести вопрос на обсуждение.", "private": True},
+                            }
+                        ],
+                    },
+                    model="mock",
+                )
+            return StructuredLLMResponse(
+                data={"approved": True, "reason": "approved", "ops": []},
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
+
+
+class _IdleProposalProvider(MockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.perform_calls = 0
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "- actor_id: agent:off_1" in user:
+            self.perform_calls += 1
+            return StructuredLLMResponse(
+                data={"approved": True, "reason": "noop_proposal", "ops": []},
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
+
+
+class _StillEmptyMaterializationProvider(MockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.perform_calls = 0
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "- actor_id: agent:off_1" in user:
+            self.perform_calls += 1
+            return StructuredLLMResponse(
+                data={"approved": True, "reason": "approved_but_empty", "ops": []},
+                model="mock",
+            )
         return super().generate_structured(system, user, schema, temperature)
 
 
@@ -616,6 +693,61 @@ def test_perform_rejection_does_not_consume_id_allocator(tmp_path: Path) -> None
     assert approved[0].approved is True
     assert approved[0].ops
     assert approved[0].ops[0].work_id == "work:0_1"
+
+
+def test_arbiter_retries_substantive_proposal_after_empty_materialization(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    provider = _RetryingMaterializationProvider()
+    arbiter = _mk_arbiter(tmp_path, mock=provider)
+
+    act = PerformAction(
+        type=ActionType.PERFORM,
+        description="Сначала коротко обсужу вопрос с коллегой и вынесу его на рабочее обсуждение.",
+        target_id="",
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert provider.perform_calls == 2
+    assert res[0].approved is True
+    assert res[0].ops
+    assert res[0].ops[0].__class__.__name__ == "SendMessageOp"
+
+
+def test_arbiter_does_not_retry_idle_human_noop_proposal(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    provider = _IdleProposalProvider()
+    arbiter = _mk_arbiter(tmp_path, mock=provider)
+
+    act = PerformAction(
+        type=ActionType.PERFORM,
+        description="Пока не предпринимаю новых шагов и просто наблюдаю за развитием ситуации.",
+        target_id="",
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert provider.perform_calls == 1
+    assert res[0].approved is True
+    assert res[0].ops == []
+
+
+def test_arbiter_rejects_substantive_proposal_when_retry_still_empty(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    provider = _StillEmptyMaterializationProvider()
+    arbiter = _mk_arbiter(tmp_path, mock=provider)
+
+    act = PerformAction(
+        type=ActionType.PERFORM,
+        description="Обсужу вопрос с коллегой и отправлю ему конкретное сообщение по процессу.",
+        target_id="",
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert provider.perform_calls == 2
+    assert res[0].approved is False
+    assert res[0].reason == "proposal_not_materialized_after_retry"
 
 
 def test_arbiter_rejects_temporally_backdated_message(tmp_path: Path) -> None:
@@ -1455,7 +1587,7 @@ def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path
     )
 
     assert "Open votes: vote:1" in prompt
-    assert "Основной путь: `perform(description, target_id?)`." in prompt
+    assert "Верни одно поле `proposal` со свободным описанием своего хода на этот тик." in prompt
     assert "если тебя номинировали, явно опиши согласие или отказ как свободное действие" in prompt
     assert "respond_nomination (vote_id, accept: true/false)" not in prompt
 

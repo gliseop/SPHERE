@@ -1,9 +1,9 @@
-"""Структурированные действия агента (Action[]).
+"""Внутренний словарь действий и схемы agent/runtime-контрактов.
 
-SPHERE-LC стремится держать интерфейс агента строгим и проверяемым:
-- агент возвращает JSON-массив Action;
-- engine валидирует Action по схеме и по EntityRegistry (антифантомы);
-- затем Arbiter переводит Action -> StateOp[].
+Когнитивный агент больше не выбирает typed actions напрямую. Его основной
+контракт — свободное текстовое описание хода (`proposal`), которое затем
+переводится арбитром во внутренние `StateOp`. Typed `Action` сохранены как
+внутренний/legacy-слой совместимости и как vocabulary исполнительного runtime.
 """
 
 from __future__ import annotations
@@ -340,4 +340,25 @@ def agent_actions_json_schema(*, max_actions: int) -> dict[str, Any]:
             }
         },
         "required": ["actions"],
+    }
+
+
+def agent_turn_json_schema(*, max_chars: int = 4000) -> dict[str, Any]:
+    """JSON-схема для свободного turn proposal когнитивного агента.
+
+    Агент описывает ход одним свободным текстовым предложением/абзацем без
+    typed action menu. Арбитр затем сам выделяет из этого текста формальные
+    последствия для мира.
+    """
+
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "proposal": {
+                "type": "string",
+                "maxLength": max(1, int(max_chars)),
+            }
+        },
+        "required": ["proposal"],
     }
