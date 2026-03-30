@@ -223,20 +223,44 @@ class SendMessageOp:
 
 
 @dataclass(frozen=True, slots=True)
-class EmitWorldEventOp:
-    """Опубликовать свободное событие в мир (например, физическое действие)."""
+class RecordNarrativeActionOp:
+    """Зафиксировать физическое или неформальное действие агента в мире.
+
+    Используется когда proposal агента описывает наблюдаемое действие,
+    не сводимое целиком к формальным операциям: перемещение, передача
+    документа из рук в руки, осмотр, намёк в частной беседе, ожидание
+    в приёмной и т.п. Может сочетаться с формальными ops в одном ходе.
+    """
 
     actor_id: str
     description: str
+    action_kind: str = "general"
+    zone_id: str | None = None
+    witnesses: list[str] | None = None
 
     def apply(self, state: WorldState) -> list[Event]:
+        if self.zone_id is not None:
+            ensure_kind(self.zone_id, EntityKind.ZONE)
+        valid_witnesses: list[str] = []
+        for w in (self.witnesses or []):
+            if w in state.agents and w != self.actor_id:
+                valid_witnesses.append(w)
+        if valid_witnesses:
+            audience = list({self.actor_id} | set(valid_witnesses))
+        else:
+            audience = [INTERNAL_AUDIENCE]
         return [
             Event(
                 tick=state.tick,
-                event_type="world_event",
+                event_type="narrative_action",
                 actor_id=self.actor_id,
-                payload={"description": self.description},
-                audience=[INTERNAL_AUDIENCE],
+                payload={
+                    "description": self.description,
+                    "action_kind": self.action_kind or "general",
+                    "zone_id": self.zone_id,
+                    "witnesses": valid_witnesses,
+                },
+                audience=audience,
             )
         ]
 

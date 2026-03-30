@@ -4815,6 +4815,73 @@ class WorldEngine:
             if ev.event_type == "scene_occurred":
                 return f"Сцена мира: {ev.payload.get('description','')}"
 
+            if ev.event_type == "narrative_action":
+                desc = str(ev.payload.get("description") or "")
+                kind = str(ev.payload.get("action_kind") or "")
+                zone = str(ev.payload.get("zone_id") or "")
+                witnesses = ev.payload.get("witnesses") or []
+                parts = [desc]
+                if zone:
+                    parts.append(f"({zone})")
+                if witnesses:
+                    parts.append(f"в присутствии {', '.join(str(w) for w in witnesses)}")
+                if ev.actor_id == agent_id:
+                    return " ".join(parts)
+                prefix = f"{ev.actor_id}: " if ev.actor_id else ""
+                return f"{prefix}{' '.join(parts)}"
+
+            if ev.event_type == "artifact_created":
+                title = str(ev.payload.get("title") or "")
+                a_type = str(ev.payload.get("artifact_type") or "документ")
+                a_id = str(ev.payload.get("artifact_id") or "")
+                if ev.actor_id == agent_id:
+                    return f"Создан {a_type} {a_id}: {title}"
+                return f"{ev.actor_id or 'Система'} создал(а) {a_type} {a_id}: {title}"
+
+            if ev.event_type == "artifact_updated":
+                a_id = str(ev.payload.get("artifact_id") or "")
+                title = str(ev.payload.get("title") or "")
+                status = str(ev.payload.get("status") or "")
+                return f"Обновлён документ {a_id}: {title}" + (f" [{status}]" if status else "")
+
+            if ev.event_type == "pending_interaction_created":
+                summary = str(ev.payload.get("summary") or "")
+                target = str(ev.payload.get("target_agent_id") or "")
+                source = str(ev.payload.get("source_agent_id") or "")
+                category = str(ev.payload.get("category") or "")
+                if target == agent_id:
+                    return f"Ожидается действие от тебя ({category}): {summary}" + (f" (от {source})" if source else "")
+                return f"Ожидается действие от {target} ({category}): {summary}"
+
+            if ev.event_type == "pending_interaction_completed":
+                summary = str(ev.payload.get("summary") or "")
+                target = str(ev.payload.get("target_agent_id") or "")
+                return f"Обязательство выполнено ({target}): {summary}"
+
+            if ev.event_type == "pending_interaction_expired":
+                summary = str(ev.payload.get("summary") or "")
+                target = str(ev.payload.get("target_agent_id") or "")
+                return f"Обязательство просрочено ({target}): {summary}"
+
+            if ev.event_type == "pending_interaction_due":
+                summary = str(ev.payload.get("summary") or "")
+                target = str(ev.payload.get("target_agent_id") or "")
+                if target == agent_id:
+                    return f"Срок по обязательству наступил: {summary}"
+                return f"Наступил срок обязательства для {target}: {summary}"
+
+            if ev.event_type == "environment_informal_link_updated":
+                return ""
+
+            if ev.event_type == "environment_information_climate_updated":
+                signals = ev.payload.get("active_signals") or []
+                mood = str(ev.payload.get("public_mood") or "")
+                if signals:
+                    return f"Информационный фон изменился: {', '.join(str(s) for s in signals[:3])}"
+                if mood:
+                    return f"Информационный фон: настроение={mood}"
+                return ""
+
             # Фолбэк: тип события + компактный payload (без чисел).
             payload = redact_numbers(ev.payload or {})
             return f"{ev.event_type}: {payload}"

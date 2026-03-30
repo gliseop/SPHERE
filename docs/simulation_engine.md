@@ -130,7 +130,10 @@ flowchart TD
 
 ## Арбитр (Arbiter)
 
-Гибридный арбитр выполняет два класса проверок.
+Арбитр выполняет роль «физики мира» и определяет три вещи для каждого действия:
+1. **Допустимость** — возможно ли действие в текущем состоянии (пространство, полномочия, существование целей).
+2. **Прямые последствия** — какие `StateOp[]` следуют из намерения агента.
+3. **Побочные эффекты** — свидетели, изменение неформальных отношений, привлечение внимания, создание обязательств.
 
 Арбитр работает в двух слоях.
 
@@ -140,11 +143,22 @@ flowchart TD
 3. Проверка на явные бюрократические дубли для `create_work_item` (по сильному сходству заголовка с уже открытым делом).
 4. Преобразование `Action` в набор `StateOp[]` — детерминированных операций над состоянием мира.
 
-Базовый когнитивный путь теперь другой: агентский `proposal` оборачивается во внутренний freeform-`perform`, после чего арбитр обращается к LLM:
+Базовый когнитивный путь: агентский `proposal` оборачивается во внутренний freeform-`perform`, после чего арбитр обращается к LLM:
 1. Формируется промпт с YAML-журналом мира (`WorldJournal`) и полным текстом `proposal`.
-2. LLM оценивает допустимость и формирует набор `StateOp[]` как результат.
+2. LLM определяет допустимость, формирует набор прямых `StateOp[]` и дополняет их побочными эффектами.
 3. Намерения, адресованные несуществующим сущностям, отклоняются до обращения к LLM.
 4. Если в `proposal` нет содержательного действия, арбитр может вернуть `approved=true` и пустой `ops`.
+
+Арбитру доступен расширенный словарь операций для materialization:
+- **Коммуникация**: `send_message` (приватные и публичные сообщения).
+- **Работа**: `create_work_item`, `add_work_note`, `submit_work_proposal` (требуют capability `work`).
+- **Документы**: `create_artifact`, `update_artifact` (требуют capability `work`).
+- **Governance**: `open_vote`, `cast_vote`, `respond_nomination`, `modify_reputation`.
+- **Инфраструктура**: `create_entity` (org/chan).
+- **Физика мира**: `narrative_action` — для пространственных и физических действий (перемещение, осмотр, передача из рук в руки), с опциональными `zone_id` и `witnesses`.
+- **Побочные эффекты**: `upsert_informal_link` (изменение неформальных связей), `add_information_signal` (привлечение внимания), `upsert_pending_interaction` (создание обязательств и follow-up), `resolve_pending_interaction` (закрытие обязательств).
+
+Ключевое отличие от предыдущей архитектуры: арбитр не просто переводит `proposal` в один формальный op, а генерирует комплекс прямых последствий и побочных эффектов. Например, «переговорю с agent:X наедине в коридоре» может породить `send_message` (прямое последствие), `narrative_action` (физическая встреча) и `upsert_informal_link` (укрепление связи как побочный эффект).
 
 Для свободного `proposal` добавлен semantic retry. Если первая materialization попытка вернула `approved=true` и пустой `ops`, но текст выглядит как содержательный ход, а не как человеческий `noop`/наблюдение, арбитр делает ещё один LLM-вызов с более жёсткой инструкцией: либо выдать конкретные `StateOp`, либо отклонить ход явно. Если и повторная попытка не материализует proposal, действие получает отказ `proposal_not_materialized_after_retry` вместо тихого пустого approve.
 
@@ -230,7 +244,9 @@ flowchart TD
 
 ## Операции состояния (StateOp → Event)
 
-`ops.py` определяет детерминированные операции: `SendMessageOp`, `CreateEntityOp`, `CreateAgentOp`, `CreateWorkItemOp`, `AddWorkNoteOp`, `SubmitWorkProposalOp`, `CastVoteOp`, `OpenVoteOp`, `ModifyReputationOp`, `SetVoteConsentOp`, `SetReputationFreezeOp`, а также runtime-ops для richer среды вроде `UpsertPendingInteractionOp` / `ResolvePendingInteractionOp`. Каждая операция применяется к `WorldState` и порождает `Event`, записываемый в `EventLog` (JSONL). Последовательное применение гарантирует детерминизм при фиксированном зерне.
+`ops.py` определяет детерминированные операции: `SendMessageOp`, `CreateEntityOp`, `CreateAgentOp`, `CreateWorkItemOp`, `AddWorkNoteOp`, `SubmitWorkProposalOp`, `CastVoteOp`, `OpenVoteOp`, `ModifyReputationOp`, `SetVoteConsentOp`, `SetReputationFreezeOp`, `CreateArtifactOp`, `UpdateArtifactOp`, `RecordNarrativeActionOp`, а также runtime-ops для richer среды: `UpsertInformalLinkOp`, `AddInformationSignalOp`, `UpsertPendingInteractionOp`, `ResolvePendingInteractionOp`. Каждая операция применяется к `WorldState` и порождает `Event`, записываемый в `EventLog` (JSONL). Последовательное применение гарантирует детерминизм при фиксированном зерне.
+
+`RecordNarrativeActionOp` фиксирует физические и пространственные действия агента (перемещение, осмотр, передача документа, ожидание). Это не catch-all для произвольного текста, а структурированная запись с `action_kind`, опциональным `zone_id` и списком `witnesses`. Если указаны свидетели, событие `narrative_action` адресуется только актору и свидетелям; иначе — всем внутренним агентам.
 
 `CreateAgentOp` создаёт `AgentState` и `entity_created`, а полноценный `AgentRunner` и bootstrap памяти для нового агента регистрируются отдельным шагом после применения ops. Новый участник начинает ходить со следующего тика.
 

@@ -694,8 +694,10 @@ class AgentRunner:
                 )
             ]
 
-        # Legacy-compat: старые mock-тесты и transitional providers ещё могут
-        # возвращать Action[] вместо freeform `proposal`.
+        # Typed-action compat: MockLLMProvider и тесты могут возвращать
+        # {"actions": [...]} с typed actions. В production с реальным LLM
+        # сюда не попадаем — LLM всегда возвращает {"proposal": "..."}.
+        # Typed actions идут в детерминированный путь арбитра напрямую.
         legacy_raw: list[object] | None = None
         if isinstance(raw, dict):
             maybe_actions = raw.get("actions", [])

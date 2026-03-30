@@ -41,17 +41,23 @@ from .id_alloc import IdAllocator
 from .ids import EntityKind, ensure_kind, make_id, normalize_slug, parse_typed_id
 from .llm import LLMCaller
 from .ops import (
+    AddInformationSignalOp,
     AddWorkNoteOp,
     CastVoteOp,
     CreateAgentOp,
+    CreateArtifactOp,
     CreateEntityOp,
     CreateWorkItemOp,
-    EmitWorldEventOp,
     ModifyReputationOp,
     OpenVoteOp,
+    RecordNarrativeActionOp,
+    ResolvePendingInteractionOp,
     SendMessageOp,
     SetVoteConsentOp,
     SubmitWorkProposalOp,
+    UpdateArtifactOp,
+    UpsertInformalLinkOp,
+    UpsertPendingInteractionOp,
     StateOp,
 )
 from .state import WorldState
@@ -124,7 +130,13 @@ def _normalize_perform_op_type(op_type: str) -> str:
         "SetVoteConsentOp": "respond_nomination",
         "RespondNominationOp": "respond_nomination",
         "ModifyReputationOp": "modify_reputation",
-        "EmitWorldEventOp": "world_event",
+        "CreateArtifactOp": "create_artifact",
+        "UpdateArtifactOp": "update_artifact",
+        "RecordNarrativeActionOp": "narrative_action",
+        "UpsertInformalLinkOp": "upsert_informal_link",
+        "AddInformationSignalOp": "add_information_signal",
+        "UpsertPendingInteractionOp": "upsert_pending_interaction",
+        "ResolvePendingInteractionOp": "resolve_pending_interaction",
         "NoopOp": "noop",
     }
     if raw in explicit:
@@ -253,9 +265,74 @@ def _perform_output_schema() -> dict[str, Any]:
             ["target_agent_id", "delta"],
         ),
         op(
-            "world_event",
-            {"description": {"type": "string"}},
+            "create_artifact",
+            {
+                "artifact_type": {"type": "string"},
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+                "related_work_id": {"type": "string"},
+                "visibility": {"type": "string", "enum": ["internal", "public"]},
+            },
+            ["artifact_type", "title"],
+        ),
+        op(
+            "update_artifact",
+            {
+                "artifact_id": {"type": "string"},
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+                "status": {"type": "string"},
+                "visibility": {"type": "string"},
+            },
+            ["artifact_id"],
+        ),
+        op(
+            "narrative_action",
+            {
+                "description": {"type": "string"},
+                "action_kind": {"type": "string"},
+                "zone_id": {"type": "string"},
+                "witnesses": {"type": "array", "items": {"type": "string"}},
+            },
             ["description"],
+        ),
+        op(
+            "upsert_informal_link",
+            {
+                "agent_a_id": {"type": "string"},
+                "agent_b_id": {"type": "string"},
+                "link_type": {"type": "string"},
+                "strength_delta": {"type": "number"},
+                "visibility": {"type": "string"},
+                "source": {"type": "string"},
+            },
+            ["agent_a_id", "agent_b_id", "link_type"],
+        ),
+        op(
+            "add_information_signal",
+            {"signal": {"type": "string"}},
+            ["signal"],
+        ),
+        op(
+            "upsert_pending_interaction",
+            {
+                "target_agent_id": {"type": "string"},
+                "source_agent_id": {"type": "string"},
+                "category": {"type": "string"},
+                "summary": {"type": "string"},
+                "due_offset_ticks": {"type": "integer"},
+                "priority": {"type": "string", "enum": ["low", "normal", "high"]},
+            },
+            ["target_agent_id", "category", "summary"],
+        ),
+        op(
+            "resolve_pending_interaction",
+            {
+                "interaction_id": {"type": "string"},
+                "status": {"type": "string", "enum": ["completed", "expired"]},
+                "reason": {"type": "string"},
+            },
+            ["interaction_id", "status"],
         ),
         op("noop", {}, []),
     ]
@@ -854,32 +931,47 @@ class Arbiter:
 
         proposal = action.description.strip()
         system = (
-            "Ты — арбитр симуляции SPHERE-LC.\n"
+            "Ты — арбитр симуляции SPHERE-LC. Твоя роль — «физика мира».\n"
             "На вход: YAML-журнал мира и свободное turn-proposal агента.\n"
-            "Твоя задача: либо отклонить предложение с причиной, либо выдать список StateOp,\n"
-            "которые детерминированно изменят мир.\n"
-            "Proposal может содержать несколько связанных намерений в одном описании; материализуй только те ops,\n"
-            "которые действительно следуют из текста и допустимы по состоянию мира.\n"
-            "Если agent:*, work:*, chan:* или org:* уже присутствуют в YAML journal, считай их существующими typed targets.\n"
-            "Не придумывай дополнительные барьеры вида «агент не доступен для прямой коммуникации», если такого ограничения нет прямо в состоянии мира.\n"
-            "Pending interactions, audit-cases и monitoring сами по себе не запрещают send_message, если в состоянии мира нет явного правила, которое блокирует такой контакт.\n"
+            "Твоя задача — определить ТРИ вещи:\n"
+            "1) Допустимо ли действие в текущем состоянии мира (пространство, полномочия, существование целей).\n"
+            "2) Каковы ПРЯМЫЕ последствия — какие ops нужны для реализации намерения.\n"
+            "3) Есть ли ПОБОЧНЫЕ ЭФФЕКТЫ — свидетели, изменение неформальных отношений, привлечение внимания.\n\n"
+
+            "ПОБОЧНЫЕ ЭФФЕКТЫ — обязательная часть арбитража:\n"
+            "- Приватный контакт двух агентов → добавь upsert_informal_link (coordination/trust/alliance, strength_delta +0.05..+0.15).\n"
+            "- Координация вокруг сомнительного действия → upsert_informal_link (complicity/corruption, visibility=latent).\n"
+            "- Публичное или заметное действие → add_information_signal с кратким описанием.\n"
+            "- Агент обещает что-то сделать или ожидает ответа → upsert_pending_interaction.\n"
+            "- Агент создаёт документ → create_artifact.\n"
+            "- Физическое действие (перемещение, осмотр, передача из рук в руки) → narrative_action с описанием и witnesses.\n"
+            "Побочные эффекты добавляются В ДОПОЛНЕНИЕ к прямым ops, а не вместо них.\n\n"
+
+            "ПРАВИЛА:\n"
+            "Proposal может содержать несколько связанных намерений; материализуй только те ops,\n"
+            "которые следуют из текста и допустимы по состоянию мира.\n"
+            "Если agent:*, work:*, chan:*, org:* или art:* присутствуют в YAML journal, считай их существующими.\n"
+            "Не придумывай барьеры вида «агент не доступен», если такого ограничения нет в состоянии мира.\n"
+            "Pending interactions, audit-cases и monitoring не запрещают send_message без явного правила блокировки.\n"
             "Политика должностей: только через DAO (vote + consent). Не меняй должности напрямую.\n"
             "Нельзя выдумывать новых агентов. Нельзя писать приватно неизвестным ID.\n"
-            "Базовая коммуникация агента не требует отдельного capability: send_message можно использовать как естественное действие,\n"
-            "но оно всё равно подчиняется физике мира, typed-id и пространственным ограничениям.\n"
-            "Короткие примеры materialization:\n"
-            "- «Напишу agent:X ...» при существующем agent:X обычно materialize в send_message.\n"
-            "- «Добавлю в work:Y заметку ...» при существующем work:Y обычно materialize в add_work_note.\n"
-            "- «Вынесу вопрос о повышении agent:Z ...» materialize в open_vote, а не в прямую смену должности.\n"
-            "- не отклоняй простой send_message только потому, что у актора нет отдельной capability `message`: базовая коммуникация разрешена.\n"
-            "- если proposal просит «написать» или «добавить заметку», а точный текст не процитирован дословно, synthesize короткий faithful text из самого proposal вместо отказа.\n"
-            "- если proposal содержит физическое или неформальное действие (например, «подойду к директору», «намекну», «передам лично в руки», «проверю сейф»), которое нельзя свести к административным ops, materialize его как `world_event` с подробным описанием действия. Это даёт миру необходимую свободу вне жестких рамок!\n"
-            "- если модель пишет op_type=`vote`, нормализуй его по args: `vote_id/choice` означает cast_vote, а `target_agent_id/new_title` означает open_vote.\n"
-            "Если proposal действительно означает осознанное бездействие/наблюдение, допустимо вернуть approved=true и пустой список ops.\n"
-            "Если proposal содержательный, но ты не можешь честно материализовать его в ops, отклони его с ясной reason,\n"
-            "а не возвращай approved=true с пустым списком ops.\n"
+            "Базовая коммуникация не требует capability: send_message разрешён всем, но подчиняется физике мира.\n\n"
+
+            "ПРИМЕРЫ materialization с побочными эффектами:\n"
+            "- «Переговорю с agent:X наедине в коридоре» → send_message(private) + narrative_action(встреча в коридоре, witnesses=[]) + upsert_informal_link(coordination, +0.1)\n"
+            "- «Подготовлю докладную о несоответствиях» → create_artifact(type=report, title=...) + если public, add_information_signal\n"
+            "- «Намекну подрядчику agent:Y, что контракт можно ускорить» → send_message(private, текст намёка) + upsert_informal_link(corruption, +0.15, visibility=latent)\n"
+            "- «Пройду к директору и положу отчёт на стол» → narrative_action(физическая передача, zone_id=...) + send_message(текст сопроводительного слова)\n"
+            "- «Добавлю в work:Y заметку» → add_work_note\n"
+            "- «Вынесу вопрос о повышении agent:Z» → open_vote, а не прямую смену должности.\n"
+            "- Не отклоняй send_message только из-за отсутствия capability `message`.\n"
+            "- Если proposal просит «написать», а текст не процитирован, synthesize faithful text из proposal.\n"
+            "- op_type=`vote` нормализуй: `vote_id/choice` → cast_vote, `target_agent_id/new_title` → open_vote.\n\n"
+
+            "Если proposal — осознанное бездействие/наблюдение → approved=true, пустой ops.\n"
+            "Если proposal содержательный, но не материализуем → отклони с reason.\n"
             f"Actor capabilities: {sorted(agent_caps)}\n"
-            "ВАЖНО: в op_type используй только snake_case-значения из JSON-схемы, а не Python-классы вроде SendMessageOp.\n"
+            "ВАЖНО: в op_type используй только snake_case-значения из JSON-схемы.\n"
             "Ответ: только JSON по схеме.\n"
         )
         user = self._perform_llm_user_prompt(
@@ -1053,7 +1145,7 @@ class Arbiter:
     @staticmethod
     def _missing_capability_for_op(op: StateOp, caps: set[str]) -> str | None:
         """Вернуть недостающую capability для op (или None)."""
-        if isinstance(op, (CreateWorkItemOp, AddWorkNoteOp, SubmitWorkProposalOp)) and "work" not in caps:
+        if isinstance(op, (CreateWorkItemOp, AddWorkNoteOp, SubmitWorkProposalOp, CreateArtifactOp, UpdateArtifactOp)) and "work" not in caps:
             return "work"
         if isinstance(op, (OpenVoteOp, CastVoteOp)) and "dao" not in caps:
             return "dao"
@@ -1316,11 +1408,155 @@ class Arbiter:
                 )
             ]
 
-        if op_type == "world_event":
+        if op_type == "create_artifact":
+            artifact_type = str(args.get("artifact_type") or "document")
+            title = str(args.get("title") or "")
+            if not title:
+                raise ValueError("create_artifact requires title")
+            temporal_error = self._validate_temporal_texts(
+                current_tick=state.tick,
+                texts=[title, str(args.get("summary") or "")],
+            )
+            if temporal_error:
+                raise ValueError(temporal_error)
+            related_work_id = str(args.get("related_work_id") or "").strip() or None
+            if related_work_id and related_work_id not in state.work_items:
+                raise ValueError(f"unknown related_work_id: {related_work_id}")
+            artifact_id = allocator.next_id(EntityKind.ARTIFACT, tick=state.tick)
+            agent_state = state.agents.get(agent_id)
+            owner_org_id = agent_state.org_id if agent_state else None
+            zone_id = agent_state.zone_id if agent_state else None
+            visibility = str(args.get("visibility") or "internal")
+            if visibility not in {"internal", "public"}:
+                visibility = "internal"
             return [
-                EmitWorldEventOp(
+                CreateArtifactOp(
+                    created_by=agent_id,
+                    artifact_id=artifact_id,
+                    artifact_type=artifact_type,
+                    title=title,
+                    summary=str(args.get("summary") or ""),
+                    owner_org_id=owner_org_id,
+                    zone_id=zone_id,
+                    related_work_id=related_work_id,
+                    visibility=visibility,
+                )
+            ]
+
+        if op_type == "update_artifact":
+            artifact_id = str(args.get("artifact_id") or "")
+            if artifact_id not in state.artifacts:
+                raise ValueError(f"unknown artifact_id: {artifact_id}")
+            return [
+                UpdateArtifactOp(
                     actor_id=agent_id,
-                    description=str(args.get("description") or ""),
+                    artifact_id=artifact_id,
+                    title=str(args.get("title") or "") or None,
+                    summary=str(args.get("summary") or "") or None,
+                    status=str(args.get("status") or "") or None,
+                    visibility=str(args.get("visibility") or "") or None,
+                )
+            ]
+
+        if op_type == "narrative_action":
+            description = str(args.get("description") or "")
+            if not description:
+                raise ValueError("narrative_action requires description")
+            zone_id = str(args.get("zone_id") or "").strip() or None
+            if zone_id and not state.registry.exists(zone_id):
+                zone_id = None
+            witnesses_raw = args.get("witnesses") or []
+            witnesses = [str(w) for w in witnesses_raw if str(w) in state.agents]
+            return [
+                RecordNarrativeActionOp(
+                    actor_id=agent_id,
+                    description=description,
+                    action_kind=str(args.get("action_kind") or "general"),
+                    zone_id=zone_id,
+                    witnesses=witnesses or None,
+                )
+            ]
+
+        if op_type == "upsert_informal_link":
+            agent_a = str(args.get("agent_a_id") or "")
+            agent_b = str(args.get("agent_b_id") or "")
+            if agent_a not in state.agents:
+                raise ValueError(f"unknown agent_a_id: {agent_a}")
+            if agent_b not in state.agents:
+                raise ValueError(f"unknown agent_b_id: {agent_b}")
+            if agent_a == agent_b:
+                raise ValueError("informal link requires two different agents")
+            link_type = str(args.get("link_type") or "").strip()
+            if not link_type:
+                raise ValueError("upsert_informal_link requires link_type")
+            strength_delta = float(args.get("strength_delta") or 0.1)
+            strength_delta = max(-0.5, min(0.5, strength_delta))
+            return [
+                UpsertInformalLinkOp(
+                    actor_id=agent_id,
+                    agent_a_id=agent_a,
+                    agent_b_id=agent_b,
+                    link_type=link_type,
+                    strength_delta=strength_delta,
+                    visibility=str(args.get("visibility") or "latent") or "latent",
+                    source=str(args.get("source") or "arbiter_side_effect"),
+                )
+            ]
+
+        if op_type == "add_information_signal":
+            signal = str(args.get("signal") or "").strip()
+            if not signal:
+                raise ValueError("add_information_signal requires signal text")
+            return [
+                AddInformationSignalOp(
+                    actor_id=agent_id,
+                    signal=signal,
+                )
+            ]
+
+        if op_type == "upsert_pending_interaction":
+            target_agent_id = str(args.get("target_agent_id") or "")
+            if target_agent_id not in state.agents:
+                raise ValueError(f"unknown target_agent_id: {target_agent_id}")
+            source_agent_id = str(args.get("source_agent_id") or "").strip() or agent_id
+            if source_agent_id not in state.agents:
+                source_agent_id = agent_id
+            category = str(args.get("category") or "follow_up").strip()
+            summary = str(args.get("summary") or "").strip()
+            if not summary:
+                raise ValueError("upsert_pending_interaction requires summary")
+            due_offset = int(args.get("due_offset_ticks") or 2)
+            due_offset = max(1, min(20, due_offset))
+            priority = str(args.get("priority") or "normal")
+            if priority not in {"low", "normal", "high"}:
+                priority = "normal"
+            interaction_id = f"pi_t{state.tick}_{agent_id}_{allocator.next_id(EntityKind.WORK_ITEM, tick=state.tick)}"
+            return [
+                UpsertPendingInteractionOp(
+                    actor_id=agent_id,
+                    interaction_id=interaction_id,
+                    target_agent_id=target_agent_id,
+                    source_agent_id=source_agent_id,
+                    category=category,
+                    summary=summary,
+                    due_tick=state.tick + due_offset,
+                    priority=priority,
+                )
+            ]
+
+        if op_type == "resolve_pending_interaction":
+            interaction_id = str(args.get("interaction_id") or "")
+            if interaction_id not in state.pending_interactions:
+                raise ValueError(f"unknown interaction_id: {interaction_id}")
+            resolve_status = str(args.get("status") or "completed")
+            if resolve_status not in {"completed", "expired"}:
+                resolve_status = "completed"
+            return [
+                ResolvePendingInteractionOp(
+                    actor_id=agent_id,
+                    interaction_id=interaction_id,
+                    status=resolve_status,
+                    reason=str(args.get("reason") or ""),
                 )
             ]
 

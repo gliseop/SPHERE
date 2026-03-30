@@ -103,6 +103,7 @@ class MemoryConfig(BaseModel):
             "pending_interaction_due": 5.0,
             "pending_interaction_completed": 4.0,
             "pending_interaction_expired": 5.0,
+            "narrative_action": 6.0,
             "world_event": 5.0,
             "environment_institution_updated": 5.0,
             "environment_zone_updated": 5.0,
