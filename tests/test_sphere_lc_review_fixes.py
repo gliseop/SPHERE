@@ -695,6 +695,68 @@ def test_perform_rejection_does_not_consume_id_allocator(tmp_path: Path) -> None
     assert approved[0].ops[0].work_id == "work:0_1"
 
 
+def test_perform_vote_alias_maps_to_cast_vote(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_2",
+        created_tick=0,
+        closes_tick=2,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1"],
+    )
+    mock = MockLLMProvider(
+        structured_responses={
+            "vote-alias": {
+                "approved": True,
+                "reason": "ok",
+                "ops": [
+                    {
+                        "op_type": "vote",
+                        "args": {"vote_id": "vote:1", "choice": "yes"},
+                    }
+                ],
+            }
+        }
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=mock)
+
+    act = PerformAction(type=ActionType.PERFORM, description="vote-alias", target_id="", justification="")
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert res[0].approved is True
+    assert res[0].ops
+    assert res[0].ops[0].__class__.__name__ == "CastVoteOp"
+
+
+def test_perform_message_alias_maps_to_send_message(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    mock = MockLLMProvider(
+        structured_responses={
+            "message-alias": {
+                "approved": True,
+                "reason": "ok",
+                "ops": [
+                    {
+                        "op_type": "message",
+                        "args": {"to_id": "agent:off_2", "text": "Нужно обсудить детали.", "private": True},
+                    }
+                ],
+            }
+        }
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=mock)
+
+    act = PerformAction(type=ActionType.PERFORM, description="message-alias", target_id="", justification="")
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert res[0].approved is True
+    assert res[0].ops
+    assert res[0].ops[0].__class__.__name__ == "SendMessageOp"
+
+
 def test_arbiter_retries_substantive_proposal_after_empty_materialization(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
     provider = _RetryingMaterializationProvider()

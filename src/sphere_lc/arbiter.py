@@ -46,6 +46,7 @@ from .ops import (
     CreateAgentOp,
     CreateEntityOp,
     CreateWorkItemOp,
+    EmitWorldEventOp,
     ModifyReputationOp,
     OpenVoteOp,
     SendMessageOp,
@@ -111,6 +112,7 @@ def _normalize_perform_op_type(op_type: str) -> str:
         return raw
     explicit = {
         "SendMessageOp": "send_message",
+        "message": "send_message",
         "PublishOp": "send_message",
         "CreateWorkOp": "create_work_item",
         "CreateWorkItemOp": "create_work_item",
@@ -122,6 +124,7 @@ def _normalize_perform_op_type(op_type: str) -> str:
         "SetVoteConsentOp": "respond_nomination",
         "RespondNominationOp": "respond_nomination",
         "ModifyReputationOp": "modify_reputation",
+        "EmitWorldEventOp": "world_event",
         "NoopOp": "noop",
     }
     if raw in explicit:
@@ -248,6 +251,11 @@ def _perform_output_schema() -> dict[str, Any]:
                 "reason": {"type": "string"},
             },
             ["target_agent_id", "delta"],
+        ),
+        op(
+            "world_event",
+            {"description": {"type": "string"}},
+            ["description"],
         ),
         op("noop", {}, []),
     ]
@@ -852,10 +860,21 @@ class Arbiter:
             "которые детерминированно изменят мир.\n"
             "Proposal может содержать несколько связанных намерений в одном описании; материализуй только те ops,\n"
             "которые действительно следуют из текста и допустимы по состоянию мира.\n"
+            "Если agent:*, work:*, chan:* или org:* уже присутствуют в YAML journal, считай их существующими typed targets.\n"
+            "Не придумывай дополнительные барьеры вида «агент не доступен для прямой коммуникации», если такого ограничения нет прямо в состоянии мира.\n"
+            "Pending interactions, audit-cases и monitoring сами по себе не запрещают send_message, если в состоянии мира нет явного правила, которое блокирует такой контакт.\n"
             "Политика должностей: только через DAO (vote + consent). Не меняй должности напрямую.\n"
             "Нельзя выдумывать новых агентов. Нельзя писать приватно неизвестным ID.\n"
             "Базовая коммуникация агента не требует отдельного capability: send_message можно использовать как естественное действие,\n"
             "но оно всё равно подчиняется физике мира, typed-id и пространственным ограничениям.\n"
+            "Короткие примеры materialization:\n"
+            "- «Напишу agent:X ...» при существующем agent:X обычно materialize в send_message.\n"
+            "- «Добавлю в work:Y заметку ...» при существующем work:Y обычно materialize в add_work_note.\n"
+            "- «Вынесу вопрос о повышении agent:Z ...» materialize в open_vote, а не в прямую смену должности.\n"
+            "- не отклоняй простой send_message только потому, что у актора нет отдельной capability `message`: базовая коммуникация разрешена.\n"
+            "- если proposal просит «написать» или «добавить заметку», а точный текст не процитирован дословно, synthesize короткий faithful text из самого proposal вместо отказа.\n"
+            "- если proposal содержит физическое или неформальное действие (например, «подойду к директору», «намекну», «передам лично в руки», «проверю сейф»), которое нельзя свести к административным ops, materialize его как `world_event` с подробным описанием действия. Это даёт миру необходимую свободу вне жестких рамок!\n"
+            "- если модель пишет op_type=`vote`, нормализуй его по args: `vote_id/choice` означает cast_vote, а `target_agent_id/new_title` означает open_vote.\n"
             "Если proposal действительно означает осознанное бездействие/наблюдение, допустимо вернуть approved=true и пустой список ops.\n"
             "Если proposal содержательный, но ты не можешь честно материализовать его в ops, отклони его с ясной reason,\n"
             "а не возвращай approved=true с пустым списком ops.\n"
@@ -1116,6 +1135,11 @@ class Arbiter:
         """Сконвертировать LLM-op в реальные ops."""
         allocator = id_alloc or self.id_alloc
         op_type = _normalize_perform_op_type(op_type)
+        if op_type == "vote":
+            if args.get("vote_id") or args.get("choice"):
+                op_type = "cast_vote"
+            elif args.get("target_agent_id") or args.get("new_title"):
+                op_type = "open_vote"
         if op_type == "noop":
             return []
 
@@ -1289,6 +1313,14 @@ class Arbiter:
                     target_agent_id=target_agent_id,
                     delta=delta,
                     reason=str(args.get("reason") or ""),
+                )
+            ]
+
+        if op_type == "world_event":
+            return [
+                EmitWorldEventOp(
+                    actor_id=agent_id,
+                    description=str(args.get("description") or ""),
                 )
             ]
 

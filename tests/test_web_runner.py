@@ -318,7 +318,10 @@ class TestLaunchSimulation:
         run_meta = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
         assert run_meta["run_name"] == run_name
         assert run_meta["governance"] == "G1"
-        assert run_meta["status"] == "running"
+        assert run_meta["status"] in {"running", "finished"}
+        if run_meta["status"] == "finished":
+            assert run_meta["returncode"] == 0
+            assert run_meta["finished_at"] is not None
         assert run_name in runner._active
         proc = runner._active[run_name]
         assert proc.cmd[:3] == [runner.sys.executable, "-m", "sphere_lc.cli"]

@@ -75,6 +75,13 @@ _NON_ESCALATION_NEEDLES = (
     "разъясн",
     "сверить",
 )
+_QUEUE_PRESSURE_NEEDLES = (
+    "очеред",
+    "задерж",
+    "жалоб",
+    "медиа",
+    "пресс",
+)
 _RESPONSE_NEEDLES = (
     "объясн",
     "поясн",

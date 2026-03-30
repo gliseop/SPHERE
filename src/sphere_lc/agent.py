@@ -297,6 +297,60 @@ def _format_spawn_context(*, agent: AgentState) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+def _format_proposal_examples(*, agent: AgentState, state: WorldState, open_votes: list[str]) -> str:
+    caps = set(agent.capabilities or [])
+    peer_id = next((aid for aid in sorted(state.agents.keys()) if aid != agent.agent_id), "")
+    work_id = next(iter(sorted(state.work_items.keys())), "")
+    vote_id = next(iter(sorted(open_votes)), "")
+    targeted_vote_id = next(
+        (
+            vid
+            for vid in sorted(open_votes)
+            if (state.votes.get(vid) is not None and state.votes[vid].target_agent_id == agent.agent_id)
+        ),
+        "",
+    )
+
+    lines = ["Примеры materializable proposal:"]
+    if "work" in caps and peer_id and work_id:
+        lines.append(
+            f"- Хорошо для тебя: \"Сразу напишу {peer_id}, попрошу сегодня уточнить требования по {work_id}, а затем сам добавлю туда короткую заметку с критериями.\""
+        )
+    elif peer_id and work_id:
+        lines.append(
+            f"- Хорошо для тебя: \"Сразу напишу {peer_id} и попрошу его уточнить требования по {work_id}; сам добавлять заметку в work я не буду.\""
+        )
+    elif peer_id:
+        lines.append(
+            f"- Хорошо для тебя: \"Сразу напишу {peer_id} и попрошу подтвердить, готов ли он вынести вопрос на формальное обсуждение сегодня.\""
+        )
+    if "work" in caps and work_id:
+        lines.append(
+            f"- Хорошо для тебя: \"Добавлю в {work_id} короткую заметку с текущим риском и попрошу участников ответить сегодня.\""
+        )
+    elif work_id and peer_id:
+        lines.append(
+            f"- Хорошо для тебя: \"Напишу {peer_id} и попрошу его зафиксировать в {work_id} мой комментарий по риску.\""
+        )
+    if "dao" in caps and vote_id:
+        lines.append(
+            f"- Хорошо для тебя: \"Если это уместно, вынесу вопрос на голосование или проголосую по {vote_id} прямо в этом тике.\""
+        )
+    elif targeted_vote_id:
+        lines.append(
+            f"- Хорошо для тебя: \"По {targeted_vote_id} прямо отвечу согласием или отказом как цель текущей номинации.\""
+        )
+    lines.append("- Плохо: \"Инициирую процесс, соберу мнения, проработаю вопрос, укреплю позиции.\"")
+    if "work" not in caps:
+        lines.append("- Для тебя плохо: обещать самому добавить заметку, создать work или менять документы, если у тебя нет capability `work`.")
+    if "dao" not in caps and not targeted_vote_id:
+        lines.append("- Для тебя плохо: обещать самому открыть голосование или голосовать, если у тебя нет capability `dao`.")
+    lines.append(
+        "- Если хочешь подготовить документ или обсуждение, переведи это в наблюдаемый шаг: кому напишешь, что опубликуешь, в какой существующий work добавишь заметку, по какому vote ответишь."
+    )
+    return "\n".join(lines) + "\n\n"
+
+
 def _recent_rejection_hints(visible_events: list[Event]) -> list[str]:
     """Собрать краткие подсказки по недавним отклонённым действиям.
 
@@ -427,6 +481,7 @@ class AgentRunner:
         informal_links_brief = _format_informal_links(agent=agent, state=state)
         pending_interactions_brief = _format_pending_interactions(agent=agent, state=state)
         spawn_context_brief = _format_spawn_context(agent=agent)
+        proposal_examples_text = _format_proposal_examples(agent=agent, state=state, open_votes=open_votes)
         motivation_block = _motivation_block(agent, visible_events)
 
         # Инструкция по действиям.
@@ -459,6 +514,7 @@ class AgentRunner:
             f"{informal_links_brief}"
             f"{pending_interactions_brief}"
             f"{spawn_context_brief}"
+            f"{proposal_examples_text}"
             f"Память:\n{mem_text}\n\n"
             "Формат ответа:\n"
             "- Верни одно поле `proposal` со свободным описанием своего хода на этот тик.\n"
@@ -476,6 +532,9 @@ class AgentRunner:
             "- избегай ритуальных повторов: не дублируй один и тот же формальный ход без нового эффекта или новой ставки\n"
             "- предпочитай действия, которые реально меняют ситуацию, а не только повторно фиксируют уже известное\n"
             "- не выдумывай новые typed-id; используй только реально существующие сущности мира\n"
+            "- если хочешь публикацию или сообщение, буквально укажи существующий адресат `agent:*`, `chan:*` или `org:*`; не выдумывай новый канал или новую сущность\n"
+            "- если у тебя нет capability `work`, не обещай сам добавлять заметку, создавать work или обновлять документы; вместо этого пиши тем, у кого такой доступ может быть\n"
+            "- если у тебя нет capability `dao`, не обещай сам открывать голосование или голосовать; исключение только одно: если текущий vote адресован тебе, можешь описать согласие или отказ как цель номинации\n"
             "- самономинация на должность запрещена; инициировать голосование можно только за другого агента\n"
             "- цель голосования не голосует сама за себя; если тебя номинировали, явно опиши согласие или отказ как свободное действие\n"
             "- если контекст дня и формальная процедура конфликтуют, ты вправе выбрать любой правдоподобный путь\n"

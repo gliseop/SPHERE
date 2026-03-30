@@ -26,6 +26,7 @@ from sphere_lc.state import (
     OperationalQueueState,
     PendingInteractionState,
     ResourcePoolState,
+    Vote,
     WorkItem,
     WorldState,
     ZoneState,
@@ -894,6 +895,8 @@ def test_agent_prompt_includes_story_state_daily_context_and_soft_perform(tmp_pa
     assert "Лёгкие контакты не имеют typed-id" in prompt
     assert "Верни одно поле `proposal` со свободным описанием своего хода на этот тик." in prompt
     assert "Не используй menu/action-type, не пиши `perform`, `noop`, enum-значения" in prompt
+    assert "Примеры materializable proposal:" in prompt
+    assert "Плохо: \"Инициирую процесс, соберу мнения, проработаю вопрос, укреплю позиции.\"" in prompt
     assert "ПРЕДПОЧИТАЙ структурированные действия" not in prompt
 
 
@@ -1004,6 +1007,89 @@ def test_agent_prompt_includes_relevant_environment_brief(tmp_path: Path) -> Non
     assert "Ресурс res:roads_budget" in prompt
     assert "Очередь queue:permits" in prompt
     assert "Активные сигналы среды: новая волна жалоб, утечка сметы" in prompt
+
+
+def test_agent_prompt_examples_respect_missing_work_capability(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:cand_1",
+        name="Cand 1",
+        internal=False,
+        persona=PersonaArtifact(summary="Кандидат, который пытается повлиять на процесс."),
+        capabilities=["message"],
+    )
+    state = WorldState(tick=0, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    state.agents["agent:off_1"] = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Сотрудник"),
+        capabilities=["message", "work", "dao"],
+    )
+    state.work_items["work:hiring_1"] = WorkItem(
+        work_id="work:hiring_1",
+        work_type="hiring",
+        title="Найм инженера",
+        participants=["agent:off_1", "agent:cand_1"],
+    )
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    prompt = runner._build_user(
+        agent=agent,
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    assert "сам добавлять заметку в work я не буду" in prompt
+    assert "Для тебя плохо: обещать самому добавить заметку" in prompt
+    assert "сам добавлю туда короткую заметку" not in prompt
+
+
+def test_agent_prompt_examples_allow_nomination_response_without_dao_capability(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_2",
+        name="Off 2",
+        internal=True,
+        persona=PersonaArtifact(summary="Цель текущей номинации."),
+        capabilities=["message"],
+    )
+    state = WorldState(tick=1, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    state.agents["agent:off_1"] = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Инициатор"),
+        capabilities=["message", "dao"],
+    )
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_1",
+        created_tick=0,
+        closes_tick=2,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1"],
+    )
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    prompt = runner._build_user(
+        agent=agent,
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    assert "По vote:1 прямо отвечу согласием или отказом как цель текущей номинации." in prompt
+    assert "Для тебя плохо: обещать самому открыть голосование" not in prompt
 
 
 def test_agent_prompt_includes_relevant_artifacts(tmp_path: Path) -> None:

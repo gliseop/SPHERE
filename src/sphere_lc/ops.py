@@ -223,6 +223,25 @@ class SendMessageOp:
 
 
 @dataclass(frozen=True, slots=True)
+class EmitWorldEventOp:
+    """Опубликовать свободное событие в мир (например, физическое действие)."""
+
+    actor_id: str
+    description: str
+
+    def apply(self, state: WorldState) -> list[Event]:
+        return [
+            Event(
+                tick=state.tick,
+                event_type="world_event",
+                actor_id=self.actor_id,
+                payload={"description": self.description},
+                audience=[INTERNAL_AUDIENCE],
+            )
+        ]
+
+
+@dataclass(frozen=True, slots=True)
 class CreateWorkItemOp:
     """Создать work item."""
 
