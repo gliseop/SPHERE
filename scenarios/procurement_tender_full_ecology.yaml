@@ -8,7 +8,7 @@ seed: 42
 ticks: 100
 
 llm:
-  model: "openai/gpt-oss-120b"
+  model: "nvidia/nemotron-3-super-120b-a12b"
   base_url: null
   temperature: 0.25
   use_tool_calls: true

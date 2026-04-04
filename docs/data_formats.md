@@ -14,7 +14,7 @@ seed: 42
 ticks: 3
 
 llm:
-  model: "gpt-4o-mini"
+  model: "nvidia/nemotron-3-super-120b-a12b"
   base_url: null
   provider_order: []  # опциональный override; обычно OpenRouter routing задают через OPENROUTER_PROVIDER_ORDER в .env
   temperature: 0.1

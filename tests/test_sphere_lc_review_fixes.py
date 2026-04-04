@@ -30,6 +30,7 @@ from sphere_lc.actions import (
 )
 from sphere_lc.arbiter import Arbiter
 from sphere_lc.config import (
+    DEFAULT_LLM_MODEL,
     AuditRuntimeConfig,
     GovernanceConfig,
     LLMConfig,
@@ -1326,7 +1327,7 @@ def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("OPENAI_BASE_URL", "https://example.test/v1")
     monkeypatch.delenv("OPENROUTER_PROVIDER_ORDER", raising=False)
     monkeypatch.delenv("OPENAI_PROVIDER_ORDER", raising=False)
-    _ = create_llm_provider(LLMConfig(model="gpt-4o-mini", base_url=None))
+    _ = create_llm_provider(LLMConfig(model=DEFAULT_LLM_MODEL, base_url=None))
     assert captured["base_url"] == "https://example.test/v1"
     assert captured["provider_order"] is None
 
@@ -1343,7 +1344,7 @@ def test_create_llm_provider_uses_env_provider_order(monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("OPENROUTER_PROVIDER_ORDER", "Groq, OpenAI,Groq")
 
-    _ = create_llm_provider(LLMConfig(model="gpt-4o-mini", base_url=None))
+    _ = create_llm_provider(LLMConfig(model=DEFAULT_LLM_MODEL, base_url=None))
 
     assert captured["provider_order"] == ["Groq", "OpenAI"]
 
@@ -1360,7 +1361,7 @@ def test_create_provider_uses_env_provider_order(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("OPENROUTER_PROVIDER_ORDER", "Groq, OpenAI,Groq")
 
-    _ = create_provider(mock=False, model="gpt-4o-mini")
+    _ = create_provider(mock=False, model=DEFAULT_LLM_MODEL)
 
     assert captured["provider_order"] == ["Groq", "OpenAI"]
 
@@ -1385,14 +1386,14 @@ def test_create_llm_provider_loads_dotenv_from_cwd(
         encoding="utf-8",
     )
 
-    _ = create_llm_provider(LLMConfig(model="gpt-4o-mini", base_url=None))
+    _ = create_llm_provider(LLMConfig(model=DEFAULT_LLM_MODEL, base_url=None))
 
     assert captured["api_key"] == "dotenv-test-key"
     assert captured["base_url"] == "https://dotenv.example/v1"
 
 
 def test_openai_provider_keeps_zero_temperature_for_standard_backends() -> None:
-    provider = SimpleNamespace(_base_url="https://api.openai.com/v1", _model="gpt-4o-mini")
+    provider = SimpleNamespace(_base_url="https://api.openai.com/v1", _model=DEFAULT_LLM_MODEL)
 
     assert OpenAICompatibleProvider._effective_temperature(provider, 0.0) == 0.0
     assert OpenAICompatibleProvider._effective_temperature(provider, 0.35) == 0.35
@@ -1406,13 +1407,13 @@ def test_openai_provider_clamps_zero_temperature_only_for_minimax() -> None:
 
 def test_openai_provider_only_sets_provider_order_for_openrouter() -> None:
     standard = OpenAICompatibleProvider(
-        model="gpt-4o-mini",
+        model=DEFAULT_LLM_MODEL,
         api_key="test-key",
         base_url="https://api.openai.com/v1",
         provider_order=["Groq"],
     )
     routed = OpenAICompatibleProvider(
-        model="gpt-4o-mini",
+        model=DEFAULT_LLM_MODEL,
         api_key="test-key",
         base_url="https://openrouter.ai/api/v1",
         provider_order=["Groq"],
@@ -1426,7 +1427,7 @@ def test_openai_provider_only_sets_provider_order_for_openrouter() -> None:
 
 def test_openai_provider_uses_30s_timeout_by_default() -> None:
     provider = OpenAICompatibleProvider(
-        model="gpt-4o-mini",
+        model=DEFAULT_LLM_MODEL,
         api_key="test-key",
         base_url="https://api.openai.com/v1",
     )
@@ -1436,7 +1437,7 @@ def test_openai_provider_uses_30s_timeout_by_default() -> None:
 
 def test_openai_provider_caps_attempt_timeout_by_remaining_budget() -> None:
     provider = OpenAICompatibleProvider(
-        model="gpt-4o-mini",
+        model=DEFAULT_LLM_MODEL,
         api_key="test-key",
         base_url="https://api.openai.com/v1",
     )
@@ -1467,7 +1468,7 @@ def test_openai_provider_caps_attempt_timeout_by_remaining_budget() -> None:
 
 def test_openai_provider_stops_retrying_after_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = OpenAICompatibleProvider(
-        model="gpt-4o-mini",
+        model=DEFAULT_LLM_MODEL,
         api_key="test-key",
         base_url="https://api.openai.com/v1",
     )

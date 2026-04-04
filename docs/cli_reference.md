@@ -87,7 +87,7 @@ sphere-lc compose --description-file docs/brief.txt \
 
 # Анализ нарушений с указанием модели
 sphere-lc oracle --events results/run_50/events.jsonl \
-    --out results/run_50/violations.json --model gpt-4o
+    --out results/run_50/violations.json --model nvidia/nemotron-3-super-120b-a12b
 ```
 
 ## manage_users.py

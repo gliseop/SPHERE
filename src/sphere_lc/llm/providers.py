@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from ..config import DEFAULT_LLM_MODEL
 from .protocols import LLMProvider, LLMResponse, StructuredLLMResponse
 from .cache import LLMCache
 from ._utils import (
@@ -194,7 +195,7 @@ class OpenAICompatibleProvider:
 
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
+        model: str = DEFAULT_LLM_MODEL,
         api_key: str | None = None,
         base_url: str | None = None,
         cache_path: str | None = None,
@@ -706,7 +707,7 @@ def create_provider(
 
     Args:
         mock: Использовать mock-провайдер.
-        model: Имя модели (по умолчанию из LLM_MODEL или gpt-4o-mini).
+        model: Имя модели (по умолчанию из LLM_MODEL или ``config.DEFAULT_LLM_MODEL``).
         api_key: API-ключ (по умолчанию из OPENAI_API_KEY).
         base_url: Базовый URL (по умолчанию из OPENAI_BASE_URL).
         cache_path: Путь к кешу.
@@ -722,7 +723,7 @@ def create_provider(
         return MockLLMProvider()
 
     _load_dotenv_if_available()
-    resolved_model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
+    resolved_model = model or os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
     resolved_key = api_key or os.getenv("OPENAI_API_KEY")
     resolved_url = base_url or os.getenv("OPENAI_BASE_URL")
     resolved_provider_order = _normalize_provider_order(provider_order) or _provider_order_from_env()

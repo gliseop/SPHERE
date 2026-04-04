@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .ids import EntityKind, ensure_kind, parse_typed_id
 from .persona import PersonaArtifact
 
+DEFAULT_LLM_MODEL = "nvidia/nemotron-3-super-120b-a12b"
+
 
 DEFAULT_AGENT_PROMPT_ADDRESSING_HINT = (
     "Если пишешь конкретному участнику, адресуй ход только на `agent:*`; не совмещай "
@@ -45,7 +47,7 @@ class LLMConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    model: str = "gpt-4o-mini"
+    model: str = DEFAULT_LLM_MODEL
     base_url: str | None = None
     api_key_env: str = "OPENAI_API_KEY"
     provider_order: list[str] = Field(default_factory=list)
