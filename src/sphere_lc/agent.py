@@ -11,8 +11,7 @@ from typing import Callable, Iterable
 from pydantic import TypeAdapter, ValidationError
 
 from .actions import Action, ActionType, PerformAction, agent_turn_json_schema
-from .config import MemoryConfig
-from .config import RuntimeConfig
+from .config import AgentPromptPolicyConfig, MemoryConfig, RuntimeConfig
 from .events import Event
 from .ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from .llm import LLMCaller
@@ -297,7 +296,28 @@ def _format_spawn_context(*, agent: AgentState) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def _format_proposal_examples(*, agent: AgentState, state: WorldState, open_votes: list[str]) -> str:
+def _format_prompt_policy(*, policy: AgentPromptPolicyConfig) -> str:
+    lines = ["Локальные правила адресации и materialization:"]
+    if policy.addressing_hint:
+        lines.append(f"- {policy.addressing_hint}")
+    if policy.private_message_hint:
+        lines.append(f"- {policy.private_message_hint}")
+    if policy.public_message_hint:
+        lines.append(f"- {policy.public_message_hint}")
+    for rule in policy.extra_rules:
+        lines.append(f"- {rule}")
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines) + "\n\n"
+
+
+def _format_proposal_examples(
+    *,
+    agent: AgentState,
+    state: WorldState,
+    open_votes: list[str],
+    policy: AgentPromptPolicyConfig,
+) -> str:
     caps = set(agent.capabilities or [])
     peer_id = next((aid for aid in sorted(state.agents.keys()) if aid != agent.agent_id), "")
     work_id = next(iter(sorted(state.work_items.keys())), "")
@@ -340,7 +360,11 @@ def _format_proposal_examples(*, agent: AgentState, state: WorldState, open_vote
         lines.append(
             f"- Хорошо для тебя: \"По {targeted_vote_id} прямо отвечу согласием или отказом как цель текущей номинации.\""
         )
+    for example in policy.extra_good_examples:
+        lines.append(f"- Хорошо для тебя: \"{example}\"")
     lines.append("- Плохо: \"Инициирую процесс, соберу мнения, проработаю вопрос, укреплю позиции.\"")
+    for example in policy.extra_bad_examples:
+        lines.append(f"- Плохо: \"{example}\"")
     if "work" not in caps:
         lines.append("- Для тебя плохо: обещать самому добавить заметку, создать work или менять документы, если у тебя нет capability `work`.")
     if "dao" not in caps and not targeted_vote_id:
@@ -481,7 +505,14 @@ class AgentRunner:
         informal_links_brief = _format_informal_links(agent=agent, state=state)
         pending_interactions_brief = _format_pending_interactions(agent=agent, state=state)
         spawn_context_brief = _format_spawn_context(agent=agent)
-        proposal_examples_text = _format_proposal_examples(agent=agent, state=state, open_votes=open_votes)
+        prompt_policy = self.runtime.agent_prompt
+        prompt_policy_text = _format_prompt_policy(policy=prompt_policy)
+        proposal_examples_text = _format_proposal_examples(
+            agent=agent,
+            state=state,
+            open_votes=open_votes,
+            policy=prompt_policy,
+        )
         motivation_block = _motivation_block(agent, visible_events)
 
         # Инструкция по действиям.
@@ -514,6 +545,7 @@ class AgentRunner:
             f"{informal_links_brief}"
             f"{pending_interactions_brief}"
             f"{spawn_context_brief}"
+            f"{prompt_policy_text}"
             f"{proposal_examples_text}"
             f"Память:\n{mem_text}\n\n"
             "Формат ответа:\n"

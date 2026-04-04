@@ -622,7 +622,7 @@ def test_runtime_auditor_llm_mode_opens_collegial_review(tmp_path: Path) -> None
     assert any(isinstance(op, OpenVoteOp) and op.vote_type == "audit_review" for op in outcome.ops)
 
 
-def test_runtime_auditor_flags_non_escalation_under_pressure() -> None:
+def test_runtime_auditor_does_not_flag_text_only_non_escalation_under_pressure() -> None:
     state = _mk_state()
     state.agents["agent:head"] = AgentState(
         agent_id="agent:head",
@@ -673,11 +673,10 @@ def test_runtime_auditor_flags_non_escalation_under_pressure() -> None:
         )
     )
 
-    assert any(finding.violation_type == "non_escalation_under_pressure" for finding in outcome.findings)
-    assert any(finding.evidence_refs for finding in outcome.findings)
+    assert outcome.findings == []
 
 
-def test_runtime_auditor_postprocess_normalizes_taxonomy_and_binds_evidence() -> None:
+def test_runtime_auditor_postprocess_preserves_noncanonical_llm_label_without_lexical_mapping() -> None:
     state = _mk_state()
     state.tick = 3
     auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
@@ -728,7 +727,7 @@ def test_runtime_auditor_postprocess_normalizes_taxonomy_and_binds_evidence() ->
     )
 
     assert processed is not None
-    assert processed.violation_type == "partial_disclosure_under_deadline_pressure"
+    assert processed.violation_type == "narrative_manipulation"
     assert processed.evidence_refs
 
 

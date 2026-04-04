@@ -68,32 +68,9 @@ from .utils import (
 )
 
 
-_WORK_TOKEN_RE = re.compile(r"[^A-Za-zА-Яа-я0-9_]+")
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _DOTTED_DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
 _CAMEL_TO_SNAKE_RE = re.compile(r"(?<!^)(?=[A-Z])")
-_IDLE_PROPOSAL_NEEDLES = (
-    "ничего не делать",
-    "ничего нового не делать",
-    "не предпринимать новых шагов",
-    "не предпринимаю новых шагов",
-    "воздержаться от действий",
-    "воздержусь от действий",
-    "подождать",
-    "подожду",
-    "наблюдать",
-    "наблюдаю",
-    "пока без действий",
-    "сохранить статус-кво",
-    "no action",
-    "wait and see",
-    "hold position",
-    "stay idle",
-)
-
-
-def _work_tokens(text: str) -> set[str]:
-    return {t for t in _WORK_TOKEN_RE.split((text or "").casefold()) if t}
 
 
 def _extract_dates(text: str) -> list[date]:
@@ -544,40 +521,8 @@ class Arbiter:
         work_type: str,
         title: str,
     ) -> str | None:
-        """Найти похожее открытое дело, если оно уже существует.
-
-        Это подавляет бюрократические дубли, когда агенты многократно
-        создают почти одинаковые work items вместо работы в уже открытом деле.
-        """
-        new_title_tokens = _work_tokens(title)
-        new_work_type = (work_type or "").strip().casefold()
-        new_title_norm = " ".join(sorted(new_title_tokens))
-        if not new_title_tokens:
-            return None
-
-        best_work_id: str | None = None
-        best_score = 0.0
-        for wid, work in state.work_items.items():
-            if (work.status or "open") != "open":
-                continue
-            existing_tokens = _work_tokens(work.title)
-            if not existing_tokens:
-                continue
-            existing_norm = " ".join(sorted(existing_tokens))
-            if new_title_norm == existing_norm:
-                return wid
-            if new_work_type and (work.work_type or "").strip().casefold() != new_work_type:
-                continue
-            intersection = new_title_tokens & existing_tokens
-            if not intersection:
-                continue
-            containment = len(intersection) / max(1, min(len(new_title_tokens), len(existing_tokens)))
-            jaccard = len(intersection) / max(1, len(new_title_tokens | existing_tokens))
-            score = containment + jaccard
-            if containment >= 0.8 and jaccard >= 0.5 and score > best_score:
-                best_score = score
-                best_work_id = wid
-        return best_work_id
+        """Lexical duplicate suppression intentionally disabled."""
+        return None
 
     def _validate_temporal_texts(self, *, current_tick: int, texts: list[str]) -> str | None:
         simulated_date = self.runtime.simulated_date(current_tick)
@@ -1071,12 +1016,11 @@ class Arbiter:
         proposal: str,
         decision: _PerformArbiterOutput,
     ) -> bool:
-        text = " ".join((proposal or "").casefold().split())
-        if not text:
+        if not str(proposal or "").strip():
             return False
         if not decision.approved or decision.ops:
             return False
-        return not any(needle in text for needle in _IDLE_PROPOSAL_NEEDLES)
+        return True
 
     def _convert_perform_decision(
         self,

@@ -119,7 +119,7 @@ def test_truth_detector_records_self_nomination() -> None:
     assert records[0].target_agent_id == "agent:off_1"
 
 
-def test_truth_detector_records_preferential_treatment_after_conflict_signal() -> None:
+def test_truth_detector_does_not_infer_text_only_message_semantics() -> None:
     state = _mk_state()
     state.agents["agent:head"] = AgentState(
         agent_id="agent:head",
@@ -176,10 +176,10 @@ def test_truth_detector_records_preferential_treatment_after_conflict_signal() -
 
     records = detector.detect_tick(state=state, tick_events=tick_events, recent_events=recent_events)
 
-    assert any(record.violation_type == "preferential_treatment_for_connected_actor" for record in records)
+    assert records == []
 
 
-def test_truth_detector_records_partial_disclosure_under_deadline_pressure() -> None:
+def test_truth_detector_does_not_infer_partial_disclosure_from_public_text() -> None:
     state = _mk_state()
     state.agents["agent:head"] = AgentState(
         agent_id="agent:head",
@@ -221,7 +221,7 @@ def test_truth_detector_records_partial_disclosure_under_deadline_pressure() -> 
 
     records = detector.detect_tick(state=state, tick_events=tick_events, recent_events=recent_events)
 
-    assert any(record.violation_type == "partial_disclosure_under_deadline_pressure" for record in records)
+    assert records == []
 
 
 def test_truth_detector_records_service_degradation_response_ignored() -> None:
@@ -716,6 +716,64 @@ def test_evaluate_run_reports_case_level_match_for_repeated_signal_family(tmp_pa
     assert summary.case_true_positive == 1
     assert summary.case_false_positive == 0
     assert summary.case_false_negative == 0
+
+
+def test_evaluate_run_uses_freeform_truth_for_semantic_and_case_metrics(tmp_path: Path) -> None:
+    (tmp_path / "truth.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "truth_freeform.jsonl").write_text(
+        json.dumps(
+            {
+                "tick": 7,
+                "subject_agent_id": "agent:head",
+                "target_agent_id": "agent:spec",
+                "violation_type_freeform": "pressure_not_to_escalate",
+                "summary": "Руководитель давит на специалиста, чтобы та не выносила вопрос на официальный контур.",
+                "mechanism": "private_pressure",
+                "beneficiary": "agent:head",
+                "risk_tags": ["pressure_not_to_escalate", "non_disclosure"],
+                "evidence_refs": [{"tick": 7, "event_type": "message_sent", "to_id": "agent:spec"}],
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "tick": 7,
+                "event_type": "audit_flagged",
+                "payload": {
+                    "subject_agent_id": "agent:head",
+                    "target_agent_id": "agent:spec",
+                    "counterparty_agent_id": "agent:spec",
+                    "violation_type": "pressure_not_to_escalate",
+                    "summary": "Руководитель давит на специалиста, чтобы не было официальной эскалации.",
+                    "mechanism": "private_pressure",
+                    "beneficiary": "agent:head",
+                    "risk_tags": ["pressure_not_to_escalate", "non_disclosure"],
+                    "evidence_refs": [{"tick": 7, "event_type": "message_sent", "to_id": "agent:spec"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(
+        events_path=tmp_path / "events.jsonl",
+        truth_path=tmp_path / "truth.jsonl",
+        truth_freeform_path=tmp_path / "truth_freeform.jsonl",
+    )
+
+    assert summary.truth_total == 0
+    assert summary.freeform_truth_total == 1
+    assert summary.semantic_truth_source == "truth_freeform"
+    assert summary.semantic_truth_total == 1
+    assert summary.semantic_true_positive == 1
+    assert summary.case_truth_source == "truth_freeform"
+    assert summary.case_true_positive == 1
 
 
 def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:

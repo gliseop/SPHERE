@@ -321,7 +321,7 @@ def test_arbiter_rejects_work_item_with_unknown_participant(tmp_path: Path) -> N
     assert "unknown_participant_agent_id" in res[0].reason
 
 
-def test_arbiter_rejects_duplicate_open_work_item(tmp_path: Path) -> None:
+def test_arbiter_allows_similarly_worded_open_work_item_without_lexical_dedup(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["work"], off_2_caps=["work"])
     state.work_items["work:existing"] = WorkItem(
         work_id="work:existing",
@@ -350,8 +350,7 @@ def test_arbiter_rejects_duplicate_open_work_item(tmp_path: Path) -> None:
         justification="",
     )
     res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
-    assert res[0].approved is False
-    assert res[0].reason == "duplicate_open_work_item:work:existing"
+    assert res[0].approved is True
 
 
 def test_arbiter_rejects_vote_from_non_voter(tmp_path: Path) -> None:
@@ -1652,6 +1651,54 @@ def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path
     assert "Верни одно поле `proposal` со свободным описанием своего хода на этот тик." in prompt
     assert "если тебя номинировали, явно опиши согласие или отказ как свободное действие" in prompt
     assert "respond_nomination (vote_id, accept: true/false)" not in prompt
+
+
+def test_agent_prompt_policy_injects_extra_rules_and_examples(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["message", "work"])
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(
+            agent_prompt={
+                "extra_rules": [
+                    "Если пишешь конкретному участнику, не оформляй этот шаг как публикацию в канале.",
+                ],
+                "extra_good_examples": [
+                    "Сначала напишу agent:off_1 лично, а отдельным шагом опубликую позицию в chan:public.",
+                ],
+            }
+        ),
+        memory=MemoryConfig(),
+    )
+
+    prompt = runner._build_user(
+        agent=state.agents["agent:off_2"],
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    assert "Локальные правила адресации и materialization" in prompt
+    assert "не оформляй этот шаг как публикацию в канале" in prompt
+    assert "Сначала напишу agent:off_1 лично, а отдельным шагом опубликую позицию в chan:public." in prompt
+
+
+def test_scenario_config_accepts_declarative_policy_blocks() -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "policy-config",
+            "ticks": 1,
+            "runtime": {
+                "agent_prompt": {
+                    "extra_rules": ["Не смешивай `agent:*` и `chan:*` в одной цели."],
+                }
+            },
+            "agents": [],
+            "world": {},
+        }
+    )
+
+    assert cfg.runtime.agent_prompt.extra_rules == ["Не смешивай `agent:*` и `chan:*` в одной цели."]
 
 
 def test_langgraph_world_graph_supports_checkpoint_path(tmp_path: Path) -> None:

@@ -30,6 +30,7 @@ class EvaluationSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     truth_total: int = 0
+    freeform_truth_total: int = 0
     runtime_flagged_total: int = 0
     true_positive: int = 0
     false_positive: int = 0
@@ -37,12 +38,16 @@ class EvaluationSummary(BaseModel):
     precision: float = 0.0
     recall: float = 0.0
     f1: float = 0.0
+    semantic_truth_source: str = "truth"
+    semantic_truth_total: int = 0
     semantic_true_positive: int = 0
     semantic_false_positive: int = 0
     semantic_false_negative: int = 0
     semantic_precision: float = 0.0
     semantic_recall: float = 0.0
     semantic_f1: float = 0.0
+    case_truth_source: str = "truth"
+    case_truth_total: int = 0
     case_true_positive: int = 0
     case_false_positive: int = 0
     case_false_negative: int = 0
@@ -52,9 +57,10 @@ class EvaluationSummary(BaseModel):
     by_violation_type: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
-def evaluate_run(*, events_path: Path, truth_path: Path) -> EvaluationSummary:
-    """Сравнить audit_flagged из events.jsonl с truth.jsonl."""
+def evaluate_run(*, events_path: Path, truth_path: Path, truth_freeform_path: Path | None = None) -> EvaluationSummary:
+    """Сравнить audit_flagged из events.jsonl с deterministic и optional freeform truth."""
     truth_records = [item for item in _iter_jsonl(truth_path) if isinstance(item, dict)]
+    freeform_truth_records = [item for item in _iter_jsonl(truth_freeform_path) if isinstance(item, dict)] if truth_freeform_path else []
     event_records = [item for item in _iter_jsonl(events_path) if isinstance(item, dict)]
 
     truth_entries = [_truth_strict_entry(item) for item in truth_records]
@@ -77,7 +83,10 @@ def evaluate_run(*, events_path: Path, truth_path: Path) -> EvaluationSummary:
     matched_truth = {truth_idx for truth_idx, _ in matched_pairs}
     matched_signal = {signal_idx for _, signal_idx in matched_pairs}
 
-    truth_findings = [_truth_finding(item) for item in truth_records]
+    semantic_truth_records = freeform_truth_records if freeform_truth_records else truth_records
+    semantic_truth_source = "truth_freeform" if freeform_truth_records else "truth"
+
+    truth_findings = [_truth_finding(item) for item in semantic_truth_records]
     truth_findings = [item for item in truth_findings if item is not None]
     signal_findings = [_signal_finding(item) for item in event_records if str(item.get("event_type") or "") == "audit_flagged"]
     signal_findings = [item for item in signal_findings if item is not None]
@@ -106,6 +115,7 @@ def evaluate_run(*, events_path: Path, truth_path: Path) -> EvaluationSummary:
 
     return EvaluationSummary(
         truth_total=len(truth_entries),
+        freeform_truth_total=len(freeform_truth_records),
         runtime_flagged_total=len(signal_entries),
         true_positive=len(matched_pairs),
         false_positive=len(signal_entries) - len(matched_pairs),
@@ -113,12 +123,16 @@ def evaluate_run(*, events_path: Path, truth_path: Path) -> EvaluationSummary:
         precision=round(precision, 4),
         recall=round(recall, 4),
         f1=round(f1, 4),
+        semantic_truth_source=semantic_truth_source,
+        semantic_truth_total=len(truth_findings),
         semantic_true_positive=semantic_tp,
         semantic_false_positive=semantic_fp,
         semantic_false_negative=semantic_fn,
         semantic_precision=round((semantic_tp / len(signal_findings)) if signal_findings else 0.0, 4),
         semantic_recall=round((semantic_tp / len(truth_findings)) if truth_findings else 0.0, 4),
         semantic_f1=round(_f1((semantic_tp / len(signal_findings)) if signal_findings else 0.0, (semantic_tp / len(truth_findings)) if truth_findings else 0.0), 4),
+        case_truth_source=semantic_truth_source,
+        case_truth_total=truth_cases_total,
         case_true_positive=case_tp,
         case_false_positive=case_fp,
         case_false_negative=case_fn,
@@ -290,7 +304,7 @@ def _truth_finding(item: dict[str, Any]) -> dict[str, Any] | None:
         "subject": subject,
         "target": _normalize_target(item.get("target_agent_id")),
         "beneficiary": _normalize_target(item.get("beneficiary")),
-        "violation_type": _normalize_violation_type(item.get("violation_type")),
+        "violation_type": _normalize_violation_type(item.get("violation_type") or item.get("violation_type_freeform")),
         "risk_tags": {str(tag).strip().casefold() for tag in list(item.get("risk_tags") or []) if str(tag).strip()},
         "summary": str(item.get("summary") or item.get("rationale") or ""),
         "mechanism": str(item.get("mechanism") or ""),

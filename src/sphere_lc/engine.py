@@ -750,21 +750,7 @@ class WorldEngine:
         governance_summary = None
         fidelity_summary = None
         freeform_truth_total = 0
-        if self.artifacts.truth_path is not None and self.artifacts.evaluation_path is not None:
-            governance_summary = evaluate_run(
-                events_path=self.artifacts.events_path,
-                truth_path=self.artifacts.truth_path,
-            )
-            save_evaluation(governance_summary, self.artifacts.evaluation_path)
-        if self.artifacts.fidelity_path is not None:
-            fidelity_summary = evaluate_fidelity(
-                events_path=self.artifacts.events_path,
-                start_date=self.cfg.runtime.start_date,
-                tick_duration_days=self.cfg.runtime.tick_duration_days,
-                temporal_past_slack_days=self.cfg.runtime.temporal_past_slack_days,
-                temporal_future_horizon_days=self.cfg.runtime.temporal_future_horizon_days,
-            )
-            save_fidelity(fidelity_summary, self.artifacts.fidelity_path)
+        freeform_truth_path_for_eval: Path | None = None
         if self.cfg.runtime.freeform_truth_enabled and self.artifacts.truth_freeform_path is not None:
             try:
                 recorder = FreeformTruthRecorder(
@@ -778,8 +764,25 @@ class WorldEngine:
                 )
                 save_freeform_truth(freeform_records, self.artifacts.truth_freeform_path)
                 freeform_truth_total = len(freeform_records)
+                freeform_truth_path_for_eval = self.artifacts.truth_freeform_path
             except Exception as exc:
                 logger.warning("Freeform truth recorder failed: %s", exc)
+        if self.artifacts.truth_path is not None and self.artifacts.evaluation_path is not None:
+            governance_summary = evaluate_run(
+                events_path=self.artifacts.events_path,
+                truth_path=self.artifacts.truth_path,
+                truth_freeform_path=freeform_truth_path_for_eval,
+            )
+            save_evaluation(governance_summary, self.artifacts.evaluation_path)
+        if self.artifacts.fidelity_path is not None:
+            fidelity_summary = evaluate_fidelity(
+                events_path=self.artifacts.events_path,
+                start_date=self.cfg.runtime.start_date,
+                tick_duration_days=self.cfg.runtime.tick_duration_days,
+                temporal_past_slack_days=self.cfg.runtime.temporal_past_slack_days,
+                temporal_future_horizon_days=self.cfg.runtime.temporal_future_horizon_days,
+            )
+            save_fidelity(fidelity_summary, self.artifacts.fidelity_path)
         if self.artifacts.summary_path is not None:
             payload = {
                 "governance": governance_summary.model_dump(mode="json") if governance_summary is not None else None,
@@ -1181,32 +1184,18 @@ class WorldEngine:
             return normalized
         return normalized[: max(0, max_chars - 1)].rstrip() + "…"
 
-    @staticmethod
-    def _text_has_any(text: str, needles: tuple[str, ...]) -> bool:
-        normalized = " ".join((text or "").casefold().split())
-        return any(needle in normalized for needle in needles)
-
     def _event_describes_risky_pressure(self, *, event: Event) -> bool:
-        if event.event_type != "world_event":
-            return False
-        description = str((event.payload or {}).get("description") or "")
-        risky_needles = (
-            "конфликт интерес",
-            "личн",
-            "связ",
-            "подозр",
-            "совпад",
-            "ускор",
-            "срок",
-            "санкц",
-            "риск",
-            "скрыт",
-            "давлен",
-            "репутац",
-            "расслед",
-            "комментар",
-        )
-        return self._text_has_any(description, risky_needles)
+        return event.event_type in {
+            "world_event",
+            "audit_flagged",
+            "audit_case_opened",
+            "audit_case_updated",
+            "audit_escalated",
+            "pending_interaction_due",
+            "pending_interaction_expired",
+            "reputation_frozen",
+            "vote_opened",
+        }
 
     def _fallback_daily_context_for_agent(
         self,
@@ -1862,32 +1851,14 @@ class WorldEngine:
         "agent:contractor" + "agent:sec_petrov_d_n", когда extractor
         повторно выделяет уже существующего участника мира.
         """
-        key = social_link_name_key(link_name)
-        if not key:
+        normalized_link_name = normalize_agent_display_name(link_name)
+        if not normalized_link_name:
             return None
 
-        key_to_ids: dict[str, list[str]] = {}
         for aid, agent in state.agents.items():
-            agent_key = social_link_name_key(agent.name)
-            if not agent_key:
-                continue
-            key_to_ids.setdefault(agent_key, []).append(aid)
-
-        matched_key = social_link_match_key(key, list(key_to_ids.keys()))
-        if not matched_key:
-            return None
-
-        candidate_ids = key_to_ids.get(matched_key) or []
-        if not candidate_ids:
-            return None
-        if len(candidate_ids) == 1:
-            return candidate_ids[0]
-
-        exact_name = (link_name or "").casefold()
-        for aid in candidate_ids:
-            if state.agents[aid].name.casefold() == exact_name:
+            if normalize_agent_display_name(agent.name) == normalized_link_name:
                 return aid
-        return candidate_ids[0]
+        return None
 
     async def _generate_personas_batch(
         self,

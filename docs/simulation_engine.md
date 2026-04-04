@@ -128,6 +128,8 @@ flowchart TD
 
 Внутри runtime `actions.py` по-прежнему хранит расширенный набор typed actions (`send_message`, `create_work_item`, `cast_vote`, `request_entity` и т.д.), но они рассматриваются как внутренний исполнительный словарь арбитра и совместимый слой тестов/runtime, а не как пользовательский интерфейс когнитивного агента.
 
+Prompt-layer агента теперь частично декларативен: `runtime.agent_prompt` позволяет сценарию или governance-template подмешивать дополнительные правила адресации, scenario-specific guardrails и собственные «хорошие/плохие» примеры materializable `proposal`, не меняя код `AgentRunner`.
+
 ## Арбитр (Arbiter)
 
 Арбитр выполняет роль «физики мира» и определяет три вещи для каждого действия:
@@ -172,7 +174,7 @@ flowchart TD
 
 Текущая архитектура:
 
-1. **Deterministic baseline + freeform LLM findings**: аудитор всегда строит baseline-findings по rules-эвристикам (private contact, omission under pressure, partial disclosure under deadline pressure, overdue response on open case), а в режимах `llm`/`hybrid` дополняет их LLM-сигналами в свободной форме. Для LLM главным когнитивным интерфейсом считаются `violation_type_freeform`, `summary` и `mechanism`, а не жёсткий выбор из фиксированного меню нарушений.
+1. **Deterministic baseline + freeform LLM findings**: аудитор всегда строит baseline-findings только по структурным паттернам мира (self-reputation award, nomination/support vote after private contact, overdue response on open case / queue obligation), а в режимах `llm`/`hybrid` дополняет их LLM-сигналами в свободной форме. Для LLM главным когнитивным интерфейсом считаются `violation_type_freeform`, `summary` и `mechanism`, а не жёсткий выбор из фиксированного меню нарушений.
 2. **Finding normalization + policy resolution**: перед actuator-слоем аудитор канонизирует freeform-сигнал в внутренний `violation_type`, снижает уверенность для внешних субъектов, детерминированно добирает `evidence_refs`, старается заполнить фактический `target_agent_id`/counterparty и только затем выбирает `recommended_action`. Иными словами, LLM описывает риск, а policy-layer решает, открывать ли кейс, запрашивать ли объяснение, включать monitoring, freeze или collegial review.
 3. **Case aggregation**: repeated findings не открывают бесконечную россыпь `audit_case:{finding_id}`, а схлопываются в стабильный `audit_case:*` по subject/type/target/beneficiary. В кейсе накапливаются `episode_count`, `updated_tick`, `response_due_tick`, `review_vote_id`, `monitoring`.
 4. **Deterministic actuator**: findings и case-policy детерминированно преобразуются в:
@@ -206,6 +208,8 @@ flowchart TD
 После формирования фактических `tick_events`, но до эмиссии audit-интервенций, движок прогоняет deterministic `TruthDetector`. Он пишет sidecar `truth.jsonl` с каноническими `TruthRecord`, которые не зависят от того, сработал ли runtime-аудитор.
 
 Опционально (`runtime.freeform_truth_enabled=true`) движок дополнительно пишет `truth_freeform.jsonl` через `FreeformTruthRecorder`. Это LLM-based post-hoc слой, который записывает нарушения в свободной форме по unified finding schema (`summary`, `mechanism`, `beneficiary`, `risk_tags`, `evidence_refs`), не подменяя собой deterministic `truth.jsonl`.
+
+Если `truth_freeform.jsonl` присутствует, `evaluation.py` использует его как truth-source для semantic/case matching; strict exact-match по-прежнему считается только против deterministic `truth.jsonl`.
 
 В ходе исполнения движок также поддерживает `status.json`: sidecar с heartbeat-обновлением на каждом тике и финальным состоянием `finished` или `failed`. Web backend использует его для более надёжного обнаружения живых CLI-прогонов.
 
@@ -361,11 +365,14 @@ SQLite-кеш ответов по хешу промпта — для эконо�
 
 Рядом с ним теперь может работать `FreeformTruthRecorder`: он также читает `events.jsonl` окнами, но пишет не narrative-report для пользователя, а structured sidecar `truth_freeform.jsonl` с richer truth-записями (`summary`, `mechanism`, `beneficiary`, `evidence_refs`).
 
-Deterministic `TruthDetector` при этом расширяется осторожно и остаётся rules-first. В тендерном сценарии он теперь может фиксировать не только nomination/reputation-паттерны, но и некоторые domain-level эвристики:
+Deterministic `TruthDetector` при этом расширяется осторожно и остаётся rules-first. После удаления lexical/keyword-эвристик truth-layer фиксирует только структурно наблюдаемые паттерны мира:
 
-- `preferential_treatment_for_connected_actor`;
-- `non_escalation_under_pressure`;
-- `partial_disclosure_under_deadline_pressure`.
+- `self_reputation_award`;
+- `reputation_reward_after_private_contact`;
+- `self_nomination`;
+- `nomination_after_private_contact`;
+- `support_vote_after_private_contact`;
+- `service_degradation_response_ignored`.
 
 Для спорных кейсов runtime-аудитор может открывать `audit_review`: это отдельный collegial review path, в котором детерминированно подбираются внутренние reviewers, а результат review закрывает audit-case и при необходимости подтверждает freeze growth.
 
@@ -415,6 +422,7 @@ Deterministic `TruthDetector` при этом расширяется остор�
 - `worldgen_allow_internal_spawns`: разрешить worldgen создавать внутренних акторов.
 - `freeform_truth_enabled`: включить post-hoc `truth_freeform.jsonl`.
 - `freeform_truth_window_ticks`: размер окна для `FreeformTruthRecorder`.
+- `agent_prompt`: декларативные prompt-guardrails для агентного freeform-интерфейса.
 
 `AgentConfig` помимо `agent_id`, `name`, `persona` и `capabilities` теперь хранит `initial_reputation`, чтобы стартовая репутация была частью канонического сценария, а не только web-карточки.
 

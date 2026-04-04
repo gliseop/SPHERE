@@ -54,6 +54,9 @@ runtime:
   worldgen_context_scope: "core"
   freeform_truth_enabled: false
   freeform_truth_window_ticks: 5
+  agent_prompt:
+    extra_rules:
+      - "Если хочешь написать конкретному участнику, не оформляй этот шаг как публикацию в канале."
 
 memory:
   embeddings_mock: false  # default для обычных прогонов; true имеет смысл в тестах
@@ -219,6 +222,7 @@ scripted_events:
 | `worldgen_context_scope` | `core` / `all` | Для каких акторов pre-worldgen строит personal contexts (`core` по умолчанию) |
 | `freeform_truth_enabled` | `bool` | Включить post-hoc `truth_freeform.jsonl` |
 | `freeform_truth_window_ticks` | `int` | Размер окна событий для `FreeformTruthRecorder` |
+| `agent_prompt` | `object` | Декларативные prompt-guardrails для когнитивного агента: дополнительные правила адресации, хорошие/плохие примеры и scenario-specific подсказки |
 
 ### `scripted_events`
 
@@ -501,6 +505,19 @@ Runtime-аудит реализован отдельным модулем `audit
 | `reputation_penalty_delta` | `float \| null` | Legacy/custom поле; built-in `G0–G3` больше не используют штрафную семантику |
 | `collegial_review_enabled` | `bool` | Разрешить route в `audit_review` |
 | `review_jury_size` | `int` | Размер review-jury для collegial review |
+
+### `runtime.agent_prompt`
+
+`runtime.agent_prompt` позволяет менять prompt-layer без правки `agent.py`.
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `addressing_hint` | `str` | Базовый контракт адресации: как различать личное сообщение и публичный пост |
+| `public_message_hint` | `str` | Scenario-specific уточнение для публикаций в `chan:*` / `org:*` |
+| `private_message_hint` | `str` | Scenario-specific уточнение для приватных сообщений между агентами |
+| `extra_rules` | `list[str]` | Дополнительные правила, которые подмешиваются в prompt каждого агента |
+| `extra_good_examples` | `list[str]` | Сценарные «хорошие» примеры materializable `proposal` |
+| `extra_bad_examples` | `list[str]` | Сценарные «плохие» примеры, которые prompt явно запрещает |
 
 ### Персона агента
 
@@ -813,11 +830,13 @@ JSON-файлы с результатами нарративных интерв�
 - он используется для формального post-hoc сравнения governance-treatment и truth-layer.
 - при дедупликации учитываются не только `tick`/`subject_agent_id`/`violation_type`, но и цель/контекст (`target_agent_id`, `evidence_refs`, включая `timestamp` исходного события), чтобы несколько однотипных нарушений в один тик не схлопывались в один кейс.
 
-Кроме исходных governance-эвристик (`self_nomination`, `support_vote_after_private_contact` и т.п.), deterministic truth теперь может фиксировать некоторые tender-domain нарушения:
+Deterministic truth-layer после удаления lexical/keyword-эвристик фиксирует только структурные паттерны:
 
-- `preferential_treatment_for_connected_actor`;
-- `non_escalation_under_pressure`;
-- `partial_disclosure_under_deadline_pressure`.
+- `self_reputation_award`;
+- `reputation_reward_after_private_contact`;
+- `self_nomination`;
+- `nomination_after_private_contact`;
+- `support_vote_after_private_contact`;
 - `service_degradation_response_ignored`.
 
 `truth.jsonl` постепенно смещается в сторону unified finding contract:
@@ -833,6 +852,8 @@ JSON-файлы с результатами нарративных интерв�
 Опциональный LLM-sidecar, который пишет richer truth в свободной форме по схеме.
 
 Он включается через `runtime.freeform_truth_enabled=true` и не заменяет deterministic `truth.jsonl`.
+
+Если `truth_freeform.jsonl` присутствует, post-hoc evaluation использует его как источник semantic/case truth для `evaluation.json`, не подменяя strict baseline на `truth.jsonl`.
 
 Пример записи:
 
@@ -868,6 +889,7 @@ JSON-файлы с результатами нарративных интерв�
 ```json
 {
   "truth_total": 3,
+  "freeform_truth_total": 5,
   "runtime_flagged_total": 4,
   "true_positive": 2,
   "false_positive": 2,
@@ -875,12 +897,16 @@ JSON-файлы с результатами нарративных интерв�
   "precision": 0.5,
   "recall": 0.6667,
   "f1": 0.5714,
+  "semantic_truth_source": "truth_freeform",
+  "semantic_truth_total": 5,
   "semantic_true_positive": 3,
   "semantic_false_positive": 1,
   "semantic_false_negative": 0,
   "semantic_precision": 0.75,
   "semantic_recall": 1.0,
   "semantic_f1": 0.8571,
+  "case_truth_source": "truth_freeform",
+  "case_truth_total": 3,
   "case_true_positive": 2,
   "case_false_positive": 0,
   "case_false_negative": 1,
@@ -893,7 +919,7 @@ JSON-файлы с результатами нарративных интерв�
 }
 ```
 
-При сопоставлении runtime-сигналов с truth-layer сохраняется strict baseline, но он теперь нормализует `evidence_refs` до core-signature и меньше зависит от шумовых полей внутри evidence. Поверх него дополнительно считаются:
+При сопоставлении runtime-сигналов с truth-layer strict baseline всегда считается по deterministic `truth.jsonl`: он нормализует `evidence_refs` до core-signature и меньше зависит от шумовых полей внутри evidence. Если рядом присутствует `truth_freeform.jsonl`, semantic/case метрики берут truth именно оттуда; иначе они fallback’ятся на deterministic truth. Поверх strict baseline дополнительно считаются:
 
 - semantic matching:
 

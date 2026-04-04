@@ -28,6 +28,10 @@ runtime:
   max_secondary_per_agent: 1
   max_agents: 9
   allow_runtime_spawn: true
+  agent_prompt:
+    extra_rules:
+      - "Если хочешь написать конкретному участнику, не оформляй этот шаг как публикацию в канале: личное сообщение и публичный пост должны быть разными шагами."
+  freeform_truth_enabled: true
   enable_worldgen: true
   worldgen_every_ticks: 3
 

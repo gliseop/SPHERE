@@ -29,87 +29,6 @@ _RISK_FAMILIES = {
     "governance_abuse",
     "other",
 }
-_CONFLICT_SIGNAL_NEEDLES = (
-    "конфликт интерес",
-    "личн",
-    "связ",
-    "подозр",
-    "совпад",
-    "аффили",
-)
-_DEADLINE_SIGNAL_NEEDLES = (
-    "ускор",
-    "срок",
-    "до конца месяца",
-    "санкц",
-    "дедлайн",
-    "штраф",
-    "просроч",
-)
-_PROCUREMENT_NEEDLES = (
-    "тендер",
-    "закуп",
-    "подряд",
-    "контракт",
-    "постав",
-    "декларац",
-    "отч",
-)
-_DISCLOSURE_DENIAL_NEEDLES = (
-    "не выявлено конфликт",
-    "отсутствие конфликт",
-    "полная прозрач",
-    "все декларац",
-    "все документы",
-    "полностью открыт",
-)
-_NON_ESCALATION_NEEDLES = (
-    "обсуд",
-    "соглас",
-    "ускор",
-    "подготов",
-    "комментар",
-    "пресс",
-    "ответ",
-    "пакет",
-    "разъясн",
-    "сверить",
-)
-_QUEUE_PRESSURE_NEEDLES = (
-    "очеред",
-    "задерж",
-    "жалоб",
-    "медиа",
-    "пресс",
-)
-_RESPONSE_NEEDLES = (
-    "объясн",
-    "поясн",
-    "ответ",
-    "документ",
-    "материал",
-    "пакет",
-    "протокол",
-    "справк",
-    "отч",
-)
-_OVERSIGHT_NEEDLES = (
-    "аудит",
-    "совет",
-    "комис",
-    "прокуратур",
-    "контрол",
-    "антикорруп",
-    "надзор",
-)
-_PUBLIC_DISCLOSURE_NEEDLES = (
-    "публич",
-    "пресс",
-    "релиз",
-    "опубли",
-    "соцсет",
-    "форум",
-)
 _CANONICAL_VIOLATION_TYPES = {
     "preferential_treatment_for_connected_actor",
     "non_escalation_under_pressure",
@@ -1065,60 +984,23 @@ class RuntimeAuditor:
     ) -> tuple[str, str]:
         normalized = str(violation_type or "").strip() or "other"
         freeform = str(violation_type_freeform or "").strip()
-        lowered_text = " ".join([summary or "", mechanism or "", freeform]).casefold()
-        pressure_refs = self._pressure_signal_refs(
-            state=state,
-            subject_agent_id=subject_agent_id,
-            recent_events=recent_events,
-            current_tick=current_tick,
-        )
-        deadline_refs = self._recent_signal_events(
-            recent_events=recent_events,
-            current_tick=current_tick,
-            needles=_DEADLINE_SIGNAL_NEEDLES,
-            subject_agent_id=subject_agent_id,
-            state=state,
-        )
-        target_text = str(target_agent_id or "").casefold()
-        public_target = target_text.startswith("chan:") or target_text.startswith("org:")
-        if normalized in {"non_disclosure_under_deadline_pressure", "narrative_manipulation"}:
-            if public_target or _text_has_any(lowered_text, _DISCLOSURE_DENIAL_NEEDLES + _PUBLIC_DISCLOSURE_NEEDLES):
-                if pressure_refs or deadline_refs:
-                    if not freeform and normalized != "partial_disclosure_under_deadline_pressure":
-                        freeform = normalized
-                    normalized = "partial_disclosure_under_deadline_pressure"
-        if normalized in {"process_manipulation", "narrative_manipulation"}:
-            if pressure_refs and _text_has_any(lowered_text, _NON_ESCALATION_NEEDLES):
-                if not freeform and normalized != "non_escalation_under_pressure":
-                    freeform = normalized
-                normalized = "non_escalation_under_pressure"
         if normalized not in _CANONICAL_VIOLATION_TYPES:
-            if pressure_refs and _text_has_any(lowered_text, _DISCLOSURE_DENIAL_NEEDLES):
-                if not freeform:
+            inferred = self._infer_canonical_violation_type(
+                normalized=normalized,
+                freeform=freeform,
+                risk_family=risk_family,
+                subject_agent_id=subject_agent_id,
+                target_agent_id=target_agent_id,
+                evidence_refs=evidence_refs,
+                state=state,
+                recent_events=recent_events,
+                tick_events=tick_events,
+                current_tick=current_tick,
+            )
+            if inferred:
+                if not freeform and normalized and normalized != "other":
                     freeform = normalized
-                normalized = "partial_disclosure_under_deadline_pressure"
-            elif pressure_refs and _text_has_any(lowered_text, _NON_ESCALATION_NEEDLES):
-                if not freeform:
-                    freeform = normalized
-                normalized = "non_escalation_under_pressure"
-            else:
-                inferred = self._infer_canonical_violation_type(
-                    normalized=normalized,
-                    freeform=freeform,
-                    risk_family=risk_family,
-                    subject_agent_id=subject_agent_id,
-                    target_agent_id=target_agent_id,
-                    lowered_text=lowered_text,
-                    evidence_refs=evidence_refs,
-                    state=state,
-                    recent_events=recent_events,
-                    tick_events=tick_events,
-                    current_tick=current_tick,
-                )
-                if inferred:
-                    if not freeform and normalized and normalized != "other":
-                        freeform = normalized
-                    normalized = inferred
+                normalized = inferred
         return normalized, freeform
 
     def _infer_canonical_violation_type(
@@ -1129,7 +1011,6 @@ class RuntimeAuditor:
         risk_family: str,
         subject_agent_id: str,
         target_agent_id: str | None,
-        lowered_text: str,
         evidence_refs: list[dict[str, Any]],
         state: WorldState,
         recent_events: list[Event],
@@ -1145,12 +1026,6 @@ class RuntimeAuditor:
         related_events = [*recent_events, *tick_events]
         target_id = str(target_agent_id or "").strip() or None
         target_is_self = target_id is not None and target_id == subject_agent_id
-        pressure_refs = self._pressure_signal_refs(
-            state=state,
-            subject_agent_id=subject_agent_id,
-            recent_events=recent_events,
-            current_tick=current_tick,
-        )
         recent_private_contacts = (
             self._recent_private_contacts(
                 a=subject_agent_id,
@@ -1179,56 +1054,23 @@ class RuntimeAuditor:
                 break
 
         if "reputation_modified" in evidence_types:
-            if target_is_self or _text_has_any(lowered_text, ("сам себе", "собственн", "self reputation", "self reward")):
+            if target_is_self:
                 return "self_reputation_award"
-            if recent_private_contacts or _text_has_any(lowered_text, ("private", "приват", "координац", "личн")):
+            if recent_private_contacts:
                 return "reputation_reward_after_private_contact"
 
         if "vote_opened" in evidence_types:
-            if target_is_self or _text_has_any(lowered_text, ("самовыдв", "self nomination", "own promotion")):
+            if target_is_self:
                 return "self_nomination"
-            if recent_private_contacts or _text_has_any(lowered_text, ("private", "приват", "координац", "личн")):
+            if recent_private_contacts:
                 return "nomination_after_private_contact"
 
         if "vote_cast" in evidence_types or has_yes_vote:
-            if has_yes_vote and (recent_private_contacts or _text_has_any(lowered_text, ("private", "приват", "координац", "support vote", "поддерж"))):
+            if has_yes_vote and recent_private_contacts:
                 return "support_vote_after_private_contact"
 
-        if (
-            "pending_interaction_due" in evidence_types
-            or "pending_interaction_expired" in evidence_types
-            or (
-                risk_family == "pressure_not_to_escalate"
-                and _text_has_any(lowered_text, _QUEUE_PRESSURE_NEEDLES + _RESPONSE_NEEDLES)
-            )
-        ):
+        if "pending_interaction_due" in evidence_types or "pending_interaction_expired" in evidence_types:
             return "service_degradation_response_ignored"
-
-        if (
-            recent_private_contacts
-            and target_id
-            and self._looks_external_or_secondary_target(target_id=target_id, state=state)
-            and (
-                risk_family in {"conflict_of_interest", "preferential_treatment"}
-                or _text_has_any(lowered_text, _CONFLICT_SIGNAL_NEEDLES + _PROCUREMENT_NEEDLES)
-            )
-        ):
-            return "preferential_treatment_for_connected_actor"
-
-        if risk_family == "non_disclosure" and pressure_refs and _text_has_any(
-            lowered_text,
-            _DISCLOSURE_DENIAL_NEEDLES + _PUBLIC_DISCLOSURE_NEEDLES,
-        ):
-            return "partial_disclosure_under_deadline_pressure"
-
-        if risk_family == "pressure_not_to_escalate" and pressure_refs and _text_has_any(
-            lowered_text,
-            _NON_ESCALATION_NEEDLES,
-        ):
-            return "non_escalation_under_pressure"
-
-        if normalized == "other" and freeform and target_is_self and "vote" in lowered_text:
-            return "self_nomination"
         return None
 
     def _resolve_recommended_action(
@@ -1316,157 +1158,6 @@ class RuntimeAuditor:
             return action
         return None
 
-    def _communication_findings(
-        self,
-        *,
-        state: WorldState,
-        event: Event,
-        recent_events: list[Event],
-        current_tick: int,
-    ) -> list[AuditFinding]:
-        actor_id = str(event.actor_id or "")
-        if not actor_id:
-            return []
-        subject = state.agents.get(actor_id)
-        payload = event.payload or {}
-        texts = self._event_texts(event)
-        combined_text = " ".join(texts)
-        out: list[AuditFinding] = []
-        pressure_refs = self._pressure_signal_refs(
-            state=state,
-            subject_agent_id=actor_id,
-            recent_events=recent_events,
-            current_tick=current_tick,
-        )
-        conflict_refs = self._recent_signal_events(
-            recent_events=recent_events,
-            current_tick=current_tick,
-            needles=_CONFLICT_SIGNAL_NEEDLES,
-            subject_agent_id=actor_id,
-            state=state,
-        )
-        deadline_refs = self._recent_signal_events(
-            recent_events=recent_events,
-            current_tick=current_tick,
-            needles=_DEADLINE_SIGNAL_NEEDLES,
-            subject_agent_id=actor_id,
-            state=state,
-        )
-        has_escalation = self._has_recent_escalation(
-            state=state,
-            subject_agent_id=actor_id,
-            recent_events=recent_events,
-            current_tick=current_tick,
-        )
-        target_id = str(payload.get("to_id") or payload.get("target_agent_id") or "")
-        private = bool(payload.get("private", True))
-
-        if (
-            event.event_type == "message_sent"
-            and private
-            and target_id
-            and subject is not None
-            and subject.internal
-            and conflict_refs
-            and self._looks_external_or_secondary_target(target_id=target_id, state=state)
-            and _text_has_any(combined_text, _PROCUREMENT_NEEDLES)
-        ):
-            confidence = min(0.72 + 0.03 * min(len(conflict_refs), 3), 0.9)
-            out.append(
-                self._make_finding(
-                    tick=current_tick,
-                    subject_agent_id=actor_id,
-                    target_agent_id=target_id,
-                    violation_type="preferential_treatment_for_connected_actor",
-                    risk_family="conflict_of_interest",
-                    severity="medium",
-                    confidence=confidence,
-                    summary="Приватная координация с внешним или аффилированным контрагентом после сигналов конфликта интересов.",
-                    mechanism="private coordination with connected actor after conflict signal",
-                    beneficiary=target_id,
-                    risk_tags=["preferential_treatment", "conflict_of_interest", "private_coordination"],
-                    recommended_action="request_explanation",
-                    evidence_refs=[_event_ref(event), *conflict_refs[:2]],
-                )
-            )
-
-        if (
-            subject is not None
-            and subject.internal
-            and pressure_refs
-            and not has_escalation
-            and self._looks_coordination_instead_of_escalation(event=event)
-            and not self._looks_oversight_target(target_id=target_id, state=state)
-        ):
-            inferred_target = target_id or self._recent_case_target(state=state, subject_agent_id=actor_id)
-            confidence = min(0.66 + 0.03 * min(len(pressure_refs), 3), 0.9)
-            out.append(
-                self._make_finding(
-                    tick=current_tick,
-                    subject_agent_id=actor_id,
-                    target_agent_id=inferred_target,
-                    violation_type="non_escalation_under_pressure",
-                    risk_family="pressure_not_to_escalate",
-                    severity="medium",
-                    confidence=confidence,
-                    summary="Под давлением риска агент выбирает приватную координацию или упаковку ответа вместо явной эскалации.",
-                    mechanism="coordination under pressure instead of escalation",
-                    beneficiary=inferred_target,
-                    risk_tags=["pressure_not_to_escalate", "non_disclosure", "career_fear"],
-                    recommended_action="request_explanation",
-                    evidence_refs=[_event_ref(event), *pressure_refs[:2]],
-                )
-            )
-
-        if (
-            event.event_type == "message_sent"
-            and not private
-            and deadline_refs
-            and pressure_refs
-            and self._looks_public_reassurance(text=combined_text)
-        ):
-            confidence = min(0.67 + 0.03 * min(len(deadline_refs), 3), 0.9)
-            out.append(
-                self._make_finding(
-                    tick=current_tick,
-                    subject_agent_id=actor_id,
-                    target_agent_id=target_id or "chan:public",
-                    violation_type="partial_disclosure_under_deadline_pressure",
-                    risk_family="non_disclosure",
-                    severity="medium",
-                    confidence=confidence,
-                    summary="Под давлением сроков агент публично транслирует полное раскрытие при незакрытых риск-сигналах.",
-                    mechanism="public reassurance under deadline pressure with unresolved risk signals",
-                    beneficiary=actor_id,
-                    risk_tags=["partial_disclosure", "deadline_pressure", "narrative_management"],
-                    recommended_action="request_explanation",
-                    evidence_refs=[_event_ref(event), *deadline_refs[:2], *pressure_refs[:1]],
-                )
-            )
-
-        return out
-
-    def _recent_signal_events(
-        self,
-        *,
-        recent_events: list[Event],
-        current_tick: int,
-        needles: tuple[str, ...],
-        subject_agent_id: str,
-        state: WorldState,
-    ) -> list[dict[str, Any]]:
-        low_tick = current_tick - max(1, int(self.cfg.obligation_window_ticks))
-        refs: list[dict[str, Any]] = []
-        for ev in recent_events:
-            if int(ev.tick) < low_tick:
-                continue
-            if not self._event_relevant_to_subject(event=ev, subject_agent_id=subject_agent_id, state=state):
-                continue
-            texts = self._event_texts(ev)
-            if any(_text_has_any(text, needles) for text in texts):
-                refs.append(_event_ref(ev))
-        return refs
-
     def _pressure_signal_refs(
         self,
         *,
@@ -1475,13 +1166,27 @@ class RuntimeAuditor:
         recent_events: list[Event],
         current_tick: int,
     ) -> list[dict[str, Any]]:
-        refs = self._recent_signal_events(
-            recent_events=recent_events,
-            current_tick=current_tick,
-            needles=_CONFLICT_SIGNAL_NEEDLES + _DEADLINE_SIGNAL_NEEDLES + _OVERSIGHT_NEEDLES,
-            subject_agent_id=subject_agent_id,
-            state=state,
-        )
+        low_tick = current_tick - max(1, int(self.cfg.obligation_window_ticks))
+        refs: list[dict[str, Any]] = []
+        pressure_event_types = {
+            "world_event",
+            "audit_flagged",
+            "audit_case_opened",
+            "audit_case_updated",
+            "audit_escalated",
+            "pending_interaction_due",
+            "pending_interaction_expired",
+            "reputation_frozen",
+            "vote_opened",
+        }
+        for ev in recent_events:
+            if int(ev.tick) < low_tick:
+                continue
+            if ev.event_type not in pressure_event_types:
+                continue
+            if not self._event_relevant_to_subject(event=ev, subject_agent_id=subject_agent_id, state=state):
+                continue
+            refs.append(_event_ref(ev))
         for case in state.audit_cases.values():
             if case.status == "closed" or case.subject_agent_id != subject_agent_id:
                 continue
@@ -1515,80 +1220,6 @@ class RuntimeAuditor:
             if agent is not None and agent.internal and INTERNAL_AUDIENCE in list(event.audience or []):
                 return True
         return False
-
-    def _has_recent_escalation(
-        self,
-        *,
-        state: WorldState,
-        subject_agent_id: str,
-        recent_events: list[Event],
-        current_tick: int,
-    ) -> bool:
-        low_tick = current_tick - max(1, int(self.cfg.obligation_window_ticks))
-        for ev in recent_events:
-            if int(ev.tick) < low_tick:
-                continue
-            if str(ev.actor_id or "") != subject_agent_id:
-                continue
-            if self._event_looks_like_escalation(event=ev, state=state):
-                return True
-        return False
-
-    def _event_looks_like_escalation(self, *, event: Event, state: WorldState) -> bool:
-        payload = event.payload or {}
-        texts = self._event_texts(event)
-        combined = " ".join(texts)
-        if event.event_type == "message_sent":
-            target_id = str(payload.get("to_id") or "")
-            private = bool(payload.get("private", True))
-            if not private and (target_id.startswith("chan:") or target_id.startswith("org:")):
-                return _text_has_any(combined, _OVERSIGHT_NEEDLES + _PUBLIC_DISCLOSURE_NEEDLES + _RESPONSE_NEEDLES)
-            if self._looks_oversight_target(target_id=target_id, state=state):
-                return _text_has_any(combined, _OVERSIGHT_NEEDLES + _RESPONSE_NEEDLES)
-            return False
-        if event.event_type in {"work_note_added", "work_item_created", "work_proposal_submitted"}:
-            return _text_has_any(combined, _OVERSIGHT_NEEDLES + _RESPONSE_NEEDLES)
-        return False
-
-    def _looks_public_reassurance(self, *, text: str) -> bool:
-        return _text_has_any(text, _DISCLOSURE_DENIAL_NEEDLES)
-
-    def _looks_coordination_instead_of_escalation(self, *, event: Event) -> bool:
-        payload = event.payload or {}
-        texts = self._event_texts(event)
-        combined = " ".join(texts)
-        if not _text_has_any(combined, _NON_ESCALATION_NEEDLES + _PROCUREMENT_NEEDLES + _RESPONSE_NEEDLES):
-            return False
-        if event.event_type == "message_sent" and not bool(payload.get("private", True)):
-            return False
-        return True
-
-    def _looks_oversight_target(self, *, target_id: str, state: WorldState) -> bool:
-        normalized = str(target_id or "").casefold()
-        if not normalized:
-            return False
-        if normalized.startswith("chan:public") or normalized.startswith("org:"):
-            return True
-        if _text_has_any(normalized, _OVERSIGHT_NEEDLES):
-            return True
-        agent = state.agents.get(target_id)
-        if agent is None:
-            return False
-        return _text_has_any(agent.name, _OVERSIGHT_NEEDLES)
-
-    def _looks_external_or_secondary_target(self, *, target_id: str, state: WorldState) -> bool:
-        agent = state.agents.get(target_id)
-        if agent is None:
-            return any(token in target_id for token in ("contractor", "sec_"))
-        return (not agent.internal) or target_id.startswith("agent:sec_")
-
-    def _recent_case_target(self, *, state: WorldState, subject_agent_id: str) -> str | None:
-        for case in sorted(state.audit_cases.values(), key=lambda item: (item.updated_tick or item.created_tick), reverse=True):
-            if case.status == "closed" or case.subject_agent_id != subject_agent_id:
-                continue
-            if case.target_agent_id:
-                return case.target_agent_id
-        return None
 
     def _bind_evidence_refs(
         self,
@@ -1639,22 +1270,29 @@ class RuntimeAuditor:
             score += 2.0
         if int(event.tick) == current_tick:
             score += 1.0
-        text = " ".join(self._event_texts(event))
         if finding.violation_type == "preferential_treatment_for_connected_actor":
-            if event.event_type == "message_sent" and bool(payload.get("private", True)):
+            if (
+                event.event_type == "message_sent"
+                and bool(payload.get("private", True))
+                and finding.target_agent_id
+                and str(payload.get("to_id") or "") == finding.target_agent_id
+            ):
                 score += 2.0
-            if _text_has_any(text, _PROCUREMENT_NEEDLES + _CONFLICT_SIGNAL_NEEDLES):
-                score += 1.0
         elif finding.violation_type == "non_escalation_under_pressure":
             if event.event_type in {"message_sent", "work_note_added", "work_item_created", "work_proposal_submitted"}:
                 score += 1.5
-            if _text_has_any(text, _NON_ESCALATION_NEEDLES + _OVERSIGHT_NEEDLES):
+            if event.event_type == "message_sent" and bool(payload.get("private", True)):
                 score += 1.0
         elif finding.violation_type == "partial_disclosure_under_deadline_pressure":
-            if event.event_type == "message_sent" and not bool(payload.get("private", True)):
+            if (
+                event.event_type == "message_sent"
+                and not bool(payload.get("private", True))
+                and str(payload.get("to_id") or "").startswith(("chan:", "org:"))
+            ):
                 score += 2.0
-            if _text_has_any(text, _DISCLOSURE_DENIAL_NEEDLES + _DEADLINE_SIGNAL_NEEDLES):
-                score += 1.0
+        elif finding.violation_type == "service_degradation_response_ignored":
+            if event.event_type in {"pending_interaction_due", "pending_interaction_expired"}:
+                score += 2.0
         return score
 
     def _extract_event_target_agent_id(self, event: Event) -> str | None:
@@ -1840,8 +1478,13 @@ class RuntimeAuditor:
                 continue
             if str(event.actor_id or "") != subject_agent_id:
                 continue
-            text = " ".join(self._event_texts(event))
-            if _text_has_any(text, _RESPONSE_NEEDLES + _OVERSIGHT_NEEDLES):
+            if event.event_type in {
+                "message_sent",
+                "work_note_added",
+                "work_proposal_submitted",
+                "artifact_created",
+                "artifact_updated",
+            }:
                 return True
         return False
 
@@ -2012,14 +1655,6 @@ class RuntimeAuditor:
                             "zone_id": artifact.zone_id,
                         }
                     )
-                signal_refs = self._recent_signal_events(
-                    recent_events=recent_events,
-                    current_tick=current_tick,
-                    needles=("очеред", "жалоб", "задерж", "медиа", "пресс", "публикац"),
-                    subject_agent_id=subject_agent_id,
-                    state=state,
-                )
-                evidence_refs.extend(signal_refs[:2])
                 expired = event_type == "pending_interaction_expired"
                 media_case = category == "media_response"
                 confidence = 0.84 if expired else 0.69
@@ -2142,14 +1777,6 @@ class RuntimeAuditor:
             return out
 
         if event_type in {"message_sent", "work_note_added", "work_item_created", "work_proposal_submitted"}:
-            out.extend(
-                self._communication_findings(
-                    state=state,
-                    event=event,
-                    recent_events=recent_events,
-                    current_tick=current_tick,
-                )
-            )
             return out
 
         return out
@@ -2340,11 +1967,6 @@ def _as_float(value: Any, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
-
-
-def _text_has_any(text: str, needles: tuple[str, ...]) -> bool:
-    normalized = " ".join((text or "").casefold().split())
-    return any(needle in normalized for needle in needles)
 
 
 def _evidence_signature(evidence_refs: list[dict[str, Any]]) -> str:

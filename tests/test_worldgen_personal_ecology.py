@@ -2806,6 +2806,8 @@ def test_engine_writes_freeform_truth_sidecar_when_enabled(tmp_path: Path) -> No
 
     summary = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
     assert summary["freeform_truth_total"] == 1
+    assert summary["governance"]["freeform_truth_total"] == 1
+    assert summary["governance"]["semantic_truth_source"] == "truth_freeform"
 
 
 def test_ecology_activation_skips_dormant_spawned_actor(tmp_path: Path) -> None:

@@ -11,6 +11,35 @@ from .ids import EntityKind, ensure_kind, parse_typed_id
 from .persona import PersonaArtifact
 
 
+DEFAULT_AGENT_PROMPT_ADDRESSING_HINT = (
+    "Если пишешь конкретному участнику, адресуй ход только на `agent:*`; не совмещай "
+    "конкретного адресата и канал в одной цели."
+)
+DEFAULT_AGENT_PROMPT_PUBLIC_MESSAGE_HINT = (
+    "Если хочешь сделать публичную публикацию, адресуй её только в `chan:*` или `org:*`; "
+    "в этом случае не указывай отдельного `agent:*` как адресата того же сообщения."
+)
+DEFAULT_AGENT_PROMPT_PRIVATE_MESSAGE_HINT = (
+    "Приватное сообщение допустимо только между агентами и не требует ссылки на канал "
+    "или организацию."
+)
+
+
+def _normalize_string_list(values: list[str] | tuple[str, ...]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values or []:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
+
+
 class LLMConfig(BaseModel):
     """Настройки LLM-провайдера."""
 
@@ -220,6 +249,7 @@ class RuntimeConfig(BaseModel):
     parallel_window_seconds: float | None = None
     temporal_past_slack_days: int = 1
     temporal_future_horizon_days: int = 120
+    agent_prompt: AgentPromptPolicyConfig = Field(default_factory=lambda: AgentPromptPolicyConfig())
 
     @field_validator("max_actions_per_turn")
     @classmethod
@@ -336,6 +366,29 @@ class RuntimeConfig(BaseModel):
             weeks = units
             return f"{weeks} нед."
         return f"{units} дн."
+
+
+class AgentPromptPolicyConfig(BaseModel):
+    """Декларативные подсказки и guardrails для prompt агента."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    addressing_hint: str = DEFAULT_AGENT_PROMPT_ADDRESSING_HINT
+    public_message_hint: str = DEFAULT_AGENT_PROMPT_PUBLIC_MESSAGE_HINT
+    private_message_hint: str = DEFAULT_AGENT_PROMPT_PRIVATE_MESSAGE_HINT
+    extra_rules: list[str] = Field(default_factory=list)
+    extra_good_examples: list[str] = Field(default_factory=list)
+    extra_bad_examples: list[str] = Field(default_factory=list)
+
+    @field_validator("addressing_hint", "public_message_hint", "private_message_hint")
+    @classmethod
+    def _normalize_prompt_hint(cls, v: str) -> str:
+        return str(v or "").strip()
+
+    @field_validator("extra_rules", "extra_good_examples", "extra_bad_examples")
+    @classmethod
+    def _normalize_prompt_lists(cls, v: list[str]) -> list[str]:
+        return _normalize_string_list(v)
 
 
 class AuditRuntimeConfig(BaseModel):

@@ -39,7 +39,7 @@ SPHERE/
 ├── src/sphere_lc/            # Движок симуляции (LangChain/LangGraph)
 │   ├── __init__.py             # Пакет
 │   ├── cli.py                  # CLI `sphere-lc`
-│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + world.environment (incl. operational_queues/informal_links/population_blueprints) + world.artifacts + temporal pending-follow-up knobs
+│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + declarative agent-prompt blocks + world.environment (incl. operational_queues/informal_links/population_blueprints) + world.artifacts + temporal pending-follow-up knobs
 │   ├── governance_modes.py     # Canonical built-in mapping G0–G3 для runtime/web/launcher
 │   ├── scenario.py             # Load/save YAML/JSON сценариев
 │   ├── ids.py                  # Типизированные ID и аудитории (aud:*)
@@ -197,6 +197,8 @@ SPHERE/
 
 7. **Приоритет полноценной агентности среды.** Если вычислительный бюджет позволяет, среду следует насыщать множеством реальных мелких агентов, а не заменять их жёстко зашитыми когортами, суррогатными агрегатами или псевдо-акторами. Агрегация допустима как вынужденный технический компромисс, но не как вариант по умолчанию.
 
+8. **Запрет keyword/substring governance-логики как проектного решения.** Для когнитивных, governance- и corruption-related интерпретаций недопустимо проектировать систему вокруг жёстких списков keywords, needle-эвристик, substring-matching и hand-written lexical rubric’ов как основного механизма понимания смысла. Такие реализации считаются архитектурно неприемлемыми и не должны добавляться в новые фичи, конфиги, сценарии или template-policy. Допустим только узкий технический lexical слой для ID/валидации/антифантомов/форматных контрактов, но не для семантического вывода о мотивах, нарушениях, координации или коррупции.
+
 ## Стек и зависимости
 
 - Python 3.12+, Pydantic 2.0+, NetworkX 3.0+, OpenAI 1.0+, Rich 13.7+, python-dotenv 1.0+
@@ -327,9 +329,9 @@ cd web/frontend && npm run test:e2e
 - **Runtime-аудитор**: `RuntimeAuditor` существует только как отдельный runtime governance-layer, а не как narrative-agent. Он сочетает deterministic baseline rules с LLM-findings, нормализует `violation_type`, детерминированно привязывает `evidence_refs`, агрегирует повторяющиеся finding’и в стабильные `audit_case:*`, умеет ставить response-deadline на объяснения/документы и эскалировать просроченные кейсы в monitoring / collegial review. Queue-driven external complaints и media-response obligations теперь тоже входят в baseline-аудит как `service_degradation_response_ignored`, так что service-degradation влияет уже и на governance/escalation path.
 - **Сюжетные аудиторы удалены**: narrative-агенты с capability `audit` больше не поддерживаются. Аудит существует только как отдельный runtime governance-layer, а не как персонаж симуляции.
 - **Collegial review**: спорные audit-case могут маршрутизироваться в отдельный collegial review через `audit_review` vote-path с детерминированным составом жюри и закрытием кейса по итогам review.
-- **Deterministic truth + freeform truth**: `truth.jsonl` остаётся формальным baseline для evaluation, а `truth_freeform.jsonl` — отдельным LLM-sidecar для richer post-hoc записи нарушений в свободной форме по схеме. Эти два слоя не смешиваются.
+- **Deterministic truth + freeform truth**: `truth.jsonl` остаётся strict baseline для exact evaluation, а `truth_freeform.jsonl` — отдельным LLM-sidecar для richer post-hoc записи нарушений в свободной форме по схеме. При наличии `truth_freeform.jsonl` semantic/case evaluation опирается именно на него, а strict metrics продолжают считаться по deterministic truth.
 - **Unified findings**: runtime audit, deterministic truth и freeform truth постепенно приводятся к общей finding-структуре (`summary`, `mechanism`, `beneficiary`, `risk_tags`, `evidence_refs`). Exact `violation_type` больше не считается единственным носителем смысла.
-- **Tender-domain truth heuristics**: deterministic truth-layer теперь может фиксировать не только nomination/reputation-паттерны, но и некоторые доменные серые зоны вроде `preferential_treatment_for_connected_actor`, `non_escalation_under_pressure`, `partial_disclosure_under_deadline_pressure`.
+- **Structural truth only**: deterministic truth-layer больше не должен делать text-based / keyword-based semantic выводы о коррупции, координации или сокрытии. Его зона ответственности — только структурно наблюдаемые паттерны мира (например, self-nomination, positive reputation after private contact, support vote after private contact, queue-driven missed response).
 - **Semantic + case-level evaluation**: `evaluation.json` теперь содержит не только strict метрики exact-match, но и semantic matching (`semantic_true_positive`, `semantic_precision`, `semantic_recall`, `semantic_f1`) через finding matcher, а также case-level слой (`case_true_positive`, `case_precision`, `case_recall`, `case_f1`), который схлопывает повторяющиеся эпизоды по `subject + violation_type + counterparty`.
 - **Status/truth/evaluation/fidelity sidecars**: каждый прогон может писать `status.json` (heartbeat и финальный статус `running`/`finished`/`failed`), `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина), `summary.json` (разделённая сводка), `perf_summary.json` (LLM-phase/tick performance profile), а также `environment_summary.json` и `environment_timeline.jsonl` для отдельной телеметрии усиленной среды.
 - **Memory summarization runtime**: `AgentMemory.maybe_summarize_working` теперь вызывается параллельно для нескольких агентов с bounded-parallel contract, чтобы memory-sidecar не тянул весь tick последовательно.
@@ -356,6 +358,7 @@ cd web/frontend && npm run test:e2e
 | Область | Описание |
 |----------|---------|
 | Runtime latency в full-ecology прогонах | Даже после 30-секундного timeout contract, persistent persona cache, compact audit snapshots и richer `perf_summary.json` длинные full-ecology прогоны остаются latency-bound: особенно дороги `memory`, prompt-heavy `runtime_auditor` и long-tail отдельных agent/auditor вызовов. |
+| Keyword/substring semantic heuristics | В кодовой базе остаются отдельные legacy-участки, где semantic решение всё ещё опирается на lexical matching вместо LLM-first или структурного reasoning. После текущей чистки primary governance/truth paths очищены; остаток нужно добрать точечно при следующем проходе по смежным helper-слоям и документации. |
 
 ### Завершённые миграции
 

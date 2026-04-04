@@ -262,7 +262,7 @@ class AuditRuntimeConfig(BaseModel):
 
 - `metadata_only` или `internal`
 
-Даже при `audit.mode="llm"` рекомендуется оставлять deterministic baseline rules поверх `message_sent` / `work_*` / `world_event`, чтобы omission-like паттерны (`non_escalation_under_pressure`, `partial_disclosure_under_deadline_pressure`) не зависели только от LLM-интерпретации.
+Даже при `audit.mode="llm"` рекомендуется оставлять deterministic baseline rules, но только для структурных паттернов (`reputation_modified`, `vote_opened`, `vote_cast`, `pending_interaction_due/expired`). Text-based omission/corruption inference не должна жить в rules-layer и должна оставаться в LLM-first контуре.
 
 ## Рекомендуемые event types
 
