@@ -151,6 +151,7 @@ Web launcher запускает `sphere_lc` как отдельный subprocess
 
 | Метод | Путь | Описание |
 |---|---|---|
+| GET | `/api/ai/prompt-templates` | Вернуть централизованные YAML prompt templates для admin UI |
 | POST | `/api/ai/generate-personality` | Сгенерировать личность через LLM |
 | POST | `/api/ai/generate-agent-type` | Сгенерировать тип агента через LLM |
 | POST | `/api/ai/secondary-agents` | Сгенерировать secondary/family/society акторов и вернуть обновлённый scenario payload |
@@ -158,6 +159,8 @@ Web launcher запускает `sphere_lc` как отдельный subprocess
 `POST /api/personalities/{id}/interview/generate` читает профиль личности из `data/personalities/{id}.json`, генерирует полное интервью `v2` (30 вопросов) и сохраняет его в `data/interviews/{id}.json`. Ответ совпадает с сохранённым payload и сразу пригоден для отображения в `PersonalitiesView`.
 
 `POST /api/ai/secondary-agents` принимает `SecondaryAgentsPayload`, использует текущий `ScenarioConfig` (из `sim_config` или template `S/G`), просит LLM предложить concrete family/society actors и возвращает обычный web-scenario payload с обновлённым `sim_config`, списком `added_agents` и summary-блоком `secondary_generation`. Новые акторы получают typed id вида `agent:fam_*` / `agent:soc_*`, безопасные capabilities (`message`/`work`) и привязку к `org_id` / `zone_id` якорного агента, если она у него есть.
+
+`GET /api/ai/prompt-templates` отдаёт raw templates из общего `src/sphere_lc/prompts.yaml`. Frontend использует этот endpoint как источник system/user defaults для editable AI-форм, поэтому prompt wording больше не дублируется в TypeScript.
 
 #### Шаблоны и отладка
 

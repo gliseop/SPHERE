@@ -13,6 +13,7 @@ dependencies = [
     "rich>=13.7",
     "python-dotenv>=1.0",
     "openai>=1.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -28,13 +29,16 @@ dev = [
     "PyJWT>=2.7.0",
     "bcrypt>=4.0.0",
 ]
-lc = ["langgraph>=0.2", "langchain-core>=0.2", "pyyaml>=6.0"]
+lc = ["langgraph>=0.2", "langchain-core>=0.2"]
 
 [project.scripts]
 sphere-lc = "sphere_lc.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+sphere_lc = ["prompts.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

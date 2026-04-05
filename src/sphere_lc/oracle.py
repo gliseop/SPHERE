@@ -10,6 +10,7 @@ from typing import Any, Iterable, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .llm import LLMCaller
+from .prompts import render_prompt
 
 
 class Violation(BaseModel):
@@ -129,13 +130,11 @@ class ViolationOracle:
             for t in window:
                 window_events.append({"tick": t, "events": by_tick.get(t, [])})
 
-            system = (
-                "Ты — оракул нарушений в симуляции организационных процессов.\n"
-                "На вход: события нескольких тиков.\n"
-                "Найди потенциальные нарушения (например: кумовство, злоупотребление властью, конфликт интересов).\n"
-                "Верни JSON-массив Violation по схеме.\n"
+            system = render_prompt("oracle.violations.system")
+            user = render_prompt(
+                "oracle.violations.user",
+                payload_json=json.dumps({"window_ticks": window, "events": window_events}, ensure_ascii=False),
             )
-            user = json.dumps({"window_ticks": window, "events": window_events}, ensure_ascii=False)
 
             resp = await self.llm.generate_structured(
                 role="oracle",
@@ -203,22 +202,17 @@ class FreeformTruthRecorder:
             for t in window:
                 window_events.append({"tick": t, "events": by_tick.get(t, [])})
 
-            system = (
-                "Ты — post-hoc recorder нарушений в симуляции организационных процессов.\n"
-                "Твоя задача — записать потенциальные нарушения в свободной форме, но строго по схеме.\n"
-                "Не ограничивайся фиксированной таксономией. Если видишь конфликт интересов, preferential treatment, strategic non-disclosure, pressure not to escalate, process manipulation, deadline-driven concealment или transparency theater — записывай это как отдельное нарушение.\n"
-                "Для `violation_type_freeform` выбирай короткую устойчивую метку класса нарушения: желательно lowercase/snake_case, чтобы одинаковые по смыслу кейсы получали одинаковую классификацию в разных окнах.\n"
-                "Разрешается фиксировать ambiguous gray-zone случаи, если они правдоподобны и подтверждаются событиями; для таких случаев используй умеренную confidence, а не ноль.\n"
-                "Записывай только правдоподобные нарушения и указывай evidence_refs.\n"
-                "Ответ: JSON-массив по схеме.\n"
-            )
-            user = json.dumps(
-                {
-                    "scenario_description": scenario_description,
-                    "window_ticks": window,
-                    "events": window_events,
-                },
-                ensure_ascii=False,
+            system = render_prompt("oracle.truth_recorder.system")
+            user = render_prompt(
+                "oracle.truth_recorder.user",
+                payload_json=json.dumps(
+                    {
+                        "scenario_description": scenario_description,
+                        "window_ticks": window,
+                        "events": window_events,
+                    },
+                    ensure_ascii=False,
+                ),
             )
 
             resp = await self.llm.generate_structured(

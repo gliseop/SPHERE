@@ -16,6 +16,7 @@ from .events import Event
 from .ids import EntityKind, INTERNAL_AUDIENCE, make_id, normalize_slug
 from .llm import LLMCaller
 from .ops import CloseAuditCaseOp, OpenAuditCaseOp, OpenVoteOp, SetReputationFreezeOp, StateOp, UpdateAuditCaseOp
+from .prompts import render_prompt
 from .state import WorldState
 
 
@@ -242,19 +243,7 @@ class RuntimeAuditor:
     ) -> list[AuditFinding]:
         if self.llm is None:
             return []
-        system = (
-            "Ты — online AI-аудитор организационного процесса.\n"
-            "Выявляй значимые сигналы риска по уже совершённым действиям текущего тика.\n"
-            "Главное: верни risk findings как свободные сигналы, а не подгоняй всё под жёсткое меню.\n"
-            "Основной канал описания сигнала: violation_type_freeform + summary + mechanism.\n"
-            "Поле violation_type заполняй только если канонический тип действительно очевиден.\n"
-            "recommended_action не является обязательным: это лишь мягкая подсказка для policy-layer, а не финальное решение.\n"
-            "ВАЖНО: support_vote_after_private_contact используй только когда уже есть реальный yes-vote или иное фактическое действие голосования, а не просто разговор о поддержке.\n"
-            "Если арбитр отклонил намерение и оно не материализовалось в событие мира, не маркируй это как совершённое нарушение без дополнительных фактов.\n"
-            "Если канонический тип неочевиден, оставь violation_type пустым и сформулируй его содержательно в violation_type_freeform.\n"
-            "Не предлагай штраф репутации как основной путь. Если указываешь recommended_action, предпочитай мягкие меры.\n"
-            "Ответ: строго JSON по схеме.\n"
-        )
+        system = render_prompt("auditor.runtime_findings.system")
         user = json.dumps(
             {
                 "tick": current_tick,
@@ -285,7 +274,7 @@ class RuntimeAuditor:
             name="runtime_auditor",
             tick=current_tick,
             system=system,
-            user=user,
+            user=render_prompt("auditor.runtime_findings.user", payload_json=user),
             schema=_audit_schema(max_findings=self.cfg.max_findings_per_tick),
             temperature=self.temperature,
         )

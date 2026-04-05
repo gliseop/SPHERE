@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient } from '../utils/apiClient'
+import { fetchPromptTemplates, renderPromptTemplate, type PromptTemplateBundle } from '../utils/promptTemplates'
 import type { AuthUser } from '../hooks/useAuth'
 
 type TechniqueValue =
@@ -25,21 +26,12 @@ const TECHNIQUES: Array<{ value: TechniqueValue; label: string }> = [
 
 const ACTIVE_PERSONALITY_STORAGE_KEY = 'sphere-active-personality-id'
 
-const DEFAULT_GENERATE_PERSONALITY_SYSTEM_PROMPT = (
-  'Ты — эксперт по организационной психологии и криминологии. '
-  + 'Пользователь описывает желаемый типаж персонажа для симуляции коррупции в госорганах. '
-  + 'Сгенерируй полный психологический профиль: биографию, параметры HEXACO (0-100), '
-  + 'тёмную триаду (0-100) и подходящие техники нейтрализации. '
-  + 'Верни ТОЛЬКО JSON без пояснений и префиксов. '
-  + 'Биография должна опираться на 1–3 реальных прототипа (исторические/публичные личности; предпочтительно умершие). '
-  + 'Персонаж при этом остаётся вымышленным: не используй реальные имена в тексте биографии. '
-  + 'Прототипы перечисли в поле prototypes (массив строк). '
-  + 'Биография должна быть на русском языке, 3-5 абзацев. '
-  + 'Параметры должны быть логически согласованы с описанием и биографией.'
-)
-
-function defaultGeneratePersonalityUserPrompt(description: string): string {
-  return `Описание персонажа:\n${description}`.trim()
+function defaultGeneratePersonalityUserPrompt(
+  templates: PromptTemplateBundle | null,
+  description: string,
+): string {
+  const template = templates?.generate_personality?.user_default ?? ''
+  return renderPromptTemplate(template, { description }).trim()
 }
 
 interface Hexaco {
@@ -156,6 +148,7 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [promptTemplates, setPromptTemplates] = useState<PromptTemplateBundle | null>(null)
   const [activePersonalityId, setActivePersonalityId] = useState<string>(() => {
     try {
       return localStorage.getItem(ACTIVE_PERSONALITY_STORAGE_KEY) ?? ''
@@ -163,8 +156,8 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
       return ''
     }
   })
-  const [genSystemPrompt, setGenSystemPrompt] = useState(DEFAULT_GENERATE_PERSONALITY_SYSTEM_PROMPT)
-  const [genUserPrompt, setGenUserPrompt] = useState(defaultGeneratePersonalityUserPrompt(''))
+  const [genSystemPrompt, setGenSystemPrompt] = useState('')
+  const [genUserPrompt, setGenUserPrompt] = useState('')
   const [genSystemDirty, setGenSystemDirty] = useState(false)
   const [genUserDirty, setGenUserDirty] = useState(false)
   const [loadingInterviewId, setLoadingInterviewId] = useState<string | null>(null)
@@ -182,6 +175,10 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
   }, [])
 
   useEffect(() => {
+    fetchPromptTemplates().then((data) => setPromptTemplates(data))
+  }, [])
+
+  useEffect(() => {
     try {
       localStorage.setItem(ACTIVE_PERSONALITY_STORAGE_KEY, activePersonalityId)
     } catch {
@@ -192,19 +189,24 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
   useEffect(() => {
     const curId = editing ? (editing.id ?? '__new__') : null
     if (editing && prevEditingIdRef.current !== curId) {
-      setGenSystemPrompt(DEFAULT_GENERATE_PERSONALITY_SYSTEM_PROMPT)
-      setGenUserPrompt(defaultGeneratePersonalityUserPrompt(editing.description ?? ''))
+      setGenSystemPrompt(promptTemplates?.generate_personality?.system_default ?? '')
+      setGenUserPrompt(defaultGeneratePersonalityUserPrompt(promptTemplates, editing.description ?? ''))
       setGenSystemDirty(false)
       setGenUserDirty(false)
     }
     prevEditingIdRef.current = curId
-  }, [editing])
+  }, [editing, promptTemplates])
 
   useEffect(() => {
     if (!editingKey) return
     if (genUserDirty) return
-    setGenUserPrompt(defaultGeneratePersonalityUserPrompt(editing?.description ?? ''))
-  }, [editingKey, editing?.description, genUserDirty])
+    setGenUserPrompt(defaultGeneratePersonalityUserPrompt(promptTemplates, editing?.description ?? ''))
+  }, [editingKey, editing?.description, genUserDirty, promptTemplates])
+
+  useEffect(() => {
+    if (genSystemDirty) return
+    setGenSystemPrompt(promptTemplates?.generate_personality?.system_default ?? '')
+  }, [genSystemDirty, promptTemplates])
 
   const archetype = useMemo(() => (editing ? classifyArchetype(editing) : null), [editing])
 
@@ -418,8 +420,8 @@ export function PersonalitiesView({ user }: { user: AuthUser | null }) {
                       <button
                         className="btn-clipped small"
                         onClick={() => {
-                          setGenSystemPrompt(DEFAULT_GENERATE_PERSONALITY_SYSTEM_PROMPT)
-                          setGenUserPrompt(defaultGeneratePersonalityUserPrompt(editing.description ?? ''))
+                          setGenSystemPrompt(promptTemplates?.generate_personality?.system_default ?? '')
+                          setGenUserPrompt(defaultGeneratePersonalityUserPrompt(promptTemplates, editing.description ?? ''))
                           setGenSystemDirty(false)
                           setGenUserDirty(false)
                         }}

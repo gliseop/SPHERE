@@ -60,6 +60,7 @@ from .ops import (
     UpsertPendingInteractionOp,
     StateOp,
 )
+from .prompts import render_prompt
 from .state import WorldState
 from .utils import (
     looks_like_machine_name,
@@ -971,50 +972,7 @@ class Arbiter:
             return _PerformArbiterOutput(approved=False, reason=f"unknown target_id: {target_id}", ops=[])
 
         proposal = action.description.strip()
-        system = (
-            "Ты — арбитр симуляции SPHERE-LC. Твоя роль — «физика мира».\n"
-            "На вход: YAML-журнал мира и свободное turn-proposal агента.\n"
-            "Твоя задача — определить ТРИ вещи:\n"
-            "1) Допустимо ли действие в текущем состоянии мира (пространство, полномочия, существование целей).\n"
-            "2) Каковы ПРЯМЫЕ последствия — какие ops нужны для реализации намерения.\n"
-            "3) Есть ли ПОБОЧНЫЕ ЭФФЕКТЫ — свидетели, изменение неформальных отношений, привлечение внимания.\n\n"
-
-            "ПОБОЧНЫЕ ЭФФЕКТЫ — обязательная часть арбитража:\n"
-            "- Приватный контакт двух агентов → добавь upsert_informal_link (coordination/trust/alliance, strength_delta +0.05..+0.15).\n"
-            "- Координация вокруг сомнительного действия → upsert_informal_link (complicity/corruption, visibility=latent).\n"
-            "- Публичное или заметное действие → add_information_signal с кратким описанием.\n"
-            "- Агент обещает что-то сделать или ожидает ответа → upsert_pending_interaction.\n"
-            "- Агент создаёт документ → create_artifact.\n"
-            "- Физическое действие (перемещение, осмотр, передача из рук в руки) → narrative_action с описанием и witnesses.\n"
-            "Побочные эффекты добавляются В ДОПОЛНЕНИЕ к прямым ops, а не вместо них.\n\n"
-
-            "ПРАВИЛА:\n"
-            "Proposal может содержать несколько связанных намерений; материализуй только те ops,\n"
-            "которые следуют из текста и допустимы по состоянию мира.\n"
-            "Если agent:*, work:*, chan:*, org:* или art:* присутствуют в YAML journal, считай их существующими.\n"
-            "Не придумывай барьеры вида «агент не доступен», если такого ограничения нет в состоянии мира.\n"
-            "Pending interactions, audit-cases и monitoring не запрещают send_message без явного правила блокировки.\n"
-            "Политика должностей: только через DAO (vote + consent). Не меняй должности напрямую.\n"
-            "Нельзя выдумывать новых агентов. Нельзя писать приватно неизвестным ID.\n"
-            "Базовая коммуникация не требует capability: send_message разрешён всем, но подчиняется физике мира.\n\n"
-
-            "ПРИМЕРЫ materialization с побочными эффектами:\n"
-            "- «Переговорю с agent:X наедине в коридоре» → send_message(private) + narrative_action(встреча в коридоре, witnesses=[]) + upsert_informal_link(coordination, +0.1)\n"
-            "- «Подготовлю докладную о несоответствиях» → create_artifact(type=report, title=...) + если public, add_information_signal\n"
-            "- «Намекну подрядчику agent:Y, что контракт можно ускорить» → send_message(private, текст намёка) + upsert_informal_link(corruption, +0.15, visibility=latent)\n"
-            "- «Пройду к директору и положу отчёт на стол» → narrative_action(физическая передача, zone_id=...) + send_message(текст сопроводительного слова)\n"
-            "- «Добавлю в work:Y заметку» → add_work_note\n"
-            "- «Вынесу вопрос о повышении agent:Z» → open_vote, а не прямую смену должности.\n"
-            "- Не отклоняй send_message только из-за отсутствия capability `message`.\n"
-            "- Если proposal просит «написать», а текст не процитирован, synthesize faithful text из proposal.\n"
-            "- op_type=`vote` нормализуй: `vote_id/choice` → cast_vote, `target_agent_id/new_title` → open_vote.\n\n"
-
-            "Если proposal — осознанное бездействие/наблюдение → approved=true, пустой ops.\n"
-            "Если proposal содержательный, но не материализуем → отклони с reason.\n"
-            f"Actor capabilities: {sorted(agent_caps)}\n"
-            "ВАЖНО: в op_type используй только snake_case-значения из JSON-схемы.\n"
-            "Ответ: только JSON по схеме.\n"
-        )
+        system = render_prompt("arbiter.perform.system", agent_caps=sorted(agent_caps))
         user = self._perform_llm_user_prompt(
             journal_yaml=journal_yaml,
             agent_id=agent_id,
@@ -1030,14 +988,7 @@ class Arbiter:
         if not self._should_retry_unmaterialized_proposal(proposal=proposal, decision=decision):
             return decision
 
-        retry_system = (
-            f"{system}"
-            "ПРЕДЫДУЩАЯ ПОПЫТКА materialization вернула approved=true и пустой ops для содержательного proposal.\n"
-            "Сделай повторную попытку более строго:\n"
-            "- если из proposal следуют наблюдаемые шаги мира, выдай хотя бы один конкретный op;\n"
-            "- если proposal слишком абстрактен, не grounded в world state или не может быть честно материализован, отклони его.\n"
-            "- не оставляй содержательный proposal в approved=true с пустым ops.\n"
-        )
+        retry_system = f"{system}\n{render_prompt('arbiter.perform.retry_suffix')}"
         retry_user = self._perform_llm_user_prompt(
             journal_yaml=journal_yaml,
             agent_id=agent_id,
@@ -1067,22 +1018,23 @@ class Arbiter:
         target_id: str,
         previous_decision: _PerformArbiterOutput | None = None,
     ) -> str:
-        text = (
-            "YAML JOURNAL:\n"
-            f"{journal_yaml}\n\n"
-            "TURN PROPOSAL:\n"
-            f"- actor_id: {agent_id}\n"
-            f"- proposal: {proposal}\n"
-            f"- target_id: {target_id}\n"
-        )
         if previous_decision is None:
-            return text
-        return (
-            f"{text}\n"
-            "PREVIOUS ATTEMPT:\n"
-            f"- approved: {previous_decision.approved}\n"
-            f"- reason: {previous_decision.reason}\n"
-            f"- ops_count: {len(previous_decision.ops)}\n"
+            return render_prompt(
+                "arbiter.perform.user",
+                journal_yaml=journal_yaml,
+                agent_id=agent_id,
+                proposal=proposal,
+                target_id=target_id,
+            )
+        return render_prompt(
+            "arbiter.perform.user_with_previous",
+            journal_yaml=journal_yaml,
+            agent_id=agent_id,
+            proposal=proposal,
+            target_id=target_id,
+            approved=previous_decision.approved,
+            reason=previous_decision.reason,
+            ops_count=len(previous_decision.ops),
         )
 
     async def _call_perform_llm_once(

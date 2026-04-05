@@ -17,6 +17,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .prompts import render_prompt
+
 if TYPE_CHECKING:
     from .llm import LLMCaller
 
@@ -409,28 +411,16 @@ class SocialGraphExtractor:
             return []
 
         interview_excerpt = "\n\n".join(chunk_text(interview_text, max_chars=3200)[:2])
-        system = (
-            "Ты — модуль извлечения социального графа для симуляции организационных процессов.\n"
-            "Выдели только НОВЫХ людей, которые реально важны для сюжета и решений агента.\n"
-            "Приоритет: родня, близкие друзья, старые карьерные связи, финансовые зависимости, неформальные посредники, "
-            "люди, которые влияют на страх, карьеру, репутацию и зависимость агента.\n"
-            "Не возвращай абстрактные должности и ролевые ярлыки вместо конкретных людей.\n"
-            "Не возвращай уже существующих агентов из списка ниже.\n"
-            "Если новых конкретных людей в биографии нет, верни пустой список.\n"
-            "Не придумывай новых организаций, должностей или ID. Возвращай строго JSON по схеме.\n"
-            f"Пиши на языке: {language!r}.\n"
-        )
-        user = (
-            f"Сценарий:\n{scenario_description}\n\n"
-            f"Агент:\n- id: {agent_id}\n- name: {agent_name}\n\n"
-            f"Уже существующие агенты:\n- " + "\n- ".join(existing_agent_names or ["(нет)"]) + "\n\n"
-            f"Биография:\n{biography or '(пусто)'}\n\n"
-            f"Интервью (фрагмент):\n{interview_excerpt or '(пусто)'}\n\n"
-            f"Выдели до {max_links} НОВЫХ людей. Для каждого укажи имя, связь, почему важен, краткий persona_hint, "
-            "является ли он внутренним участником процесса, и рекомендуемые capabilities. "
-            "Если в тексте есть только должность без имени, такого кандидата не возвращай. "
-            "Запрещено повторять имена из списка уже существующих агентов. "
-            "Старайся находить не декоративные знакомства, а людей, которые реально создают давление и точки выбора."
+        system = render_prompt("persona.social_graph.system", language_repr=repr(language))
+        user = render_prompt(
+            "persona.social_graph.user",
+            scenario_description=scenario_description,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            existing_agent_names="\n- ".join(existing_agent_names or ["(нет)"]),
+            biography=biography or "(пусто)",
+            interview_excerpt=interview_excerpt or "(пусто)",
+            max_links=max_links,
         )
         resp = await self.llm.generate_structured(
             role="social_graph",
@@ -516,22 +506,14 @@ class PersonaGenerator:
         scenario_description: str,
         language: str,
     ) -> PersonaArtifact:
-        system = (
-            "Ты — генератор персоны агента для симуляции организационных процессов (SPHERE-LC).\n"
-            "Сгенерируй:\n"
-            "- краткую сводку (summary) 3–6 предложений;\n"
-            "- биографию (biography) 1000–2000 слов.\n"
-            "Важно:\n"
-            "- Не используй числовые параметры личности (greed/fear/honesty/etc). Только текст.\n"
-            "- Не выдумывай новых ID/сущностей мира; описывай человека и мотивации.\n"
-            "- Не сглаживай конфликтующие стимулы из persona_hint: если у героя есть личная выгода, лояльность, страх или склонность к обходным решениям, сохрани это в тексте.\n"
-            f"- Пиши на языке: {language!r}.\n"
-            "Ответ: строго JSON по схеме.\n"
-        )
-        user = (
-            f"Сценарий:\n{scenario_description}\n\n"
-            f"Агент:\n- agent_id: {agent_id}\n- name: {name}\n- internal: {internal}\n\n"
-            f"Подсказка/черновик персоны:\n{persona_hint}\n"
+        system = render_prompt("persona.core.system", language_repr=repr(language))
+        user = render_prompt(
+            "persona.core.user",
+            scenario_description=scenario_description,
+            agent_id=agent_id,
+            name=name,
+            internal=internal,
+            persona_hint=persona_hint,
         )
         resp = await self.llm.generate_structured(
             role="persona",
@@ -558,19 +540,19 @@ class PersonaGenerator:
         structured_calls = 0
 
         async def _answer_one(q: str) -> str:
-            user = (
-                "Ответь на вопрос интервью персоны. 2–6 предложений.\n"
-                f"Язык: {language!r}\n\n"
-                f"Persona summary:\n{persona_summary}\n\n"
-                f"Biography excerpt:\n{biography_excerpt}\n\n"
-                f"Вопрос:\n{q}\n"
+            user = render_prompt(
+                "persona.interview.single.user",
+                language_repr=repr(language),
+                persona_summary=persona_summary,
+                biography_excerpt=biography_excerpt,
+                question=q,
             )
             try:
                 resp = await self.llm.generate(
                     role="persona_interview",
                     name=agent_id,
                     tick=0,
-                    system="Ты — генератор интервью персоны.",
+                    system=render_prompt("persona.interview.single.system"),
                     user=user,
                     temperature=self.temperature,
                 )
@@ -581,16 +563,12 @@ class PersonaGenerator:
         async def _try_batch(qs: list[str]) -> list[str]:
             nonlocal structured_calls
             q_lines = "\n".join(f"{i+1}. {q}" for i, q in enumerate(qs))
-            system = (
-                "Ты — генератор интервью персоны (SPHERE-LC).\n"
-                "Дай ответы на вопросы, каждый ответ 2–6 предложений.\n"
-                f"Пиши на языке: {language!r}.\n"
-                "Ответ: строго JSON по схеме.\n"
-            )
-            user = (
-                f"Persona summary:\n{persona_summary}\n\n"
-                f"Biography excerpt:\n{biography_excerpt}\n\n"
-                f"Вопросы:\n{q_lines}\n"
+            system = render_prompt("persona.interview.batch.system", language_repr=repr(language))
+            user = render_prompt(
+                "persona.interview.batch.user",
+                persona_summary=persona_summary,
+                biography_excerpt=biography_excerpt,
+                questions=q_lines,
             )
             structured_calls += 1
             resp = await self.llm.generate_structured(
@@ -652,18 +630,12 @@ class PersonaGenerator:
             for idx, qa in enumerate(interview[:8])
             if (qa.question or "").strip() and (qa.answer or "").strip()
         )
-        system = (
-            "Ты — модуль экспертной рефлексии персоны для симуляции организационных процессов.\n"
-            "Сформируй 2-4 краткие экспертные интерпретации устойчивой стратегии персонажа.\n"
-            f"Пиши на языке: {language!r}.\n"
-            "Ответ: строго JSON по схеме.\n"
-        )
-        user = (
-            f"Persona summary:\n{summary}\n\n"
-            f"Biography excerpt:\n{biography_excerpt}\n\n"
-            f"Interview fragments:\n{interview_excerpt or '(пусто)'}\n\n"
-            "Обязательно верни минимум две рефлексии: psychologist и economist. "
-            "Можно добавить governance.\n"
+        system = render_prompt("persona.reflection.system", language_repr=repr(language))
+        user = render_prompt(
+            "persona.reflection.user",
+            summary=summary,
+            biography_excerpt=biography_excerpt,
+            interview_excerpt=interview_excerpt or "(пусто)",
         )
         try:
             resp = await self.llm.generate_structured(
@@ -729,24 +701,15 @@ class PersonaGenerator:
         language: str,
     ) -> PersonaArtifact:
         questions = "\n".join(f"{i+1}. {q}" for i, q in enumerate(INTERVIEW_QUESTIONS_V2))
-        system = (
-            "Ты — генератор персоны агента для симуляции организационных процессов (SPHERE-LC).\n"
-            "Сгенерируй:\n"
-            "- краткую сводку (summary) 3–6 предложений;\n"
-            "- биографию (biography) 1000–2000 слов;\n"
-            "- интервью: ответы на вопросы (30), каждый ответ 2–6 предложений.\n"
-            "Важно:\n"
-            "- Не используй числовые параметры личности (greed/fear/honesty/etc). Только текст.\n"
-            "- Не выдумывай новых ID/сущностей мира; описывай человека и мотивации.\n"
-            "- Если в persona_hint или сценарии есть конфликт между формальной нормой и личной выгодой, не выпрямляй его в полностью добродетельный образ.\n"
-            f"- Пиши на языке: {language!r}.\n"
-            "Ответ: строго JSON по схеме.\n"
-        )
-        user = (
-            f"Сценарий:\n{scenario_description}\n\n"
-            f"Агент:\n- agent_id: {agent_id}\n- name: {name}\n- internal: {internal}\n\n"
-            f"Подсказка/черновик персоны:\n{persona_hint}\n\n"
-            f"Вопросы интервью:\n{questions}\n"
+        system = render_prompt("persona.full.system", language_repr=repr(language))
+        user = render_prompt(
+            "persona.full.user",
+            scenario_description=scenario_description,
+            agent_id=agent_id,
+            name=name,
+            internal=internal,
+            persona_hint=persona_hint,
+            questions=questions,
         )
         artifact: PersonaArtifact | None = None
         try:

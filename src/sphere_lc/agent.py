@@ -16,6 +16,7 @@ from .events import Event
 from .ids import EntityKind, INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from .llm import LLMCaller
 from .memory import AgentMemory
+from .prompts import render_prompt
 from .state import AgentState, WorldState
 from .worldgen import AgentDailyContext, SceneHook
 
@@ -79,14 +80,14 @@ def _motivation_block(agent: AgentState, visible_events: list[Event]) -> str:
     role_obligation = agent.title if agent.internal else "внешние связи и договорённости"
     fear_text = threat_text or "Потерять влияние, доверие или контроль над развитием ситуации."
     incentive_text = biography_hint or summary
-    return (
-        "Что для тебя сейчас действительно поставлено на карту:\n"
-        f"- Чего ты добиваешься: {summary}\n"
-        f"- Чего ты опасаешься: {fear_text}\n"
-        f"- Перед кем и чем ты связан обязательствами: ответственность за {role_obligation}; помни и о личных связях\n"
-        f"- Что для тебя выглядит выгодой: {incentive_text}\n"
-        f"- Что у тебя внутри сейчас не отпускает: {story_state}\n"
-        f"- Откуда может прийти удар: {threat_text or 'ошибка в выборе, потеря репутации, внешний шум или чужая инициатива'}\n"
+    return render_prompt(
+        "agent.blocks.motivation",
+        summary=summary,
+        fear_text=fear_text,
+        role_obligation=role_obligation,
+        incentive_text=incentive_text,
+        story_state=story_state,
+        threat_text=threat_text or "ошибка в выборе, потеря репутации, внешний шум или чужая инициатива",
     )
 
 
@@ -94,32 +95,38 @@ def _format_daily_context(daily_context: AgentDailyContext | None, scene_hooks: 
     if daily_context is None and not scene_hooks:
         return ""
 
-    lines = ["Утро складывается так:"]
+    lines = [render_prompt("agent.blocks.daily_context.header")]
     if daily_context is not None:
         lines.extend(
             [
-                f"- Где начинается день: {daily_context.where_day_starts or '(не задано)'}",
-                f"- Личное напряжение: {daily_context.personal_pressure or '(не задано)'}",
-                f"- Социальная пересечка: {daily_context.social_encounter or '(не задано)'}",
-                f"- Фоновый сигнал: {daily_context.ambient_signal or '(не задано)'}",
-                f"- Частное давление: {daily_context.private_pressure or '(не задано)'}",
-                f"- Возможность/выгода: {daily_context.opportunity or '(не задано)'}",
-                f"- Риск раскрытия: {daily_context.exposure_risk or '(не задано)'}",
-                f"- Сюжетный узел на сегодня: {daily_context.today_hook or '(не задано)'}",
+                render_prompt("agent.blocks.daily_context.where_day_starts", value=daily_context.where_day_starts or "(не задано)"),
+                render_prompt("agent.blocks.daily_context.personal_pressure", value=daily_context.personal_pressure or "(не задано)"),
+                render_prompt("agent.blocks.daily_context.social_encounter", value=daily_context.social_encounter or "(не задано)"),
+                render_prompt("agent.blocks.daily_context.ambient_signal", value=daily_context.ambient_signal or "(не задано)"),
+                render_prompt("agent.blocks.daily_context.private_pressure", value=daily_context.private_pressure or "(не задано)"),
+                render_prompt("agent.blocks.daily_context.opportunity", value=daily_context.opportunity or "(не задано)"),
+                render_prompt("agent.blocks.daily_context.exposure_risk", value=daily_context.exposure_risk or "(не задано)"),
+                render_prompt("agent.blocks.daily_context.today_hook", value=daily_context.today_hook or "(не задано)"),
             ]
         )
         if daily_context.lightweight_contacts:
             contacts = ", ".join(daily_context.lightweight_contacts[:4])
-            lines.append(f"- Мимолётные контакты дня: {contacts}")
-            lines.append(
-                "- У этих людей пока нет служебного обозначения в деле; не обращайся к ним напрямую, пока они не появились в общей картине как оформленные участники."
-            )
+            lines.append(render_prompt("agent.blocks.daily_context.lightweight_contacts", contacts=contacts))
+            lines.append(render_prompt("agent.blocks.daily_context.lightweight_contacts_guardrail"))
     if scene_hooks:
-        lines.append("Сценовые поводы:")
+        lines.append(render_prompt("agent.blocks.daily_context.scene_hooks_header"))
         for hook in scene_hooks[:4]:
             mandatory = " [обязательная сцена]" if hook.mandatory else ""
             participants = ", ".join(hook.agents) if hook.agents else "(без списка участников)"
-            lines.append(f"- {hook.kind}{mandatory}: {hook.description} | участники: {participants}")
+            lines.append(
+                render_prompt(
+                    "agent.blocks.daily_context.scene_hook_line",
+                    kind=hook.kind,
+                    mandatory_suffix=mandatory,
+                    description=hook.description,
+                    participants=participants,
+                )
+            )
     return "\n".join(lines) + "\n\n"
 
 
@@ -127,30 +134,54 @@ def _format_environment_brief(*, agent: AgentState, state: WorldState) -> str:
     if not agent.org_id and not agent.zone_id:
         return ""
 
-    lines = ["Вокруг тебя сейчас вот что:"]
+    lines = [render_prompt("agent.blocks.environment.header")]
     if agent.org_id:
         inst = state.environment.institutions.get(agent.org_id)
         if inst is not None:
             lines.append(
-                f"- Организация {agent.org_id}: режим={inst.operating_mode}, прозрачность={inst.transparency_mode}, доступ={inst.access_mode}, безопасность={inst.security_mode}"
+                render_prompt(
+                    "agent.blocks.environment.institution_line",
+                    org_id=agent.org_id,
+                    operating_mode=inst.operating_mode,
+                    transparency_mode=inst.transparency_mode,
+                    access_mode=inst.access_mode,
+                    security_mode=inst.security_mode,
+                )
             )
             if inst.capture_risk:
-                lines.append(f"- Риск захвата/неформального влияния: {inst.capture_risk}")
+                lines.append(
+                    render_prompt(
+                        "agent.blocks.environment.capture_risk_line",
+                        capture_risk=inst.capture_risk,
+                    )
+                )
         owned_pools = [
             pool for _, pool in sorted(state.environment.resource_pools.items()) if pool.owner_org_id == agent.org_id
         ]
         for pool in owned_pools[:3]:
-            pressure = f", давление={pool.pressure}" if pool.pressure else ""
-            unit = f" {pool.unit}" if pool.unit else ""
             lines.append(
-                f"- Ресурс {pool.resource_id}: {pool.quantity}{unit}, статус={pool.status}{pressure}"
+                render_prompt(
+                    "agent.blocks.environment.resource_pool_line",
+                    resource_id=pool.resource_id,
+                    quantity=pool.quantity,
+                    unit_suffix=f" {pool.unit}" if pool.unit else "",
+                    status=pool.status,
+                    pressure_suffix=f", давление={pool.pressure}" if pool.pressure else "",
+                )
             )
 
     if agent.zone_id:
         zone = state.environment.zones.get(agent.zone_id)
         if zone is not None:
             lines.append(
-                f"- Зона {agent.zone_id} ({zone.title}): доступ={zone.access_mode}, прозрачность={zone.transparency_mode}, безопасность={zone.security_level}"
+                render_prompt(
+                    "agent.blocks.environment.zone_line",
+                    zone_id=agent.zone_id,
+                    title=zone.title,
+                    access_mode=zone.access_mode,
+                    transparency_mode=zone.transparency_mode,
+                    security_level=zone.security_level,
+                )
             )
 
     climate = state.environment.information_climate
@@ -164,10 +195,21 @@ def _format_environment_brief(*, agent: AgentState, state: WorldState) -> str:
         ]
     ):
         lines.append(
-            f"- Общий фон: public_mood={climate.public_mood or '(не задано)'}, oversight={climate.oversight_attention or '(не задано)'}, media={climate.media_pressure or '(не задано)'}, narrative={climate.narrative_temperature or '(не задано)'}"
+            render_prompt(
+                "agent.blocks.environment.climate_line",
+                public_mood=climate.public_mood or "(не задано)",
+                oversight_attention=climate.oversight_attention or "(не задано)",
+                media_pressure=climate.media_pressure or "(не задано)",
+                narrative_temperature=climate.narrative_temperature or "(не задано)",
+            )
         )
         if climate.active_signals:
-            lines.append(f"- Активные сигналы среды: {', '.join(climate.active_signals[:4])}")
+            lines.append(
+                render_prompt(
+                    "agent.blocks.environment.active_signals_line",
+                    signals=", ".join(climate.active_signals[:4]),
+                )
+            )
 
     if len(lines) == 1:
         return ""
@@ -191,7 +233,7 @@ def _format_relevant_artifacts(*, agent: AgentState, state: WorldState) -> str:
     if not relevant:
         return ""
 
-    lines = ["На столе, в почте и в папках у тебя сейчас:"]
+    lines = [render_prompt("agent.blocks.artifacts.header")]
     for artifact_id in relevant[:6]:
         artifact = state.artifacts[artifact_id]
         relation: list[str] = []
@@ -201,11 +243,18 @@ def _format_relevant_artifacts(*, agent: AgentState, state: WorldState) -> str:
             relation.append(f"org={artifact.owner_org_id}")
         if artifact.zone_id:
             relation.append(f"zone={artifact.zone_id}")
-        relation_text = f" | {'; '.join(relation)}" if relation else ""
-        summary = f" | {artifact.summary}" if artifact.summary else ""
-        tags = f" | tags={', '.join(artifact.tags[:4])}" if artifact.tags else ""
         lines.append(
-            f"- {artifact.artifact_id}: {artifact.title} [{artifact.artifact_type}, {artifact.status}, {artifact.visibility}]{relation_text}{tags}{summary}"
+            render_prompt(
+                "agent.blocks.artifacts.line",
+                artifact_id=artifact.artifact_id,
+                title=artifact.title,
+                artifact_type=artifact.artifact_type,
+                status=artifact.status,
+                visibility=artifact.visibility,
+                relation_text=f" | {'; '.join(relation)}" if relation else "",
+                tags_text=f" | tags={', '.join(artifact.tags[:4])}" if artifact.tags else "",
+                summary_text=f" | {artifact.summary}" if artifact.summary else "",
+            )
         )
     return "\n".join(lines) + "\n\n"
 
@@ -223,11 +272,18 @@ def _format_informal_links(*, agent: AgentState, state: WorldState) -> str:
     if not relevant:
         return ""
 
-    lines = ["Невидимые связи, о которых ты помнишь:"]
+    lines = [render_prompt("agent.blocks.informal_links.header")]
     for counterpart, link in relevant[:6]:
-        pressure = f" | давление={link.pressure}" if link.pressure else ""
         lines.append(
-            f"- {counterpart}: {link.link_type}, strength={round(float(link.strength), 3)}, visibility={link.visibility}, source={link.source}{pressure}"
+            render_prompt(
+                "agent.blocks.informal_links.line",
+                counterpart=counterpart,
+                link_type=link.link_type,
+                strength=round(float(link.strength), 3),
+                visibility=link.visibility,
+                source=link.source,
+                pressure_suffix=f" | давление={link.pressure}" if link.pressure else "",
+            )
         )
     return "\n".join(lines) + "\n\n"
 
@@ -249,7 +305,7 @@ def _format_pending_interactions(*, agent: AgentState, state: WorldState) -> str
             item.interaction_id,
         )
     )
-    lines = ["Незакрытые хвосты и ожидания:"]
+    lines = [render_prompt("agent.blocks.pending_interactions.header")]
     for interaction in relevant[:6]:
         source = f" от {interaction.source_agent_id}" if interaction.source_agent_id else ""
         window = f" | окно=t{interaction.earliest_tick}..t{interaction.due_tick}" if interaction.due_tick is not None else f" | c t{interaction.earliest_tick}"
@@ -262,9 +318,16 @@ def _format_pending_interactions(*, agent: AgentState, state: WorldState) -> str
             anchor.append(f"org={interaction.org_id}")
         if interaction.zone_id:
             anchor.append(f"zone={interaction.zone_id}")
-        anchor_text = f" | {'; '.join(anchor)}" if anchor else ""
         lines.append(
-            f"- {interaction.category}{source}, priority={interaction.priority}{window}{anchor_text}: {interaction.summary or '(без summary)'}"
+            render_prompt(
+                "agent.blocks.pending_interactions.line",
+                category=interaction.category,
+                source_suffix=source,
+                priority=interaction.priority,
+                window_text=window,
+                anchor_text=f" | {'; '.join(anchor)}" if anchor else "",
+                summary=interaction.summary or "(без summary)",
+            )
         )
     return "\n".join(lines) + "\n\n"
 
@@ -273,22 +336,22 @@ def _format_spawn_context(*, agent: AgentState) -> str:
     if not agent.population_role:
         return ""
     readable_role = agent.population_role.replace("_", " ").strip()
-    lines = ["Какую роль ты сейчас невольно играешь в этой истории:"]
+    lines = [render_prompt("agent.blocks.spawn_context.header")]
     if agent.population_role:
-        lines.append(f"- Твоя локальная роль: {readable_role}")
+        lines.append(render_prompt("agent.blocks.spawn_context.role_line", readable_role=readable_role))
     return "\n".join(lines) + "\n\n"
 
 
 def _format_prompt_policy(*, policy: AgentPromptPolicyConfig) -> str:
-    lines = ["Практические ориентиры:"]
+    lines = [render_prompt("agent.blocks.prompt_policy.header")]
     if policy.addressing_hint:
-        lines.append(f"- {policy.addressing_hint}")
+        lines.append(render_prompt("agent.blocks.prompt_policy.bullet", text=policy.addressing_hint))
     if policy.private_message_hint:
-        lines.append(f"- {policy.private_message_hint}")
+        lines.append(render_prompt("agent.blocks.prompt_policy.bullet", text=policy.private_message_hint))
     if policy.public_message_hint:
-        lines.append(f"- {policy.public_message_hint}")
+        lines.append(render_prompt("agent.blocks.prompt_policy.bullet", text=policy.public_message_hint))
     for rule in policy.extra_rules:
-        lines.append(f"- {rule}")
+        lines.append(render_prompt("agent.blocks.prompt_policy.bullet", text=rule))
     if len(lines) == 1:
         return ""
     return "\n".join(lines) + "\n\n"
@@ -314,47 +377,31 @@ def _format_proposal_examples(
         "",
     )
 
-    lines = ["Примеры хода, который звучит по-человечески и реально сдвигает дело:"]
+    lines = [render_prompt("agent.blocks.proposal_examples.header")]
     if "work" in caps and peer_id and work_id:
-        lines.append(
-            f"- Хорошо для тебя: \"Сразу напишу {peer_id}, попрошу сегодня уточнить требования по {work_id}, а затем сам добавлю туда короткую заметку с критериями.\""
-        )
+        lines.append(render_prompt("agent.blocks.proposal_examples.good_with_work_and_peer", peer_id=peer_id, work_id=work_id))
     elif peer_id and work_id:
-        lines.append(
-            f"- Хорошо для тебя: \"Сразу напишу {peer_id} и попрошу его уточнить требования по {work_id}; сам добавлять заметку в work я не буду.\""
-        )
+        lines.append(render_prompt("agent.blocks.proposal_examples.good_with_peer_no_work", peer_id=peer_id, work_id=work_id))
     elif peer_id:
-        lines.append(
-            f"- Хорошо для тебя: \"Сразу напишу {peer_id} и попрошу подтвердить, готов ли он вынести вопрос на формальное обсуждение сегодня.\""
-        )
+        lines.append(render_prompt("agent.blocks.proposal_examples.good_with_peer_only", peer_id=peer_id))
     if "work" in caps and work_id:
-        lines.append(
-            f"- Хорошо для тебя: \"Добавлю в {work_id} короткую заметку с текущим риском и попрошу участников ответить сегодня.\""
-        )
+        lines.append(render_prompt("agent.blocks.proposal_examples.good_work_direct", work_id=work_id))
     elif work_id and peer_id:
-        lines.append(
-            f"- Хорошо для тебя: \"Напишу {peer_id} и попрошу его зафиксировать в {work_id} мой комментарий по риску.\""
-        )
+        lines.append(render_prompt("agent.blocks.proposal_examples.good_peer_note_request", peer_id=peer_id, work_id=work_id))
     if "dao" in caps and vote_id:
-        lines.append(
-            f"- Хорошо для тебя: \"Если это уместно, вынесу вопрос на голосование или проголосую по {vote_id} прямо в этом тике.\""
-        )
+        lines.append(render_prompt("agent.blocks.proposal_examples.good_dao", vote_id=vote_id))
     elif targeted_vote_id:
-        lines.append(
-            f"- Хорошо для тебя: \"По {targeted_vote_id} прямо отвечу согласием или отказом как цель текущей номинации.\""
-        )
+        lines.append(render_prompt("agent.blocks.proposal_examples.good_targeted_nomination_response", vote_id=targeted_vote_id))
     for example in policy.extra_good_examples:
-        lines.append(f"- Хорошо для тебя: \"{example}\"")
-    lines.append("- Плохо: \"Инициирую процесс, соберу мнения, проработаю вопрос, укреплю позиции.\"")
+        lines.append(render_prompt("agent.blocks.proposal_examples.extra_good", text=example))
+    lines.append(render_prompt("agent.blocks.proposal_examples.bad_generic"))
     for example in policy.extra_bad_examples:
-        lines.append(f"- Плохо: \"{example}\"")
+        lines.append(render_prompt("agent.blocks.proposal_examples.extra_bad", text=example))
     if "work" not in caps:
-        lines.append("- Для тебя плохо: обещать самому править дело, создавать новый рабочий трек или менять документы, если у тебя нет на это прямого служебного доступа.")
+        lines.append(render_prompt("agent.blocks.proposal_examples.bad_no_work"))
     if "dao" not in caps and not targeted_vote_id:
-        lines.append("- Для тебя плохо: обещать самому открывать голосование или участвовать в нём, если по твоему положению это не твоя процедура.")
-    lines.append(
-        "- Если хочешь что-то подготовить или сдвинуть обсуждение, переведи это в наблюдаемый шаг: кому напишешь, что вынесешь в канал, куда положишь заметку, на какую процедуру ответишь."
-    )
+        lines.append(render_prompt("agent.blocks.proposal_examples.bad_no_dao"))
+    lines.append(render_prompt("agent.blocks.proposal_examples.observable_step"))
     return "\n".join(lines) + "\n\n"
 
 
@@ -380,53 +427,74 @@ def _event_fact_line(*, state: WorldState, event: Event) -> str:
     event_type = str(event.event_type or "")
 
     if event_type == "world_event":
-        return f"- {_truncate(str(payload.get('description') or 'Во внешнем фоне произошло заметное событие.'), 220)}"
+        return render_prompt(
+            "agent.blocks.event_facts.world_event",
+            description=_truncate(str(payload.get("description") or "Во внешнем фоне произошло заметное событие."), 220),
+        )
     if event_type == "message_sent":
         to_label = _label_for_id(state=state, entity_id=str(payload.get("to_id") or "")) or str(payload.get("to_id") or "адресат")
-        prefix = "лично написал" if bool(payload.get("private", True)) else "сказал публично"
         text = _truncate(str(payload.get("text") or ""), 180)
-        return f"- {actor_label} {prefix} {to_label}: {text}"
+        if bool(payload.get("private", True)):
+            return render_prompt("agent.blocks.event_facts.message_private", actor_label=actor_label, to_label=to_label, text=text)
+        return render_prompt("agent.blocks.event_facts.message_public", actor_label=actor_label, to_label=to_label, text=text)
     if event_type == "work_note_added":
         work_label = _label_for_id(state=state, entity_id=str(payload.get("work_id") or "")) or str(payload.get("work_id") or "дело")
         text = _truncate(str(payload.get("text") or ""), 180)
-        return f"- {actor_label} оставил заметку в {work_label}: {text}"
+        return render_prompt("agent.blocks.event_facts.work_note_added", actor_label=actor_label, work_label=work_label, text=text)
     if event_type == "work_item_created":
         work_label = _label_for_id(state=state, entity_id=str(payload.get("work_id") or "")) or str(payload.get("title") or "новое дело")
-        return f"- Появилось новое дело: {work_label}"
+        return render_prompt("agent.blocks.event_facts.work_item_created", work_label=work_label)
     if event_type == "artifact_created":
         artifact_label = _label_for_id(state=state, entity_id=str(payload.get("artifact_id") or "")) or str(payload.get("artifact_id") or "документ")
-        return f"- Появился документ: {artifact_label}"
+        return render_prompt("agent.blocks.event_facts.artifact_created", artifact_label=artifact_label)
     if event_type == "artifact_updated":
         artifact_label = _label_for_id(state=state, entity_id=str(payload.get("artifact_id") or "")) or str(payload.get("artifact_id") or "документ")
-        return f"- Обновился документ: {artifact_label}"
+        return render_prompt("agent.blocks.event_facts.artifact_updated", artifact_label=artifact_label)
     if event_type == "vote_opened":
         target_label = _label_for_id(state=state, entity_id=str(payload.get("target_agent_id") or "")) or str(payload.get("target_agent_id") or "кандидат")
         new_title = str(payload.get("new_title") or "").strip()
-        suffix = f" на роль {new_title}" if new_title else ""
-        return f"- {actor_label} вынес вопрос по {target_label}{suffix}"
+        return render_prompt(
+            "agent.blocks.event_facts.vote_opened",
+            actor_label=actor_label,
+            target_label=target_label,
+            new_title_suffix=f" на роль {new_title}" if new_title else "",
+        )
     if event_type == "vote_cast":
         vote_id = str(payload.get("vote_id") or "").strip()
         choice = str(payload.get("choice") or "").strip()
-        return f"- {actor_label} проголосовал по {vote_id}: {choice or 'без отметки'}"
+        return render_prompt("agent.blocks.event_facts.vote_cast", actor_label=actor_label, vote_id=vote_id, choice=choice or "без отметки")
     if event_type == "pending_interaction_due":
-        return f"- На очереди ожидается ответ: {_truncate(str(payload.get('summary') or ''), 220)}"
+        return render_prompt("agent.blocks.event_facts.pending_due", summary=_truncate(str(payload.get("summary") or ""), 220))
     if event_type == "pending_interaction_expired":
-        return f"- Был пропущен срок по обязательству: {_truncate(str(payload.get('summary') or ''), 220)}"
+        return render_prompt("agent.blocks.event_facts.pending_expired", summary=_truncate(str(payload.get("summary") or ""), 220))
     if event_type == "audit_flagged":
         violation = str(payload.get("violation_type") or "").strip()
         summary = str(payload.get("summary") or "").strip()
-        return f"- Контрольный контур отметил риск{(': ' + violation) if violation else ''}{('; ' + _truncate(summary, 180)) if summary else ''}"
+        return render_prompt(
+            "agent.blocks.event_facts.audit_flagged",
+            violation_suffix=(": " + violation) if violation else "",
+            summary_suffix=("; " + _truncate(summary, 180)) if summary else "",
+        )
     if event_type == "audit_case_opened":
-        return f"- По спорному эпизоду открыт контрольный кейс: {_truncate(str(payload.get('summary') or payload.get('case_id') or ''), 200)}"
+        return render_prompt(
+            "agent.blocks.event_facts.audit_case_opened",
+            summary=_truncate(str(payload.get("summary") or payload.get("case_id") or ""), 200),
+        )
     if event_type == "audit_escalated":
-        return f"- Контрольный кейс переведён в жёсткий режим: {_truncate(str(payload.get('summary') or payload.get('case_id') or ''), 200)}"
+        return render_prompt(
+            "agent.blocks.event_facts.audit_escalated",
+            summary=_truncate(str(payload.get("summary") or payload.get("case_id") or ""), 200),
+        )
     if event_type == "environment_information_climate_updated":
         signals = payload.get("active_signals") or []
         if isinstance(signals, list) and signals:
-            return f"- Общий фон изменился: {', '.join(str(item).strip() for item in signals[:3] if str(item).strip())}"
+            return render_prompt(
+                "agent.blocks.event_facts.environment_information_climate_updated",
+                signals=", ".join(str(item).strip() for item in signals[:3] if str(item).strip()),
+            )
 
     details = _truncate(redact_numbers(payload), 220)
-    return f"- {_truncate(f'{event_type}: {details}', 220)}"
+    return render_prompt("agent.blocks.event_facts.fallback", text=_truncate(f"{event_type}: {details}", 220))
 
 
 def _recent_rejection_hints(visible_events: list[Event]) -> list[str]:
@@ -446,29 +514,26 @@ def _recent_rejection_hints(visible_events: list[Event]) -> list[str]:
         hint = ""
         if reason.startswith("unknown work_id: "):
             work_id = reason.split(": ", 1)[1].strip()
-            hint = f"work_id {work_id} не существует; не используй его повторно"
+            hint = render_prompt("agent.blocks.rejection_hints.unknown_work_id", work_id=work_id)
         elif reason.startswith("unknown to_id: "):
             to_id = reason.split(": ", 1)[1].strip()
-            hint = f"to_id {to_id} не существует; выбери существующую цель"
+            hint = render_prompt("agent.blocks.rejection_hints.unknown_to_id", to_id=to_id)
         elif reason.startswith("unknown channel_id: "):
             channel_id = reason.split(": ", 1)[1].strip()
-            hint = f"channel_id {channel_id} не существует; публиковать можно только в существующий канал"
+            hint = render_prompt("agent.blocks.rejection_hints.unknown_channel_id", channel_id=channel_id)
         elif reason.startswith("private_message_requires_agent_target:"):
             to_id = reason.split(":", 1)[1].strip()
-            hint = f"private=true нельзя использовать для {to_id}; приватные сообщения допустимы только агентам"
+            hint = render_prompt("agent.blocks.rejection_hints.private_message_requires_agent_target", to_id=to_id)
         elif reason.startswith("public_message_requires_chan_or_org_target:"):
             to_id = reason.split(":", 1)[1].strip()
-            hint = f"private=false нельзя использовать для {to_id}; публичные сообщения адресуются только chan:* или org:*"
+            hint = render_prompt("agent.blocks.rejection_hints.public_message_requires_chan_or_org_target", to_id=to_id)
         elif reason.startswith("private_contact_requires_shared_zone:"):
             zones = reason.split(":", 1)[1].strip()
-            hint = f"для приватного контакта нужно пространственное пересечение; текущие зоны не совпадают ({zones})"
+            hint = render_prompt("agent.blocks.rejection_hints.private_contact_requires_shared_zone", zones=zones)
         elif reason.startswith("missing_capability:work"):
             match = _ACTION_WORK_ID_RE.search(action)
             if match:
-                hint = (
-                    f"у тебя нет прямого рабочего доступа; не пытайся сам вести {match.group(1)} "
-                    "через создание дела, заметку или формальное предложение"
-                )
+                hint = render_prompt("agent.blocks.rejection_hints.missing_capability_work", work_id=match.group(1))
         if not hint or hint in seen:
             continue
         seen.add(hint)
@@ -489,14 +554,7 @@ class AgentRunner:
     perf_hook: Callable[[str, int | None, float, int, int], None] | None = None
 
     def _build_system(self, agent: AgentState) -> str:
-        lang = self.runtime.language
-        return (
-            "Ты находишься внутри обычного рабочего дня и действуешь как живой участник происходящего.\n"
-            "Не отстраняйся, не комментируй правила и не описывай происходящее как упражнение или задачу.\n"
-            "Думай как человек со своей должностью, памятью, страхами, привычками, интересами и самооправданиями.\n"
-            f"ВАЖНО: отвечай строго на языке: {lang!r}.\n"
-            "Возвращай только JSON, без пояснений и без markdown.\n"
-        )
+        return render_prompt("agent.system", language_repr=repr(self.runtime.language))
 
     def _build_user(
         self,
@@ -522,25 +580,49 @@ class AgentRunner:
             vote = state.votes[vid]
             if vote.vote_type == "audit_review":
                 summary = str(vote.metadata.get("summary") or vote.reason or "").strip()
-                vote_summaries.append(f"- {vid}: audit_review для {vote.target_agent_id} | {summary or '(без summary)'}")
+                vote_summaries.append(
+                    render_prompt(
+                        "agent.blocks.summaries.vote_audit_review",
+                        vote_id=vid,
+                        target_agent_id=vote.target_agent_id,
+                        summary=summary or "(без summary)",
+                    )
+                )
             else:
-                vote_summaries.append(f"- {vid}: {vote.vote_type} для {vote.target_agent_id} -> {vote.new_title}")
+                vote_summaries.append(
+                    render_prompt(
+                        "agent.blocks.summaries.vote_default",
+                        vote_id=vid,
+                        vote_type=vote.vote_type,
+                        target_agent_id=vote.target_agent_id,
+                        new_title=vote.new_title,
+                    )
+                )
         vote_summaries_text = "\n".join(vote_summaries) if vote_summaries else "- (нет)"
         work_summaries = []
         for wid in sorted(state.work_items.keys())[:8]:
             work = state.work_items[wid]
-            work_summaries.append(f"- {wid}: {work.title} [{work.status}]")
+            work_summaries.append(
+                render_prompt(
+                    "agent.blocks.summaries.work_item",
+                    work_id=wid,
+                    title=work.title,
+                    status=work.status,
+                )
+            )
         work_summaries_text = "\n".join(work_summaries) if work_summaries else "- (нет)"
         simulated_date = self.runtime.simulated_date(state.tick)
         simulated_datetime = self.runtime.simulated_datetime(state.tick)
         if simulated_datetime is not None and self.runtime.tick_granularity in {"hour", "half_day"}:
-            time_line = (
-                f"Сегодня {simulated_datetime.date().isoformat()}, сейчас примерно {simulated_datetime.strftime('%H:%M')}.\n"
+            time_line = render_prompt(
+                "agent.blocks.time.with_clock",
+                date=simulated_datetime.date().isoformat(),
+                time=simulated_datetime.strftime("%H:%M"),
             )
         elif simulated_date is not None:
-            time_line = f"Сегодня {simulated_date.isoformat()}.\n"
+            time_line = render_prompt("agent.blocks.time.with_date", date=simulated_date.isoformat())
         else:
-            time_line = f"Сегодняшний рабочий день: {state.tick}.\n"
+            time_line = render_prompt("agent.blocks.time.with_tick", tick=state.tick)
 
         facts = []
         for ev in visible_events[-20:]:
@@ -566,60 +648,33 @@ class AgentRunner:
 
         # Инструкция по действиям.
         max_actions = max(1, int(max_actions_override or self.runtime.max_actions_per_turn))
-        votes_line = f"- Голосования в ходу: {vote_ids}\n"
-
-        return (
-            f"{time_line}"
-            f"Ты — {agent.name}.\n"
-            f"Твоё служебное обозначение в документах: {agent.agent_id}.\n"
-            f"Твоя должность: {agent.title if agent.internal else '(внешний)'}.\n\n"
-            f"{motivation_block}\n"
-            "Если пишешь или ссылаешься на людей, дела и площадки, можешь прямо использовать такие служебные обозначения:\n"
-            f"- Люди: {agent_ids}\n"
-            f"- Дела: {work_ids}\n"
-            f"- Каналы: {channel_ids}\n"
-            f"- Организации: {org_ids}\n"
-            f"{votes_line}\n"
-            "Какие процедуры уже открыты:\n"
-            f"{vote_summaries_text}\n\n"
-            "Что сейчас лежит на столе:\n"
-            f"{work_summaries_text}\n\n"
-            "Что ты знаешь по последним событиям:\n"
-            f"{facts_text}\n\n"
-            "Во что ты уже упирался и чего лучше не повторять дословно:\n"
-            f"{rejection_hints_text}\n\n"
-            f"{daily_context_text}"
-            f"{environment_brief}"
-            f"{artifacts_brief}"
-            f"{informal_links_brief}"
-            f"{pending_interactions_brief}"
-            f"{spawn_context_brief}"
-            f"{prompt_policy_text}"
-            f"{proposal_examples_text}"
-            f"Что всплывает в памяти:\n{mem_text}\n\n"
-            "Как оформить ответ:\n"
-            "- Верни только JSON с одним полем `reply`.\n"
-            "- Внутри `reply` дай один связный живой фрагмент: что именно ты сейчас сделаешь и почему именно так.\n"
-            "- Не отвечай списком команд, не называй внутренние ярлыки и не обсуждай механику ответа.\n"
-            "- Если нужен формальный эффект, всё равно описывай его как намерение обычного участника процесса: поговорить, подать, запросить, написать, вынести вопрос, зафиксировать, ответить, донести документ.\n"
-            "- Если решаешь пока не делать резкого шага, опиши это как человеческое решение, а не как технический пропуск.\n"
-            "- Пиши достаточно конкретно, чтобы из `reply` можно было вывести наблюдаемый шаг; избегай абстракций вроде «укреплю позиции», «разберусь» или «проработаю вопрос» без конкретного действия.\n"
-            "- Не подменяй ход пустым публичным заявлением, если сначала естественнее личный разговор, служебная заметка, уточняющий запрос или работа по уже открытому делу.\n\n"
-            f"{(turn_note.strip() + chr(10)) if turn_note else ''}"
-            "Сделай следующий ход в этой ситуации.\n"
-            "Помни:\n"
-            f"- в одном `reply` можно описать до {max_actions} осмысленных шагов, если это один связный ход\n"
-            "- если упоминаешь даты или сроки, не противоречь текущему календарю событий\n"
-            "- не отстраняйся от происходящего; описывай только то, что собираешься сделать как участник процесса\n"
-            "- избегай ритуальных повторов: не дублируй один и тот же формальный шаг без новой ставки, нового риска или нового эффекта\n"
-            "- предпочитай действия, которые реально меняют ситуацию, а не просто ещё раз проговаривают уже известное\n"
-            "- не выдумывай новые служебные коды; используй только те обозначения, которые уже есть в обстановке\n"
-            "- если хочешь сделать публикацию или направить сообщение, прямо назови существующий адресат `agent:*`, `chan:*` или `org:*`; не придумывай новые площадки\n"
-            "- если ты сам не ведёшь дела и документы напрямую, не обещай от своего имени править записи, создавать новое дело или переписывать документы; вместо этого обращайся к тем, кто может это сделать\n"
-            "- если ты не открываешь и не ведёшь голосования по своей роли, не обещай этого; исключение только одно: если текущая процедура адресована тебе, можешь явно дать согласие или отказ\n"
-            "- самому выдвигать себя на должность нельзя; выносить на голосование можно только другого человека\n"
-            "- если тебя выдвинули, ты можешь прямо согласиться или отказаться\n"
-            "- если между осторожностью, выгодой, долгом и страхом есть конфликт, выбирай любой правдоподобный путь, но веди себя как живой человек, а не как безличная инструкция\n"
+        return render_prompt(
+            "agent.user",
+            time_line=time_line,
+            agent_name=agent.name,
+            agent_id=agent.agent_id,
+            agent_title=agent.title if agent.internal else "(внешний)",
+            motivation_block=motivation_block,
+            agent_ids=agent_ids,
+            work_ids=work_ids,
+            channel_ids=channel_ids,
+            org_ids=org_ids,
+            vote_ids=vote_ids,
+            vote_summaries_text=vote_summaries_text,
+            work_summaries_text=work_summaries_text,
+            facts_text=facts_text,
+            rejection_hints_text=rejection_hints_text,
+            daily_context_text=daily_context_text,
+            environment_brief=environment_brief,
+            artifacts_brief=artifacts_brief,
+            informal_links_brief=informal_links_brief,
+            pending_interactions_brief=pending_interactions_brief,
+            spawn_context_brief=spawn_context_brief,
+            prompt_policy_text=prompt_policy_text,
+            proposal_examples_text=proposal_examples_text,
+            mem_text=mem_text,
+            turn_note_block=(turn_note.strip() + "\n") if turn_note else "",
+            max_actions=max_actions,
         )
 
     async def _render_memory(
@@ -631,19 +686,22 @@ class AgentRunner:
 
         parts: list[str] = []
         if agent.persona.summary.strip():
-            parts.append("Персона (кратко): " + agent.persona.summary.strip())
+            parts.append(render_prompt("agent.blocks.memory.persona_summary", text=agent.persona.summary.strip()))
         if agent.persona.biography.strip():
-            parts.append("Биография (начало):\n" + _truncate(agent.persona.biography, 420))
+            parts.append(render_prompt("agent.blocks.memory.biography_excerpt", text=_truncate(agent.persona.biography, 420)))
         if agent.story_state.strip():
-            parts.append("Личная линия (story state):\n" + _truncate(agent.story_state, 320))
+            parts.append(render_prompt("agent.blocks.memory.story_state", text=_truncate(agent.story_state, 320)))
 
         if mem.summary.strip():
-            parts.append("Сводка (рабочая память):\n" + _truncate(mem.summary, 520))
+            parts.append(render_prompt("agent.blocks.memory.working_summary", text=_truncate(mem.summary, 520)))
 
         if mem.working:
             recent = mem.working[-6:]
-            lines = "\n".join(f"- (t{e.tick}) {_truncate(e.text, 220)}" for e in recent)
-            parts.append("Последние записи:\n" + lines)
+            lines = "\n".join(
+                render_prompt("agent.blocks.memory.recent_record", tick=e.tick, text=_truncate(e.text, 220))
+                for e in recent
+            )
+            parts.append(render_prompt("agent.blocks.memory.recent_header", lines=lines))
 
         # Hybrid retrieval: по последним наблюдениям как query.
         query_text = "\n".join(
@@ -677,8 +735,13 @@ class AgentRunner:
         )
         if persona_anchors:
             parts.append(
-                "Якоря персоны:\n"
-                + "\n".join(f"- {_truncate(item.text, 180)}" for item in persona_anchors)
+                render_prompt(
+                    "agent.blocks.memory.anchors_header",
+                    lines="\n".join(
+                        render_prompt("agent.blocks.memory.anchor_item", text=_truncate(item.text, 180))
+                        for item in persona_anchors
+                    ),
+                )
             )
 
         interview_fragments = mem.retrieve(
@@ -691,8 +754,13 @@ class AgentRunner:
         )
         if interview_fragments:
             parts.append(
-                "Фрагменты интервью:\n"
-                + "\n".join(f"- {_truncate(item.text, 180)}" for item in interview_fragments)
+                render_prompt(
+                    "agent.blocks.memory.interview_header",
+                    lines="\n".join(
+                        render_prompt("agent.blocks.memory.anchor_item", text=_truncate(item.text, 180))
+                        for item in interview_fragments
+                    ),
+                )
             )
 
         reflections = mem.retrieve(
@@ -705,8 +773,13 @@ class AgentRunner:
         )
         if reflections:
             parts.append(
-                "Экспертная рефлексия:\n"
-                + "\n".join(f"- {_truncate(item.text, 180)}" for item in reflections)
+                render_prompt(
+                    "agent.blocks.memory.reflections_header",
+                    lines="\n".join(
+                        render_prompt("agent.blocks.memory.anchor_item", text=_truncate(item.text, 180))
+                        for item in reflections
+                    ),
+                )
             )
 
         retrieved = mem.retrieve(
@@ -721,8 +794,15 @@ class AgentRunner:
             lines = []
             for d in retrieved:
                 rep = f" x{d.repeats}" if d.repeats > 1 else ""
-                lines.append(f"- [{d.kind}{rep}] {_truncate(d.text, 220)}")
-            parts.append("Оперативная память:\n" + "\n".join(lines))
+                lines.append(
+                    render_prompt(
+                        "agent.blocks.memory.retrieved_item",
+                        kind=d.kind,
+                        repeat_suffix=rep,
+                        text=_truncate(d.text, 220),
+                    )
+                )
+            parts.append(render_prompt("agent.blocks.memory.retrieved_header", lines="\n".join(lines)))
 
         return "\n\n".join(parts) if parts else "(пусто)"
 

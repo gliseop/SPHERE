@@ -50,6 +50,8 @@ SPHERE/
 │   ├── memory.py               # Память агента (buffer + hybrid retrieval)
 │   ├── actions.py              # Внутренний Action-vocabulary + freeform `proposal` schema для агента
 │   ├── agent.py                # AgentRunner (1 LLM-вызов на ход, freeform turn proposal, motivation block, daily context)
+│   ├── prompts.py              # Loader/renderer централизованного YAML-реестра LLM-промптов
+│   ├── prompts.yaml            # Единое хранилище prompt templates для core и web AI routes
 │   ├── ops.py                  # Детерминированные StateOp -> Event, включая CreateAgentOp
 │   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM materialization of freeform proposal)
 │   ├── auditor.py              # RuntimeAuditor (LLM-first detection + deterministic audit actuator + collegial review)
@@ -107,7 +109,7 @@ SPHERE/
 │   │       ├── agent_types.py  # CRUD библиотек типов агентов
 │   │       ├── personalities.py # CRUD личностей и интервью
 │   │       ├── governance.py   # CRUD пользовательских governance modes
-│   │       └── ai.py           # LLM-генерация personality/agent-type/secondary agents
+│   │       └── ai.py           # LLM-генерация personality/agent-type/secondary agents + prompt-templates endpoint
 │   └── frontend/
 │       ├── package.json        # React/Vite/Playwright/Tailwind toolchain
 │       ├── playwright/
@@ -126,7 +128,7 @@ SPHERE/
 │           │   ├── Icons.tsx   # Локальный набор SVG-иконок для monitor/runs/scenarios
 │           │   └── EnvironmentPanel.tsx # HUD-панель среды: информационный климат, сигналы и неформальные связи
 │           ├── hooks/          # useAuth, useSimulation
-│           ├── utils/          # apiClient, payload, time
+│           ├── utils/          # apiClient, payload, time, promptTemplates
 │           └── styles/
 │               └── hud.css     # Основная HUD-тема интерфейса
 ├── tests/                      # pytest-модули движка и web backend
@@ -286,6 +288,7 @@ cd web/frontend && npm run test:e2e
 | Изменить runtime-аудит | `auditor.py`, `engine.py`, `ops.py`, `config.py` |
 | Изменить truth/evaluation/fidelity | `truth.py`, `evaluation.py`, `fidelity.py`, `engine.py`, `docs/data_formats.md` |
 | Изменить агентский цикл | `agent.py`, `memory.py`, `engine.py`, `actions.py` |
+| Изменить prompt-реестр или wording LLM-слоя | `prompts.yaml`, `prompts.py`, `agent.py`, `arbiter.py`, `auditor.py`, `persona.py`, `composer.py`, `worldgen.py`, `web/backend/routes/ai.py`, `web/backend/routes/personalities.py` |
 | Изменить слой среды / temporal runtime | `config.py`, `state.py`, `engine.py`, `worldgen.py`, `journal.py`, `docs/data_formats.md` |
 | Изменить социальный граф / динамический спавн | `persona.py`, `engine.py`, `actions.py`, `ops.py`, `worldgen.py` |
 | Добавить LLM-провайдера | `llm/providers.py`, `llm/__init__.py`, `llm/caller.py` |

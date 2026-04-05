@@ -679,6 +679,29 @@ def test_prompts_endpoint_returns_empty_list_for_zero_limit(tmp_path: Path):
     assert r.json() == []
 
 
+def test_ai_prompt_templates_endpoint_requires_admin():
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        r = client.get(
+            "/api/ai/prompt-templates",
+            headers={"Authorization": f"Bearer {viewer_token()}"},
+        )
+    assert r.status_code == 403
+
+
+def test_ai_prompt_templates_endpoint_returns_yaml_defaults():
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        r = client.get(
+            "/api/ai/prompt-templates",
+            headers={"Authorization": f"Bearer {admin_token()}"},
+        )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["generate_personality"]["system_default"].startswith("Ты — эксперт по организационной психологии")
+    assert "{{description}}" in payload["generate_personality"]["user_default"]
+    assert payload["generate_agent_type"]["system_default"].startswith("Ты — сценарист и организационный психолог")
+    assert "{{personality_json}}" in payload["generate_agent_type"]["user_default"]
+
+
 def test_trace_markdown_endpoint_reads_trace_sidecar(tmp_path: Path):
     run_dir = tmp_path / "lc_run"
     run_dir.mkdir()

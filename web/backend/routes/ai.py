@@ -13,6 +13,7 @@ from sphere_lc.config import AgentConfig, ScenarioConfig
 from sphere_lc.ids import EntityKind, make_unique_id
 from sphere_lc.llm import create_provider
 from sphere_lc.persona import social_link_match_key, social_link_name_key
+from sphere_lc.prompts import get_prompt_template, render_prompt
 from sphere_lc.utils import (
     looks_like_machine_name,
     normalize_agent_display_name,
@@ -116,19 +117,10 @@ def _secondary_generation_schema(
 def _secondary_agents_system_prompt(*, family_count: int, society_count: int) -> str:
     """System prompt для генерации вторичных акторов."""
 
-    return (
-        "Ты — модуль генерации вторичных акторов для SPHERE.\n"
-        "Нужно предложить concrete human agents вокруг уже существующих участников сценария.\n"
-        "Категории только две:\n"
-        "- family: родственники, супруги, близкие друзья семьи, люди кланового давления;\n"
-        "- society: журналисты, активисты, жители, родители, пациенты, общественные посредники.\n"
-        "Строго запрещено:\n"
-        "- возвращать должности вместо людей;\n"
-        "- возвращать машинные имена, role-label, slug или ID;\n"
-        "- дублировать уже существующих агентов.\n"
-        "Каждый новый актор должен быть полезен для симуляции: оказывать давление, приносить сигналы, создавать репутационные или бытовые дилеммы.\n"
-        f"Сгенерируй до {family_count} family-акторов и до {society_count} society-акторов.\n"
-        "Верни только JSON по схеме."
+    return render_prompt(
+        "web.ai.secondary_agents.system",
+        family_count=family_count,
+        society_count=society_count,
     )
 
 
@@ -154,17 +146,32 @@ def _secondary_agents_user_prompt(payload: SecondaryAgentsPayload, cfg: Scenario
             )
         )
 
-    return (
-        f"Сценарий: {cfg.title}\n"
-        f"Описание сценария: {(cfg.description or '(пусто)')[:1200]}\n"
-        f"Ticks: {cfg.ticks}\n"
-        f"Пользовательский фокус:\n{payload.prompt.strip()}\n\n"
-        "Уже существующие агенты:\n"
-        f"{chr(10).join(lines) or '(нет)'}\n\n"
-        "Нужно расширить окружающую агентную среду так, чтобы новые акторы были конкретными людьми, а не абстрактными ролями. "
-        "Family-акторы должны быть plausibly привязаны к одному из существующих агентов. "
-        "Society-акторы должны быть способны запускать внешний сигнал, жалобу или публикацию."
+    return render_prompt(
+        "web.ai.secondary_agents.user",
+        scenario_title=cfg.title,
+        scenario_description=(cfg.description or "(пусто)")[:1200],
+        ticks=cfg.ticks,
+        focus_prompt=payload.prompt.strip(),
+        agents_block=chr(10).join(lines) or "(нет)",
     )
+
+
+@router.get("/api/ai/prompt-templates")
+async def get_prompt_templates(
+    _user: User = Depends(require_admin),
+) -> dict[str, dict[str, str]]:
+    """Вернуть сырой набор prompt templates для admin UI."""
+
+    return {
+        "generate_personality": {
+            "system_default": get_prompt_template("web.ai.generate_personality.system_default"),
+            "user_default": get_prompt_template("web.ai.generate_personality.user_default"),
+        },
+        "generate_agent_type": {
+            "system_default": get_prompt_template("web.ai.generate_agent_type.system_default"),
+            "user_default": get_prompt_template("web.ai.generate_agent_type.user_default"),
+        },
+    }
 
 
 def _normalize_secondary_kind(kind: str) -> str:
@@ -328,19 +335,13 @@ async def generate_personality(
     }
 
     system_prompt = (
-        "\u0422\u044b \u2014 \u044d\u043a\u0441\u043f\u0435\u0440\u0442 \u043f\u043e \u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0446\u0438\u043e\u043d\u043d\u043e\u0439 \u043f\u0441\u0438\u0445\u043e\u043b\u043e\u0433\u0438\u0438 \u0438 \u043a\u0440\u0438\u043c\u0438\u043d\u043e\u043b\u043e\u0433\u0438\u0438. "
-        "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043e\u043f\u0438\u0441\u044b\u0432\u0430\u0435\u0442 \u0436\u0435\u043b\u0430\u0435\u043c\u044b\u0439 \u0442\u0438\u043f\u0430\u0436 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u0436\u0430 \u0434\u043b\u044f \u0441\u0438\u043c\u0443\u043b\u044f\u0446\u0438\u0438 \u043a\u043e\u0440\u0440\u0443\u043f\u0446\u0438\u0438 \u0432 \u0433\u043e\u0441\u043e\u0440\u0433\u0430\u043d\u0430\u0445. "
-        "\u0421\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u0443\u0439 \u043f\u043e\u043b\u043d\u044b\u0439 \u043f\u0441\u0438\u0445\u043e\u043b\u043e\u0433\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u043f\u0440\u043e\u0444\u0438\u043b\u044c: \u0431\u0438\u043e\u0433\u0440\u0430\u0444\u0438\u044e, \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b HEXACO (0-100), "
-        "\u0442\u0451\u043c\u043d\u0443\u044e \u0442\u0440\u0438\u0430\u0434\u0443 (0-100) \u0438 \u043f\u043e\u0434\u0445\u043e\u0434\u044f\u0449\u0438\u0435 \u0442\u0435\u0445\u043d\u0438\u043a\u0438 \u043d\u0435\u0439\u0442\u0440\u0430\u043b\u0438\u0437\u0430\u0446\u0438\u0438. "
-        "\u0412\u0435\u0440\u043d\u0438 \u0422\u041e\u041b\u042c\u041a\u041e JSON \u0431\u0435\u0437 \u043f\u043e\u044f\u0441\u043d\u0435\u043d\u0438\u0439 \u0438 \u043f\u0440\u0435\u0444\u0438\u043a\u0441\u043e\u0432. "
-        "\u0411\u0438\u043e\u0433\u0440\u0430\u0444\u0438\u044f \u0434\u043e\u043b\u0436\u043d\u0430 \u043e\u043f\u0438\u0440\u0430\u0442\u044c\u0441\u044f \u043d\u0430 1\u20133 \u0440\u0435\u0430\u043b\u044c\u043d\u044b\u0445 \u043f\u0440\u043e\u0442\u043e\u0442\u0438\u043f\u0430 (\u0438\u0441\u0442\u043e\u0440\u0438\u0447\u0435\u0441\u043a\u0438\u0435/\u043f\u0443\u0431\u043b\u0438\u0447\u043d\u044b\u0435 \u043b\u0438\u0447\u043d\u043e\u0441\u0442\u0438; \u043f\u0440\u0435\u0434\u043f\u043e\u0447\u0442\u0438\u0442\u0435\u043b\u044c\u043d\u043e \u0443\u043c\u0435\u0440\u0448\u0438\u0435). "
-        "\u041f\u0435\u0440\u0441\u043e\u043d\u0430\u0436 \u043f\u0440\u0438 \u044d\u0442\u043e\u043c \u043e\u0441\u0442\u0430\u0451\u0442\u0441\u044f \u0432\u044b\u043c\u044b\u0448\u043b\u0435\u043d\u043d\u044b\u043c: \u043d\u0435 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439 \u0440\u0435\u0430\u043b\u044c\u043d\u044b\u0435 \u0438\u043c\u0435\u043d\u0430 \u0432 \u0442\u0435\u043a\u0441\u0442\u0435 \u0431\u0438\u043e\u0433\u0440\u0430\u0444\u0438\u0438. "
-        "\u041f\u0440\u043e\u0442\u043e\u0442\u0438\u043f\u044b \u043f\u0435\u0440\u0435\u0447\u0438\u0441\u043b\u0438 \u0432 \u043f\u043e\u043b\u0435 prototypes (\u043c\u0430\u0441\u0441\u0438\u0432 \u0441\u0442\u0440\u043e\u043a). "
-        "\u0411\u0438\u043e\u0433\u0440\u0430\u0444\u0438\u044f \u0434\u043e\u043b\u0436\u043d\u0430 \u0431\u044b\u0442\u044c \u043d\u0430 \u0440\u0443\u0441\u0441\u043a\u043e\u043c \u044f\u0437\u044b\u043a\u0435, 3-5 \u0430\u0431\u0437\u0430\u0446\u0435\u0432. "
-        "\u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b \u0434\u043e\u043b\u0436\u043d\u044b \u0431\u044b\u0442\u044c \u043b\u043e\u0433\u0438\u0447\u0435\u0441\u043a\u0438 \u0441\u043e\u0433\u043b\u0430\u0441\u043e\u0432\u0430\u043d\u044b \u0441 \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435\u043c \u0438 \u0431\u0438\u043e\u0433\u0440\u0430\u0444\u0438\u0435\u0439."
-    )
-    system_prompt = (payload.system_prompt or system_prompt).strip()
-    user_prompt = (payload.user_prompt or f"\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u0436\u0430:\n{payload.description}").strip()
+        payload.system_prompt
+        or render_prompt("web.ai.generate_personality.system_default")
+    ).strip()
+    user_prompt = (
+        payload.user_prompt
+        or render_prompt("web.ai.generate_personality.user_default", description=payload.description)
+    ).strip()
 
     try:
         response = await _generate_structured_via_provider(
@@ -389,14 +390,6 @@ async def generate_agent_type(
         "required": ["name", "description", "id_prefix"],
     }
 
-    system_prompt_default = (
-        "\u0422\u044b \u2014 \u0441\u0446\u0435\u043d\u0430\u0440\u0438\u0441\u0442 \u0438 \u043e\u0440\u0433\u0430\u043d\u0438\u0437\u0430\u0446\u0438\u043e\u043d\u043d\u044b\u0439 \u043f\u0441\u0438\u0445\u043e\u043b\u043e\u0433. "
-        "\u041d\u0443\u0436\u043d\u043e \u043e\u043f\u0438\u0441\u0430\u0442\u044c \u0442\u0438\u043f \u0430\u0433\u0435\u043d\u0442\u0430 \u0434\u043b\u044f \u0441\u0438\u043c\u0443\u043b\u044f\u0446\u0438\u0438 SPHERE. "
-        "\u041d\u0430 \u0432\u0445\u043e\u0434\u0435: \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u0430\u044f \u043b\u0438\u0447\u043d\u043e\u0441\u0442\u044c (HEXACO + \u0442\u0451\u043c\u043d\u0430\u044f \u0442\u0440\u0438\u0430\u0434\u0430 + \u0431\u0438\u043e\u0433\u0440\u0430\u0444\u0438\u044f + \u0442\u0435\u0445\u043d\u0438\u043a\u0438) \u0438 \u043e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u0440\u043e\u043b\u0438/\u043a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u0430. "
-        "\u041d\u0430 \u0432\u044b\u0445\u043e\u0434\u0435: JSON \u0441 \u043f\u043e\u043b\u044f\u043c\u0438 name, description, id_prefix. "
-        "\u0412\u0430\u0436\u043d\u043e: \u041d\u0415 \u0434\u043e\u0431\u0430\u0432\u043b\u044f\u0439 \u0431\u044e\u0434\u0436\u0435\u0442/\u043f\u0435\u0440\u0441\u043e\u043d\u0430\u043b/\u043f\u043e\u043b\u043d\u043e\u043c\u043e\u0447\u0438\u044f/\u043a\u043e\u043d\u0442\u0440\u0430\u043a\u0442\u044b \u2014 \u044d\u0442\u043e \u0433\u0435\u043d\u0435\u0440\u0438\u0440\u0443\u0435\u0442 \u0434\u0432\u0438\u0436\u043e\u043a \u043c\u0438\u0440\u0430."
-    )
-
     def _safe_json(value: object, max_len: int = 4000) -> str:
         try:
             text = json.dumps(value, ensure_ascii=False, indent=2)
@@ -404,18 +397,18 @@ async def generate_agent_type(
             text = str(value)
         return text[:max_len]
 
-    user_prompt_default = (
-        "## \u0412\u044b\u0431\u0440\u0430\u043d\u043d\u0430\u044f \u043b\u0438\u0447\u043d\u043e\u0441\u0442\u044c\n"
-        f"{_safe_json(personality)}\n\n"
-        "## \u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u0442\u0438\u043f\u0430/\u0440\u043e\u043b\u0438 (\u043f\u043e\u0436\u0435\u043b\u0430\u043d\u0438\u0435 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f)\n"
-        f"{payload.description}\n\n"
-        "\u0421\u0433\u0435\u043d\u0435\u0440\u0438\u0440\u0443\u0439 \u0442\u0438\u043f \u0430\u0433\u0435\u043d\u0442\u0430. description \u2014 \u043d\u0430 \u0440\u0443\u0441\u0441\u043a\u043e\u043c, 3\u20137 \u043f\u0440\u0435\u0434\u043b\u043e\u0436\u0435\u043d\u0438\u0439, "
-        "\u0432\u043a\u043b\u044e\u0447\u0438 \u043c\u043e\u0442\u0438\u0432\u0430\u0446\u0438\u044e/\u0440\u0438\u0441\u043a\u0438/\u043f\u043e\u0432\u0435\u0434\u0435\u043d\u0447\u0435\u0441\u043a\u0438\u0435 \u043f\u0430\u0442\u0442\u0435\u0440\u043d\u044b. "
-        "id_prefix \u2014 \u043a\u043e\u0440\u043e\u0442\u043a\u0438\u0439 \u043b\u0430\u0442\u0438\u043d\u0441\u043a\u0438\u0439 \u043f\u0440\u0435\u0444\u0438\u043a\u0441 (\u043d\u0430\u043f\u0440\u0438\u043c\u0435\u0440 off/biz/aud/hr)."
-    )
-
-    system_prompt = (payload.system_prompt or system_prompt_default).strip()
-    user_prompt = (payload.user_prompt or user_prompt_default).strip()
+    system_prompt = (
+        payload.system_prompt
+        or render_prompt("web.ai.generate_agent_type.system_default")
+    ).strip()
+    user_prompt = (
+        payload.user_prompt
+        or render_prompt(
+            "web.ai.generate_agent_type.user_default",
+            personality_json=_safe_json(personality),
+            description=payload.description,
+        )
+    ).strip()
 
     try:
         response = await _generate_structured_via_provider(

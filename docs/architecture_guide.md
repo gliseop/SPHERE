@@ -22,6 +22,7 @@ graph TB
         MEMORY[memory.py<br/>AgentMemory]
         ACTIONS[actions.py<br/>internal Action vocabulary + freeform proposal schema]
         PERSONA[persona.py<br/>PersonaArtifact + SocialGraphExtractor]
+        PROMPTS[prompts.py + prompts.yaml<br/>Central prompt registry]
         BM25[bm25.py<br/>BM25]
     end
 
@@ -77,21 +78,26 @@ graph TB
     AGENT --> MEMORY
     AGENT --> ACTIONS
     AGENT --> PERSONA
+    AGENT --> PROMPTS
     MEMORY --> BM25
     MEMORY --> EMBEDDINGS
 
     ARBITER --> JOURNAL
     ARBITER --> ENTITIES
     ARBITER --> CALLER
+    ARBITER --> PROMPTS
     AUDITOR --> OPS
     AUDITOR --> EVENTS
     AUDITOR --> CALLER
+    AUDITOR --> PROMPTS
 
     DAO --> OPS
     DAO --> STATE
 
     COMPOSER --> CALLER
+    COMPOSER --> PROMPTS
     ORACLE --> CALLER
+    ORACLE --> PROMPTS
     ENGINE --> TRUTH
     ENGINE --> EVAL
     ENGINE --> FID
@@ -108,6 +114,7 @@ graph TB
     MAIN --> AUTH
     MAIN --> ROUTES
     MAIN --> RUNNER
+    ROUTES --> PROMPTS
     FRONT --> MAIN
 ```
 
@@ -127,6 +134,7 @@ graph TB
 | Детерминированный apply | `ops.py` → `StateOp` преобразуется в `Event` |
 | Как генерируется сценарий через LLM | `composer.py` → `WorldComposer.compose()` |
 | Как работает генератор мира | `worldgen.py` → pre/post tick worldgen, external events, `agent_daily_context`, `scene_hooks`, spawn suggestions, `environment_updates`, `artifact_creations` / `artifact_updates` и safe snapshot без приватных утечек |
+| Где лежат все LLM-промпты | `prompts.yaml` → единый YAML-реестр, `prompts.py` → loader/render, `web/backend/routes/ai.py` → выдача template-defaults для admin UI |
 | Как мир систематически наращивает периферию | `config.py` → `PopulationBlueprintConfig`, `engine.py` → bootstrap / environment_change materialization |
 | Как работают локальные очереди follow-up | `state.py` → `pending_interactions`, `ops.py` → `UpsertPendingInteractionOp` / `ResolvePendingInteractionOp`, `engine.py` → due/expire/reactivation |
 | Как пишется truth-layer | `truth.py` → deterministic truth records в `truth.jsonl` |

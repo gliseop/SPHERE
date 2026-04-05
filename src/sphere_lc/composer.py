@@ -12,6 +12,7 @@ from .config import AgentConfig, ChannelConfig, OrgConfig, RuntimeConfig, Scenar
 from .ids import EntityKind, ParsedId, ensure_kind, make_id, parse_typed_id
 from .llm import LLMCaller
 from .persona import PersonaArtifact, PersonaGenerator
+from .prompts import render_prompt
 
 
 class _ComposeAgent(BaseModel):
@@ -189,28 +190,8 @@ class WorldComposer:
             ticks: Длина прогона.
             language: Язык симуляции.
         """
-        system = (
-            "Ты — генератор сценариев для симуляции организационных процессов (SPHERE-LC).\n"
-            "Сгенерируй состав мира и агентов из описания.\n"
-            "Жёсткие требования:\n"
-            "- Используй осмысленные типизированные ID на ЛАТИНИЦЕ: agent:kozlov, agent:controller, org:admin, chan:public, work:tender и т.п.\n"
-            "- НЕ используй числовые ID (agent:1, chan:2) и кириллицу в ID. Только латинские буквы, цифры, дефисы, подчёркивания.\n"
-            "- Вторичные агенты должны появляться по ситуации (не фиксированным числом).\n"
-            "- Не используй числовые параметры личности (greed/fear/honesty/etc). Только текст.\n"
-            "- Должности и репутация применимы только к internal=true.\n"
-            "- Каждому агенту ОБЯЗАТЕЛЬНО назначь capabilities из списка:\n"
-            "  * message — отправка сообщений и публикация в каналах\n"
-            "  * work — создание дел, заметок, предложений\n"
-            "  * dao — номинации, голосования, управление должностями\n"
-            "  * spawn — право вводить нового участника через structured action spawn_agent\n"
-            "  Большинству агентов нужны как минимум message и work.\n"
-            f"- Пиши на языке: {language!r}.\n"
-            "Ответ: строго JSON по схеме.\n"
-        )
-        user = (
-            f"Описание:\n{description}\n\n"
-            f"Параметры:\n- ticks: {ticks}\n"
-        )
+        system = render_prompt("composer.system", language_repr=repr(language))
+        user = render_prompt("composer.user", description=description, ticks=ticks)
         resp = await self.llm.generate_structured(
             role="composer",
             name="world_composer",

@@ -16,6 +16,7 @@ from typing import Any, Literal
 from .config import MemoryConfig
 from .bm25 import BM25Like, build_bm25
 from .llm import LLMCaller
+from .prompts import render_prompt
 
 
 MemoryKind = Literal[
@@ -229,21 +230,17 @@ class AgentMemory:
 
         prev = self.summary.strip()
         lines = "\n".join(self._compact_working_batch(batch))
-        user = (
-            "Обнови сводку рабочей памяти агента.\n"
-            "Требования:\n"
-            "- Пиши кратко: 8–15 пунктов.\n"
-            "- Только факты/решения/обязательства, без художественности.\n"
-            "- Не добавляй новых сущностей/ID.\n\n"
-            f"Язык: {language!r}\n\n"
-            f"Текущая сводка:\n{prev or '(пусто)'}\n\n"
-            f"Новые записи для сжатия:\n{lines}\n"
+        user = render_prompt(
+            "memory.summarize.user",
+            language_repr=repr(language),
+            previous_summary=prev or "(пусто)",
+            lines=lines,
         )
         resp = await llm.generate(
             role="memory",
             name=self.agent_id,
             tick=tick,
-            system="Ты — модуль суммаризации памяти агента.",
+            system=render_prompt("memory.summarize.system"),
             user=user,
             temperature=temperature,
         )

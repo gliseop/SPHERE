@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .events import Event
 from .ids import INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from .llm import LLMCaller
+from .prompts import render_prompt
 from .utils import normalize_agent_display_name
 
 
@@ -531,43 +532,8 @@ def _compact_recent_events(recent_events: list[Event]) -> tuple[list[dict[str, A
 
 
 def _build_system_prompt(*, phase: Literal["pre", "post"], language: str) -> str:
-    base = [
-        "Ты — генератор внешнего мира для симуляции организационных процессов.",
-        "Ты создаёшь только фон, давление, поводы и внешние последствия.",
-        "Решения и действия совершают сами агенты.",
-        "ЗАПРЕЩЕНО:",
-        "- описывать решение, уже принятое существующим агентом;",
-        "- утверждать как факт содержание приватных сообщений;",
-        "- закрывать work item текстом без детерминированного StateOp;",
-        "- придумывать typed-id или ссылаться на agent:/work: как на текст мира;",
-        "- писать на языке, отличном от указанного.",
-        f"Пиши строго на языке: {language!r}.",
-        "Ответ возвращай строго как JSON по схеме.",
-    ]
-    if phase == "pre":
-        base.extend(
-            [
-                "Сгенерируй:",
-                "- ограниченное число глобальных событий текущего тика;",
-                "- короткие личные контексты начала дня для релевантных агентов;",
-                "- необязательные scene hooks как поводы к встречам или разговорам.",
-                "Личный контекст должен создавать повод для выбора, а не пересказывать уже совершённое действие.",
-                "Предпочитай такие типы средового давления, как concealment pressure, favor pressure, career fear и time tradeoff.",
-                "Не делай главным hook-ом организацию нового канала, FAQ или публичного слушания, если за этим не стоит личный риск, выгода или соблазн серого решения.",
-                "Lightweight contacts должны быть человеко-читаемыми текстовыми упоминаниями без typed-id.",
-            ]
-        )
-    else:
-        base.extend(
-            [
-                "Сгенерируй только внешние отклики на уже произошедшие процессы и, при необходимости, предложения новых акторов.",
-                "Не подменяй собой журнал мира и не рассказывай за существующих агентов.",
-                "Если состояние среды уже явно сдвинулось, можешь вернуть environment_updates только по существующим org:/zone:/res: из state_snapshot.",
-                "Environment updates не должны создавать новые сущности и не должны утверждать решения конкретного агента как факт.",
-                "Artifact creations/updates можно использовать для документов, публикаций, служебных следов, утечек, отчётов и запросов, если это правдоподобное внешнее последствие уже произошедших процессов.",
-            ]
-        )
-    return "\n".join(base) + "\n"
+    key = "worldgen.system.pre" if phase == "pre" else "worldgen.system.post"
+    return render_prompt(key, language_repr=repr(language)) + "\n"
 
 
 @dataclass(slots=True)

@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from sphere_lc.persona import INTERVIEW_QUESTIONS_V2
+from sphere_lc.prompts import render_prompt
 
 from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User
@@ -68,30 +69,19 @@ def _interview_generation_prompts(
     dark_triad = json.dumps(personality.get("dark_triad") or {}, ensure_ascii=False)
     techniques = ", ".join(str(item).strip() for item in list(personality.get("neutralization_techniques") or []) if str(item).strip())
 
-    system_prompt = (
-        "Ты — модуль генерации глубинного интервью личности для SPHERE.\n"
-        "Нужно вернуть:\n"
-        "- ответы на все вопросы интервью;\n"
-        "- отдельную экспертную интерпретацию от психолога;\n"
-        "- отдельную экспертную интерпретацию от экономиста.\n"
-        "Важно:\n"
-        "- ответы должны быть согласованы с биографией, HEXACO, тёмной триадой и техниками нейтрализации;\n"
-        "- не делай ответы односложными или шаблонными;\n"
-        "- не упоминай, что это симуляция или JSON;\n"
-        "- пиши по-русски.\n"
-        "Верни только JSON по схеме."
-    )
-    user_prompt = (
-        f"Личность: {name}\n"
-        f"ID: {personality_id}\n"
-        f"Роль: {payload.role.strip()}\n"
-        f"Краткое описание: {description or '(пусто)'}\n"
-        f"Прототипы: {prototypes_text or '(нет)'}\n"
-        f"Биография:\n{biography or '(пусто)'}\n\n"
-        f"HEXACO: {hexaco}\n"
-        f"Тёмная триада: {dark_triad}\n"
-        f"Техники нейтрализации: {techniques or '(нет)'}\n\n"
-        f"Вопросы интервью:\n{questions}"
+    system_prompt = render_prompt("web.ai.generate_interview.system")
+    user_prompt = render_prompt(
+        "web.ai.generate_interview.user",
+        name=name,
+        personality_id=personality_id,
+        role=payload.role.strip(),
+        description=description or "(пусто)",
+        prototypes_text=prototypes_text or "(нет)",
+        biography=biography or "(пусто)",
+        hexaco=hexaco,
+        dark_triad=dark_triad,
+        techniques=techniques or "(нет)",
+        questions=questions,
     )
     return system_prompt, user_prompt
 
