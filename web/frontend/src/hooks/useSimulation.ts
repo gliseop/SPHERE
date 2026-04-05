@@ -23,7 +23,7 @@ const INITIAL_STATE: SimState = {
   events: [],
   nodes: [],
   edges: [],
-  environment: { queues: [], active_signals: [] },
+  environment: { active_signals: [] },
   currentRound: null,
   done: false,
   error: null,
@@ -38,33 +38,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function normalizeEnvironment(raw: unknown, fallback?: SimEnvironment): SimEnvironment {
-  const base = fallback ?? { queues: [], active_signals: [] }
+  const base = fallback ?? { active_signals: [] }
   if (!isRecord(raw)) return base
   const environment = isRecord(raw.environment) ? raw.environment : raw
-  const queuesRaw = Array.isArray(environment.operational_queues)
-    ? environment.operational_queues
-    : Array.isArray(environment.queues)
-      ? environment.queues
-      : []
   const activeSignalsRaw = Array.isArray(environment.active_signals)
     ? environment.active_signals
     : isRecord(environment.information_climate) && Array.isArray(environment.information_climate.active_signals)
       ? environment.information_climate.active_signals
       : []
   return {
-    queues: queuesRaw
-      .filter((item): item is Record<string, unknown> => isRecord(item))
-      .map((item) => ({
-        queue_id: String(item.queue_id ?? ''),
-        title: typeof item.title === 'string' ? item.title : undefined,
-        backlog: Number(item.backlog ?? 0),
-        capacity_per_tick: Number(item.capacity_per_tick ?? 0),
-        avg_delay_ticks: Number(item.avg_delay_ticks ?? 0),
-        status: String(item.status ?? ''),
-        pressure: String(item.pressure ?? ''),
-        owner_org_id: String(item.owner_org_id ?? ''),
-        zone_id: String(item.zone_id ?? ''),
-      })),
     active_signals: activeSignalsRaw.map((item) => String(item)).filter(Boolean),
     information_climate: isRecord(environment.information_climate)
       ? {

@@ -33,18 +33,6 @@ export interface GraphEdge {
   strength: number
 }
 
-export interface EnvironmentQueue {
-  queue_id: string
-  title?: string
-  backlog: number
-  capacity_per_tick: number
-  avg_delay_ticks: number
-  status: string
-  pressure: string
-  owner_org_id: string
-  zone_id: string
-}
-
 export interface EnvironmentInformalLink {
   link_id: string
   agent_a_id: string
@@ -65,7 +53,6 @@ export interface EnvironmentClimate {
 }
 
 export interface SimEnvironment {
-  queues: EnvironmentQueue[]
   active_signals: string[]
   information_climate?: EnvironmentClimate
   informal_links?: EnvironmentInformalLink[]
@@ -78,7 +65,6 @@ export interface SimMeta {
   scenario_title?: string
   scenario_id?: string | null
   governance_label?: string
-  seed: number | null
   variant?: string | null
   run_name?: string
   ticks_total?: number
@@ -110,7 +96,6 @@ export interface RunInfo {
   scenario_title?: string
   governance_label?: string
   scenario_id?: string | null
-  seed: number | null
   variant?: string | null
   size_kb: number
   created_at?: number

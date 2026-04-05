@@ -107,7 +107,6 @@ class WorldJournal:
             "votes": len(state.registry.list_ids(EntityKind.VOTE)),
             "zones": len(state.registry.list_ids(EntityKind.ZONE)),
             "resource_pools": len(state.registry.list_ids(EntityKind.RESOURCE)),
-            "operational_queues": len(state.environment.operational_queues),
         }
 
         j.agent_ids = sorted(state.agents.keys())
@@ -238,11 +237,9 @@ class WorldJournal:
                 "environment_institution_updated",
                 "environment_zone_updated",
                 "environment_resource_updated",
-                "environment_operational_queue_updated",
                 "environment_information_climate_updated",
                 "environment_informal_link_updated",
             ):
-                self.entity_counts["operational_queues"] = len(state.environment.operational_queues)
                 self.environment = state.environment.snapshot_dict()
                 changed = True
                 continue
@@ -302,7 +299,6 @@ class WorldJournal:
                 "votes": int(self.entity_counts.get("votes", 0)),
                 "zones": int(self.entity_counts.get("zones", 0)),
                 "resource_pools": int(self.entity_counts.get("resource_pools", 0)),
-                "operational_queues": int(self.entity_counts.get("operational_queues", 0)),
             },
             "agents": [self.agents[aid] for aid in self.agent_ids],
             "environment": dict(self.environment),
@@ -514,18 +510,6 @@ class WorldJournal:
                 "title": self._truncate(str(p.get("title") or ""), 120),
                 "status": self._truncate(str(p.get("status") or ""), 60),
                 "visibility": self._truncate(str(p.get("visibility") or ""), 32),
-            }
-
-        if t == "environment_operational_queue_updated":
-            return {
-                "tick": int(ev.tick),
-                "type": t,
-                "queue_id": str(p.get("queue_id") or ""),
-                "backlog": p.get("backlog"),
-                "capacity_per_tick": p.get("capacity_per_tick"),
-                "avg_delay_ticks": p.get("avg_delay_ticks"),
-                "status": self._truncate(str(p.get("status") or ""), 48),
-                "pressure": self._truncate(str(p.get("pressure") or ""), 180),
             }
 
         if t in (

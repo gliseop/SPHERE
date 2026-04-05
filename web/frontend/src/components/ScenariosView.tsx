@@ -13,6 +13,7 @@ interface Agent {
   id: string
   name: string
   role: string
+  internal: boolean
   initial_reputation: number
   capabilities?: string[]
   position?: string
@@ -32,7 +33,6 @@ interface Scenario {
   scenario: string
   governance: string
   rounds: number
-  seed: number | null
   agents: Agent[]
   sim_config?: Record<string, unknown> | null
   runner?: string
@@ -55,28 +55,6 @@ interface GovernanceModeItem {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function defaultCapabilitiesForRole(role: string): string[] | null {
-  const normalized = role.trim().toLowerCase()
-  if (!normalized) return null
-  if (['auditor', 'audit', 'aud', 'аудитор'].includes(normalized)) {
-    return ['audit', 'message', 'work', 'dao']
-  }
-  if (
-    ['business', 'contractor', 'vendor', 'external', 'biz', 'подрядчик', 'контрагент', 'внешний'].includes(normalized)
-  ) {
-    return ['message']
-  }
-  if (['juror', 'jury', 'jur', 'присяжный'].includes(normalized)) {
-    return ['dao']
-  }
-  if (
-    ['official', 'official_procurement', 'off', 'employee', 'staff', 'officials', 'чиновник', 'сотрудник'].includes(normalized)
-  ) {
-    return ['message', 'work', 'dao']
-  }
-  return null
 }
 
 async function readApiErrorMessage(res: Response): Promise<string> {
@@ -105,7 +83,6 @@ const EMPTY_SCENARIO: Scenario = {
   scenario: 'S1',
   governance: 'G1',
   rounds: 10,
-  seed: null,
   agents: [],
   runner: 'cognitive',
 }
@@ -115,6 +92,15 @@ const BUILTIN_ROLES: AgentTypeOption[] = [
   { id: 'business', name: 'Подрядчик', id_prefix: 'biz' },
   { id: 'auditor',  name: 'Аудитор', id_prefix: 'aud' },
 ]
+
+const AGENT_TYPE_PRESETS: Record<string, { internal: boolean; capabilities: string[]; position: string }> = {
+  official: { internal: true, capabilities: ['message', 'work', 'dao'], position: 'специалист' },
+  official_procurement: { internal: true, capabilities: ['message', 'work', 'dao'], position: 'специалист' },
+  business: { internal: false, capabilities: ['message'], position: 'контрагент' },
+  business_contractor: { internal: false, capabilities: ['message'], position: 'контрагент' },
+  juror: { internal: true, capabilities: ['dao'], position: 'член review-группы' },
+  auditor: { internal: true, capabilities: ['message', 'work'], position: 'контролёр' },
+}
 
 const FALLBACK_SCENARIOS: TemplateScenario[] = [
   { id: 'S0', title: 'Чистая сделка' },
@@ -377,14 +363,17 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
     if (!editing) return
     const idx = editing.agents.length + 1
     const defaultType = agentTypes[0] ?? BUILTIN_ROLES[0]
+    const preset = AGENT_TYPE_PRESETS[defaultType.id] ?? { internal: true, capabilities: ['message', 'work'], position: defaultType.name }
     setEditing({
       ...editing,
       agents: [...editing.agents, {
         id: `${_prefixForRole(defaultType.id)}_${idx}`,
         name: `Агент ${idx}`,
         role: defaultType.id,
+        internal: preset.internal,
         initial_reputation: 7.0,
-        capabilities: defaultCapabilitiesForRole(defaultType.id) ?? undefined,
+        capabilities: [...preset.capabilities],
+        position: preset.position,
       }],
     })
   }
@@ -399,13 +388,30 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
       agents[i].id = `${prefix}_${String(value).toLowerCase().replace(/\s+/g, '_').slice(0, 12)}`
     }
     if (field === 'role') {
-      const prefix = _prefixForRole(String(value))
+      const roleValue = String(value)
+      const prefix = _prefixForRole(roleValue)
       agents[i].id = `${prefix}_${agents[i].name.toLowerCase().replace(/\s+/g, '_').slice(0, 12)}`
-      const capabilities = defaultCapabilitiesForRole(String(value))
-      if (capabilities) {
-        agents[i].capabilities = capabilities
+      const preset = AGENT_TYPE_PRESETS[roleValue]
+      if (preset) {
+        agents[i].internal = preset.internal
+        agents[i].capabilities = [...preset.capabilities]
+        if (!agents[i].position || agents[i].position === agentTypes.find((t) => t.id === roleValue)?.name || agents[i].position === roleValue) {
+          agents[i].position = preset.position
+        }
       }
     }
+    setEditing({ ...editing, agents })
+  }
+
+  function updateAgentCapabilities(i: number, value: string) {
+    if (!editing) return
+    const capabilities = value
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+    const agents = editing.agents.map((a, idx) =>
+      idx === i ? { ...a, capabilities } : a
+    )
     setEditing({ ...editing, agents })
   }
 
@@ -721,6 +727,45 @@ export function ScenariosView({ onLaunch, onGoLive, user }: {
                       onChange={(e) => updateAgent(i, 'initial_reputation', Number(e.target.value))}
                       style={{ width: '70px' }}
                       title="Начальная репутация"
+                    />
+                    <input
+                      className="hud-input"
+                      placeholder="Должность / title"
+                      value={agent.position ?? ''}
+                      onChange={(e) => updateAgent(i, 'position', e.target.value)}
+                      style={{ flex: '1 1 150px', minWidth: '150px' }}
+                      title="Явная должность агента"
+                    />
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        minWidth: '82px',
+                        color: 'var(--text-secondary)',
+                        fontSize: '0.68rem',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={agent.internal}
+                        onChange={(e) => {
+                          if (!editing) return
+                          const agents = editing.agents.map((a, idx) =>
+                            idx === i ? { ...a, internal: e.target.checked } : a,
+                          )
+                          setEditing({ ...editing, agents })
+                        }}
+                      />
+                      <span>internal</span>
+                    </label>
+                    <input
+                      className="hud-input"
+                      placeholder="capabilities: message, work, dao"
+                      value={(agent.capabilities || []).join(', ')}
+                      onChange={(e) => updateAgentCapabilities(i, e.target.value)}
+                      style={{ flex: '1 1 180px', minWidth: '180px' }}
+                      title="Явный список capabilities без вывода из role"
                     />
                     <select
                       className="hud-input"

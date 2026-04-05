@@ -63,7 +63,6 @@ from .ops import (
 from .state import WorldState
 from .utils import (
     looks_like_machine_name,
-    looks_like_role_label,
     normalize_agent_display_name,
 )
 
@@ -149,6 +148,105 @@ class _PerformArbiterOutput(BaseModel):
     approved: bool
     reason: str = ""
     ops: list[_PerformOpModel] = []
+
+
+def _normalize_perform_op_args(op_type: str, args: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(args)
+
+    def _move(target: str, *sources: str) -> None:
+        if target in normalized and normalized.get(target) not in (None, ""):
+            return
+        for source in sources:
+            if source in normalized and normalized.get(source) not in (None, ""):
+                normalized[target] = normalized[source]
+                return
+
+    if op_type == "send_message":
+        _move("to_id", "to_id", "to_agent_id", "channel_id", "target_agent_id")
+        _move("text", "text", "message", "content", "description")
+        _move("private", "private", "is_private")
+        if "private" not in normalized and "channel_id" in normalized:
+            normalized["private"] = False
+    elif op_type == "upsert_pending_interaction":
+        _move("target_agent_id", "target_agent_id", "responder_agent_id", "recipient_agent_id")
+        _move("source_agent_id", "source_agent_id", "initiator_agent_id", "initiator_id", "actor_id")
+        _move("summary", "summary", "description", "text")
+        _move("due_offset_ticks", "due_offset_ticks", "due_in_ticks")
+    elif op_type == "add_information_signal":
+        _move("signal", "signal", "description", "text", "message")
+    elif op_type == "create_artifact":
+        _move("summary", "summary", "description", "text")
+    elif op_type == "narrative_action":
+        _move("description", "description", "summary", "text", "content")
+
+    for noisy_key in (
+        "from_agent_id",
+        "from_id",
+        "agent_id",
+        "initiator_id",
+        "initiator_agent_id",
+        "responder_agent_id",
+        "recipient_agent_id",
+        "to_agent_id",
+        "channel_id",
+        "message",
+        "content",
+        "description" if op_type != "narrative_action" and op_type != "add_information_signal" and op_type != "create_artifact" else "",
+        "is_private",
+        "params",
+    ):
+        if noisy_key:
+            normalized.pop(noisy_key, None)
+
+    return normalized
+
+
+def _normalize_perform_llm_output(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+
+    normalized: dict[str, Any] = {
+        "approved": bool(raw.get("approved", False)),
+        "reason": str(raw.get("reason") or ""),
+        "ops": [],
+    }
+
+    raw_ops: list[Any] = []
+    ops_value = raw.get("ops")
+    if isinstance(ops_value, list):
+        raw_ops.extend(ops_value)
+    side_effects_value = raw.get("side_effects")
+    if isinstance(side_effects_value, list):
+        raw_ops.extend(side_effects_value)
+
+    normalized_ops: list[dict[str, Any]] = []
+    for item in raw_ops:
+        if not isinstance(item, dict):
+            continue
+        raw_type = str(item.get("op_type") or item.get("type") or "").strip()
+        op_type = _normalize_perform_op_type(raw_type)
+        if not op_type:
+            continue
+        raw_args = item.get("args")
+        if isinstance(raw_args, dict):
+            args = dict(raw_args)
+        elif isinstance(item.get("params"), dict):
+            args = dict(item.get("params") or {})
+        else:
+            args = {
+                key: value
+                for key, value in item.items()
+                if key not in {"op_type", "type", "args", "params"}
+            }
+        normalized_ops.append(
+            {
+                "op_type": op_type,
+                "args": _normalize_perform_op_args(op_type, args),
+            }
+        )
+
+    normalized["ops"] = normalized_ops
+    return normalized
 
 
 def _perform_output_schema() -> dict[str, Any]:
@@ -550,8 +648,6 @@ class Arbiter:
             return "spawn_requires_name"
         if looks_like_machine_name(name):
             return "spawn_name_not_human_readable"
-        if looks_like_role_label(name):
-            return "spawn_name_is_role_alias"
         return None
 
     async def _arbitrate_one(
@@ -1006,7 +1102,7 @@ class Arbiter:
             temperature=self.temperature,
         )
         try:
-            return _PerformArbiterOutput.model_validate(resp.data)
+            return _PerformArbiterOutput.model_validate(_normalize_perform_llm_output(resp.data))
         except Exception as exc:
             return _PerformArbiterOutput(approved=False, reason=f"arbiter_parse_error:{exc}", ops=[])
 
@@ -1019,6 +1115,8 @@ class Arbiter:
         if not str(proposal or "").strip():
             return False
         if not decision.approved or decision.ops:
+            return False
+        if str(decision.reason or "").strip() in {"noop", "noop_proposal"}:
             return False
         return True
 

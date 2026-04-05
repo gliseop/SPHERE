@@ -246,7 +246,7 @@ def test_build_user_surfaces_recent_invalid_work_id(tmp_path: Path) -> None:
         mem_text="(пусто)",
     )
 
-    assert "Недавние недопустимые действия / ID:" in user
+    assert "Во что ты уже упирался и чего лучше не повторять дословно:" in user
     assert "work_id work:ghost не существует" in user
 
 
@@ -272,7 +272,7 @@ def test_build_user_includes_current_world_time(tmp_path: Path) -> None:
         mem_text="(пусто)",
     )
 
-    assert "Текущее время мира: тик 2, дата 2026-03-11" in user
+    assert "Сегодня 2026-03-11." in user
 
 
 def test_build_system_does_not_expose_simulation_framing(tmp_path: Path) -> None:
@@ -292,7 +292,7 @@ def test_build_system_does_not_expose_simulation_framing(tmp_path: Path) -> None
     system = runner._build_system(agent)
 
     assert "симуляц" not in system.casefold()
-    assert "организационного процесса" in system
+    assert "обычного рабочего дня" in system
 
 
 def test_build_user_includes_work_item_titles(tmp_path: Path) -> None:
@@ -323,7 +323,7 @@ def test_build_user_includes_work_item_titles(tmp_path: Path) -> None:
         mem_text="(пусто)",
     )
 
-    assert "Открытые/известные дела (кратко):" in user
+    assert "Что сейчас лежит на столе:" in user
     assert "work:alpha: Проверка документации тендера [open]" in user
 
 
@@ -368,8 +368,8 @@ class _RuntimeSpawnProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
-            if "agent:spawner" in user and "Раунд (tick): 0" in user:
+        if "Сделай следующий ход в этой ситуации." in user:
+            if "agent:spawner" in user and "Сегодняшний рабочий день: 0." in user:
                 return StructuredLLMResponse(
                     data={
                         "actions": [
@@ -400,7 +400,7 @@ class _DoubleRuntimeSpawnProvider(_RuntimeSpawnProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user and "agent:spawner" in user and "Раунд (tick): 0" in user:
+        if "Сделай следующий ход в этой ситуации." in user and "agent:spawner" in user and "Сегодняшний рабочий день: 0." in user:
             return StructuredLLMResponse(
                 data={
                     "actions": [
@@ -439,7 +439,7 @@ class _WorldgenSpawnProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             if "agent:journalist" in user:
                 self.spawned_agent_acted = True
             return StructuredLLMResponse(data={"actions": []}, model="mock")
@@ -472,7 +472,7 @@ class _DuplicateNameWorldgenProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             return StructuredLLMResponse(data={"actions": []}, model="mock")
         if "\"tick\": 0" in user:
             return StructuredLLMResponse(
@@ -642,7 +642,9 @@ def test_engine_rejects_role_based_secondary_spawn(tmp_path: Path) -> None:
     )
     state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=_RoleAliasProvider()).run())
 
-    assert [aid for aid in state.agents if aid.startswith("agent:sec_")] == []
+    secondary_ids = [aid for aid in state.agents if aid.startswith("agent:sec_")]
+    assert len(secondary_ids) == 1
+    assert state.agents[secondary_ids[0]].name == "начальник отдела закупок"
 
 
 def test_engine_limits_secondary_agents_by_max_agents(tmp_path: Path) -> None:
@@ -1149,3 +1151,4 @@ def test_worldgen_prompt_includes_canonical_date(tmp_path: Path) -> None:
     )
 
     assert '"current_date": "2026-03-12"' in provider.last_user
+

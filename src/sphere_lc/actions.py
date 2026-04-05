@@ -153,7 +153,7 @@ Action = Annotated[
 
 
 def agent_turn_json_schema(*, max_chars: int = 4000) -> dict[str, Any]:
-    """JSON-схема для свободного turn proposal когнитивного агента.
+    """JSON-схема для свободного хода когнитивного агента.
 
     Агент описывает ход одним свободным текстовым предложением/абзацем без
     typed action menu. Арбитр затем сам выделяет из этого текста формальные
@@ -164,10 +164,14 @@ def agent_turn_json_schema(*, max_chars: int = 4000) -> dict[str, Any]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
+            "reply": {
+                "type": "string",
+                "maxLength": max(1, int(max_chars)),
+            },
             "proposal": {
                 "type": "string",
                 "maxLength": max(1, int(max_chars)),
-            }
+            },
         },
-        "required": ["proposal"],
+        "anyOf": [{"required": ["reply"]}, {"required": ["proposal"]}],
     }

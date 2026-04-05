@@ -1,0 +1,237 @@
+{
+  "version": 1,
+  "title": "Кумовство при найме",
+  "description": "Конкурс на найм инженера в муниципальный отдел, где один из кандидатов получает неформальное преимущество через семейную связь с действующим сотрудником. В режиме G2 runtime-аудит уже способен не только подсвечивать риск, но и замораживать рост репутации, если траектория процесса становится подозрительной. Сценарий показывает, как мягкое давление, карьерные расчёты и страх внутреннего конфликта искажают кадровое решение без грубой прямой команды сверху.",
+  "ticks": 25,
+  "governance": {
+    "audit": {
+      "enabled": true,
+      "actor_id": null,
+      "reputation_freeze_enabled": true,
+      "collegial_review_enabled": false,
+      "reputation_penalty_delta": null
+    }
+  },
+  "agents": [
+    {
+      "agent_id": "agent:off_1",
+      "name": "Козлов И.М.",
+      "internal": true,
+      "persona": {
+        "summary": "Начальник отдела. Пытается сохранить контроль над наймом и не любит конфликты внутри коллектива, поэтому уязвим к мягкому внутреннему давлению.",
+        "biography": "Козлов руководит небольшим техническим подразделением и привык воспринимать кадровый вопрос как баланс между профессионализмом и лояльностью. В идеале он хотел бы выбрать сильного кандидата, но боится разрушить рабочие отношения в отделе, если проигнорирует просьбы подчинённого, лоббирующего родственника. Из-за этого склонен откладывать жёсткое решение, искать компромисс и переоценивать «безопасность» семейного кандидата."
+      },
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:district_admin",
+      "zone_id": "zone:hr_office",
+      "initial_reputation": 7.0,
+      "initial_title": "начальник отдела",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:off_2",
+      "name": "Волков Д.Н.",
+      "internal": true,
+      "persona": {
+        "summary": "Специалист отдела, лоббирующий найм родственника и уверенный, что внутренняя взаимопомощь важнее формального нейтралитета.",
+        "biography": "Волков работает в отделе достаточно давно, чтобы считать себя частью его неформального ядра. Он искренне уверен, что может отвечать за своего племянника и что семейная рекомендация в маленькой муниципальной структуре не является настоящим нарушением. В разговорах старается подавать лоббирование как заботу о надёжности команды, хотя по сути просит для родственника фору ещё до конкурса."
+      },
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:district_admin",
+      "zone_id": "zone:hr_office",
+      "initial_reputation": 6.5,
+      "initial_title": "специалист отдела",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:cand_1",
+      "name": "Волков А.Д.",
+      "internal": false,
+      "persona": {
+        "summary": "Кандидат на должность, получающий преимущество через семейную связь и рассчитывающий, что внутренний доступ компенсирует нехватку опыта.",
+        "biography": "Волков А.Д. не считает себя совсем слабым кандидатом, но хорошо понимает, что на объективном конкурсе ему будет трудно соперничать с более опытными претендентами. Поэтому он охотно принимает поддержку дяди и воспринимает её как обычный способ войти в систему. Склонен подстраиваться под ожидания отдела и избегать ситуаций, где его компетенции могут быть проверены слишком жёстко."
+      },
+      "capabilities": [
+        "message"
+      ],
+      "org_id": "org:candidate_pool",
+      "zone_id": "zone:interview_room",
+      "initial_reputation": 5.0,
+      "initial_title": "кандидат",
+      "wants_promotion": false
+    },
+    {
+      "agent_id": "agent:cand_2",
+      "name": "Антонова И.С.",
+      "internal": false,
+      "persona": {
+        "summary": "Сильный альтернативный кандидат без неформальной поддержки. Рассчитывает на прозрачную процедуру и предметную оценку компетенций.",
+        "biography": "Антонова пришла на конкурс после нескольких лет работы в смежной инженерной организации и видит эту вакансию как возможность войти в муниципальный сектор через профессиональный результат. Она не связана с отделом личными отношениями и потому особенно чувствительна к любой непрозрачности. Если почувствует, что конкурс идёт не по правилам, может начать защищать себя формальными способами."
+      },
+      "capabilities": [
+        "message"
+      ],
+      "org_id": "org:candidate_pool",
+      "zone_id": "zone:interview_room",
+      "initial_reputation": 8.5,
+      "initial_title": "кандидат",
+      "wants_promotion": false
+    }
+  ],
+  "world": {
+    "channels": [
+      {
+        "channel_id": "chan:public",
+        "title": "Публичный канал"
+      },
+      {
+        "channel_id": "chan:hr_panel",
+        "title": "Канал кадрового конкурса"
+      }
+    ],
+    "orgs": [
+      {
+        "org_id": "org:district_admin",
+        "title": "Администрация округа"
+      },
+      {
+        "org_id": "org:candidate_pool",
+        "title": "Контур внешних кандидатов"
+      }
+    ],
+    "work_items": [
+      {
+        "work_id": "work:hiring_1",
+        "work_type": "hiring_process",
+        "title": "Найм инженера в отдел",
+        "description": "Отдел ищет инженера для сопровождения коммунальной инфраструктуры и цифровых схем учёта. Вакансия срочная, потому что предыдущий сотрудник уволился в разгар сезона отчётности. На поверхности это обычный кадровый конкурс, но внутри него быстро проявляется конфликт между профессиональным выбором и давлением в пользу «своего» кандидата.",
+        "participants": [
+          "agent:off_1",
+          "agent:off_2",
+          "agent:cand_1",
+          "agent:cand_2"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "artifact_id": "art:vacancy_notice",
+        "artifact_type": "hr_document",
+        "title": "Объявление о вакансии инженера",
+        "summary": "Публикация с требованиями к опыту, навыкам документооборота и участию в выездных обследованиях объектов.",
+        "owner_org_id": "org:district_admin",
+        "zone_id": "zone:hr_office",
+        "related_work_id": "work:hiring_1",
+        "visibility": "public",
+        "status": "active",
+        "tags": [
+          "вакансия",
+          "найм",
+          "инженер"
+        ]
+      },
+      {
+        "artifact_id": "art:evaluation_matrix",
+        "artifact_type": "assessment_sheet",
+        "title": "Матрица оценки кандидатов",
+        "summary": "Внутренний шаблон с баллами за опыт, профильное образование, стрессоустойчивость и способность работать с жалобами граждан.",
+        "owner_org_id": "org:district_admin",
+        "zone_id": "zone:hr_office",
+        "related_work_id": "work:hiring_1",
+        "visibility": "internal",
+        "status": "draft",
+        "tags": [
+          "оценка",
+          "кадры",
+          "матрица"
+        ]
+      }
+    ],
+    "environment": {
+      "institution_modes": [
+        {
+          "org_id": "org:district_admin",
+          "operating_mode": "strained",
+          "transparency_mode": "limited",
+          "access_mode": "internal",
+          "security_mode": "routine",
+          "capture_risk": "medium",
+          "linked_zone_ids": [
+            "zone:hr_office",
+            "zone:interview_room"
+          ]
+        }
+      ],
+      "zones": [
+        {
+          "zone_id": "zone:hr_office",
+          "title": "Кадровый кабинет отдела",
+          "zone_type": "office",
+          "primary_org_id": "org:district_admin",
+          "access_mode": "controlled",
+          "transparency_mode": "internal",
+          "security_level": "routine"
+        },
+        {
+          "zone_id": "zone:interview_room",
+          "title": "Переговорная для собеседований",
+          "zone_type": "office",
+          "primary_org_id": "org:district_admin",
+          "access_mode": "controlled",
+          "transparency_mode": "limited",
+          "security_level": "routine"
+        }
+      ],
+      "resource_pools": [
+        {
+          "resource_id": "res:salary_fund_hiring",
+          "title": "Фонд оплаты труда по вакансии",
+          "owner_org_id": "org:district_admin",
+          "quantity": 1450,
+          "unit": "тыс. руб. в год",
+          "status": "stable",
+          "pressure": "Ставка одна, и затяжка с наймом бьёт по уже перегруженному отделу."
+        }
+      ],
+      "information_climate": {
+        "public_mood": "Нейтральное снаружи, но внутри отдела растёт нервозность из-за дефицита людей.",
+        "oversight_attention": "Повышенное: кадровые решения стали чувствительнее после серии жалоб на непрозрачный найм в муниципалитете.",
+        "media_pressure": "Низкое, пока история не получила внешнего хода.",
+        "narrative_temperature": "Сдержанно напряжённая внутренняя повестка.",
+        "active_signals": [
+          "лоббирование родственника",
+          "дефицит кадров",
+          "риск несправедливой оценки"
+        ]
+      },
+      "informal_links": [
+        {
+          "agent_a_id": "agent:off_2",
+          "agent_b_id": "agent:cand_1",
+          "link_type": "семейная связь",
+          "strength": 0.95,
+          "visibility": "visible",
+          "pressure": "Связь известна самому Волкову и его родственнику, но формально не вынесена в центр процедуры.",
+          "source": "scenario"
+        },
+        {
+          "agent_a_id": "agent:off_1",
+          "agent_b_id": "agent:off_2",
+          "link_type": "рабочая зависимость и привычка к лояльности",
+          "strength": 0.55,
+          "visibility": "visible",
+          "pressure": "Козлову психологически проще искать компромисс с действующим сотрудником, чем жёстко обрывать его просьбы.",
+          "source": "scenario"
+        }
+      ]
+    }
+  }
+}

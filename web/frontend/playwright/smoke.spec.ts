@@ -67,8 +67,8 @@ test('delete run via UI (runner not selectable)', async ({ page, request }) => {
   await expect(launchPanel.getByText('Mock')).toHaveCount(0)
 
   // Arrange: create a tiny run artifact directly in results/ (no LLM dependency).
-  const seed = Date.now() % 1_000_000_000
-  const run_name = `S1_G1_seed${seed}_cognitive`
+  const stamp = Date.now() % 1_000_000_000
+  const run_name = `S1_G1_cognitive_${stamp}`
   const eventsPath = path.join(RESULTS_DIR, `${run_name}_events.jsonl`)
   await fs.writeFile(eventsPath, '', 'utf8')
 
@@ -87,8 +87,8 @@ test('playback websocket closes and UI returns to idle', async ({ page, request 
   const token = await apiLogin(request)
 
   // Arrange: create a tiny playbackable run without launching a simulation.
-  const seed = 314159
-  const run_name = `S1_G1_seed${seed}_cognitive`
+  const stamp = 314159
+  const run_name = `S1_G1_cognitive_${stamp}`
   const eventsPath = path.join(RESULTS_DIR, `${run_name}_events.jsonl`)
   const namesPath = path.join(RESULTS_DIR, `${run_name}_names.json`)
   await fs.writeFile(

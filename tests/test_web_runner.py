@@ -305,7 +305,6 @@ class TestLaunchSimulation:
             result = runner.launch_simulation_from_config(
                 scenario_config={"id": "S1", "agents": []},
                 governance="G1",
-                seed=7,
                 rounds=5,
             )
 
@@ -332,7 +331,6 @@ class TestLaunchSimulation:
             result = runner.launch_simulation_from_config(
                 scenario_config={"id": "S1", "agents": []},
                 governance="G1",
-                seed=7,
                 rounds=5,
                 parallel_agents=False,
                 parallel_workers=3,
@@ -355,7 +353,6 @@ class TestLaunchSimulation:
         cfg = {
             "title": "S1 template",
             "ticks": 4,
-            "seed": 42,
             "agents": [],
             "world": {},
             "llm": {},
@@ -372,12 +369,11 @@ class TestLaunchSimulation:
                 result = runner.launch_simulation(
                     scenario="S1",
                     governance="G1",
-                    seed=11,
                     rounds=6,
                 )
 
         assert result["pid"] == 4321
-        assert result["run_name"].startswith("S1_G1_seed11")
+        assert result["run_name"].startswith("S1_G1_cognitive")
 
     def test_launch_simulation_respects_limit(self, results_dir: Path, monkeypatch: pytest.MonkeyPatch):
         """При превышении лимита concurrent-runs выбрасывается TooManyRunsError."""
@@ -393,17 +389,16 @@ class TestLaunchSimulation:
 
     def test_launch_simulation_skips_reserved_run_name(self, results_dir: Path):
         """Зарезервированное имя не должно переиспользоваться вторым запуском."""
-        runner._reserved_run_names.add("S1_G1_seed7_cognitive")
+        runner._reserved_run_names.add("S1_G1_cognitive")
 
         with patch("web.backend.runner.subprocess.Popen", side_effect=_FakePopen):
             result = runner.launch_simulation_from_config(
                 scenario_config={"id": "S1", "agents": []},
                 governance="G1",
-                seed=7,
                 rounds=5,
             )
 
-        assert result["run_name"] == "S1_G1_seed7_cognitive_2"
+        assert result["run_name"] == "S1_G1_cognitive_2"
 
     def test_launch_simulation_releases_reservation_on_popen_failure(self, results_dir: Path):
         """При ошибке старта резервирование и временные артефакты удаляются."""
@@ -412,13 +407,12 @@ class TestLaunchSimulation:
                 runner.launch_simulation_from_config(
                     scenario_config={"id": "S1", "agents": []},
                     governance="G1",
-                    seed=7,
                 )
 
         assert runner._reserved_run_names == set()
-        assert not (results_dir / "S1_G1_seed7_cognitive").exists()
-        assert not (results_dir / "S1_G1_seed7_cognitive_stdout.log").exists()
-        assert not (results_dir / "S1_G1_seed7_cognitive_stderr.log").exists()
+        assert not (results_dir / "S1_G1_cognitive").exists()
+        assert not (results_dir / "S1_G1_cognitive_stdout.log").exists()
+        assert not (results_dir / "S1_G1_cognitive_stderr.log").exists()
 
 
 def test_parse_run_name_uses_rightmost_governance_suffix():
@@ -427,6 +421,5 @@ def test_parse_run_name_uses_rightmost_governance_suffix():
     assert meta == {
         "scenario": "My_G2_experiment",
         "governance": "G1",
-        "seed": 42,
-        "variant": "web",
+        "variant": "seed42_web",
     }

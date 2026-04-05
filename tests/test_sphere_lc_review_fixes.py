@@ -794,6 +794,61 @@ def test_arbiter_does_not_retry_idle_human_noop_proposal(tmp_path: Path) -> None
     assert res[0].ops == []
 
 
+def test_arbiter_normalizes_legacy_perform_payload_shape(tmp_path: Path) -> None:
+    class _LegacyPerformShapeProvider(MockLLMProvider):
+        def generate_structured(
+            self,
+            system: str,
+            user: str,
+            schema: dict,
+            temperature: float = 0.0,
+        ):
+            if "- actor_id: agent:off_1" in user:
+                return StructuredLLMResponse(
+                    data={
+                        "approved": True,
+                        "reason": None,
+                        "ops": [
+                            {
+                                "op_type": "send_message",
+                                "params": {
+                                    "from_agent_id": "agent:off_1",
+                                    "to_agent_id": "agent:off_2",
+                                    "content": "Нужно коротко сверить позицию по делу.",
+                                    "is_private": True,
+                                },
+                            }
+                        ],
+                        "side_effects": [
+                            {
+                                "op_type": "add_information_signal",
+                                "params": {
+                                    "description": "В отделе назревает внутреннее обсуждение спорного вопроса."
+                                },
+                            }
+                        ],
+                    },
+                    model="mock",
+                )
+            return super().generate_structured(system, user, schema, temperature)
+
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    arbiter = _mk_arbiter(tmp_path, mock=_LegacyPerformShapeProvider())
+    act = PerformAction(
+        type=ActionType.PERFORM,
+        description="Сначала лично напишу коллеге, а затем зафиксирую общий сигнал для среды.",
+        target_id="",
+        justification="",
+    )
+
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert res[0].approved is True
+    op_names = [op.__class__.__name__ for op in res[0].ops]
+    assert "SendMessageOp" in op_names
+    assert "AddInformationSignalOp" in op_names
+
+
 def test_arbiter_rejects_substantive_proposal_when_retry_still_empty(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
     provider = _StillEmptyMaterializationProvider()
@@ -831,7 +886,7 @@ def test_arbiter_rejects_temporally_backdated_message(tmp_path: Path) -> None:
     assert res[0].reason == "temporal_date_before_current_tick:2026-03-09"
 
 
-def test_arbiter_rejects_role_based_runtime_spawn_name(tmp_path: Path) -> None:
+def test_arbiter_allows_human_readable_runtime_spawn_name_without_role_gate(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["spawn"], off_2_caps=["message"])
     arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
     arbiter.runtime.allow_runtime_spawn = True
@@ -847,8 +902,8 @@ def test_arbiter_rejects_role_based_runtime_spawn_name(tmp_path: Path) -> None:
         justification="",
     )
     res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
-    assert res[0].approved is False
-    assert res[0].reason == "spawn_name_is_role_alias"
+    assert res[0].approved is True
+    assert res[0].ops
 
 
 def test_dao_eligible_voters_filters_by_dao_capability() -> None:
@@ -1648,9 +1703,9 @@ def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path
         mem_text="(пусто)",
     )
 
-    assert "Open votes: vote:1" in prompt
-    assert "Верни одно поле `proposal` со свободным описанием своего хода на этот тик." in prompt
-    assert "если тебя номинировали, явно опиши согласие или отказ как свободное действие" in prompt
+    assert "Голосования в ходу: vote:1" in prompt
+    assert "Верни только JSON с одним полем `reply`." in prompt
+    assert "если тебя выдвинули, ты можешь прямо согласиться или отказаться" in prompt
     assert "respond_nomination (vote_id, accept: true/false)" not in prompt
 
 
@@ -1678,7 +1733,7 @@ def test_agent_prompt_policy_injects_extra_rules_and_examples(tmp_path: Path) ->
         mem_text="(пусто)",
     )
 
-    assert "Локальные правила адресации и materialization" in prompt
+    assert "Практические ориентиры:" in prompt
     assert "не оформляй этот шаг как публикацию в канале" in prompt
     assert "Сначала напишу agent:off_1 лично, а отдельным шагом опубликую позицию в chan:public." in prompt
 
@@ -2025,7 +2080,7 @@ def test_composer_normalizes_or_falls_back_on_invalid_ids(tmp_path: Path) -> Non
     trace = TraceLog(tmp_path / "trace.jsonl")
     llm = LLMCaller(provider=mock, trace=trace)
     composer = WorldComposer(llm=llm, temperature=0.0, generate_personas=False)
-    cfg = asyncio.run(composer.compose(description="compose-bad-ids", ticks=1, seed=1, language="ru"))
+    cfg = asyncio.run(composer.compose(description="compose-bad-ids", ticks=1, language="ru"))
 
     agent_ids = [a.agent_id for a in cfg.agents]
     assert len(agent_ids) == len(set(agent_ids))

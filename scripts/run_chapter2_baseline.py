@@ -26,8 +26,8 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--scenario",
-        default="scenarios/procurement_tender_core_governance.yaml",
-        help="Базовый сценарий для серии (по умолчанию procurement_tender_core_governance.yaml).",
+        default="scenarios/procurement_tender_core_governance.json",
+        help="Базовый сценарий для серии (по умолчанию procurement_tender_core_governance.json).",
     )
     parser.add_argument(
         "--out",
@@ -41,11 +41,10 @@ def _parse_args() -> argparse.Namespace:
         help="Список built-in режимов управления для серии.",
     )
     parser.add_argument(
-        "--seeds",
-        nargs="+",
+        "--repeats",
         type=int,
-        default=[42, 43, 44],
-        help="Список seed для повторных прогонов.",
+        default=3,
+        help="Сколько повторов выполнять для каждого governance-режима.",
     )
     parser.add_argument(
         "--ticks",
@@ -115,7 +114,7 @@ async def _run_series(
     scenario_path: Path,
     out_dir: Path,
     governance_modes: list[str],
-    seeds: list[int],
+    repeats: int,
     ticks_override: int | None,
 ) -> dict[str, Any]:
     scenario_path = scenario_path.resolve()
@@ -129,14 +128,13 @@ async def _run_series(
         normalized = str(mode).strip().upper()
         if normalized not in BUILTIN_GOVERNANCE_MODES:
             raise ValueError(f"Unsupported built-in governance mode: {mode!r}")
-        for seed in seeds:
+        for run_index in range(max(1, int(repeats))):
             cfg = load_scenario(scenario_path)
             apply_builtin_governance_mode(cfg, normalized)
-            cfg.seed = int(seed)
             if ticks_override is not None:
                 cfg.ticks = int(ticks_override)
 
-            run_name = f"{scenario_path.stem}_{normalized}_seed{seed}"
+            run_name = f"{scenario_path.stem}_{normalized}_run{run_index + 1}"
             run_dir = out_dir / run_name
             artifacts = default_artifacts(run_dir)
             await WorldEngine(cfg=cfg, artifacts=artifacts).run()
@@ -147,7 +145,7 @@ async def _run_series(
             item = {
                 "run_name": run_name,
                 "governance": normalized,
-                "seed": int(seed),
+                "run_index": run_index + 1,
                 "out_dir": str(run_dir),
                 "evaluation": evaluation,
                 "fidelity": fidelity,
@@ -158,7 +156,7 @@ async def _run_series(
 
     report = {
         "scenario": str(scenario_path),
-        "seeds": [int(seed) for seed in seeds],
+        "repeats": max(1, int(repeats)),
         "governance_modes": governance_modes,
         "runs": results,
         "by_mode": {
@@ -178,7 +176,7 @@ def main() -> None:
             scenario_path=Path(args.scenario),
             out_dir=Path(args.out),
             governance_modes=[str(mode).strip().upper() for mode in args.governance],
-            seeds=[int(seed) for seed in args.seeds],
+            repeats=int(args.repeats),
             ticks_override=args.ticks,
         )
     )
@@ -188,7 +186,7 @@ def main() -> None:
                 "scenario": report["scenario"],
                 "out_dir": args.out,
                 "modes": report["governance_modes"],
-                "seeds": report["seeds"],
+                "repeats": report["repeats"],
                 "report": str(Path(args.out).resolve() / "comparative_report.json"),
             },
             ensure_ascii=False,

@@ -180,7 +180,6 @@ class WorldComposer:
         *,
         description: str,
         ticks: int,
-        seed: int,
         language: str,
     ) -> ScenarioConfig:
         """Сгенерировать сценарий.
@@ -188,7 +187,6 @@ class WorldComposer:
         Args:
             description: Текстовая постановка ситуации.
             ticks: Длина прогона.
-            seed: Зерно.
             language: Язык симуляции.
         """
         system = (
@@ -211,7 +209,7 @@ class WorldComposer:
         )
         user = (
             f"Описание:\n{description}\n\n"
-            f"Параметры:\n- ticks: {ticks}\n- seed: {seed}\n"
+            f"Параметры:\n- ticks: {ticks}\n"
         )
         resp = await self.llm.generate_structured(
             role="composer",
@@ -243,7 +241,6 @@ class WorldComposer:
         cfg = ScenarioConfig(
             title=out.title,
             description=out.description or description,
-            seed=seed,
             ticks=ticks,
             runtime=RuntimeConfig(language=language),
         )

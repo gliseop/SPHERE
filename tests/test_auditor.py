@@ -308,135 +308,6 @@ def test_runtime_auditor_maps_freeform_llm_signal_to_canonical_vote_pattern(tmp_
     assert any(event.event_type == "audit_flagged" for event in outcome.events)
 
 
-def test_runtime_auditor_flags_due_external_queue_complaint_response() -> None:
-    state = _mk_state()
-    state.tick = 2
-    state.agents["agent:citizen_1"] = AgentState(
-        agent_id="agent:citizen_1",
-        name="agent:citizen_1",
-        internal=False,
-        capabilities=["message"],
-    )
-    state.registry.register(
-        EntityRecord(
-            entity_id="agent:citizen_1",
-            kind=EntityKind.AGENT,
-            created_by=None,
-            created_tick=0,
-            meta={"name": "agent:citizen_1"},
-        )
-    )
-    state.artifacts["art:queue_external_complaint_queue_permits"] = ArtifactState(
-        artifact_id="art:queue_external_complaint_queue_permits",
-        artifact_type="external_complaint",
-        title="Внешняя жалоба по очереди",
-        summary="Житель требует ответа по задержкам в очереди разрешений.",
-        owner_org_id="org:city_hall",
-        visibility="internal",
-        status="active",
-        tags=["queue", "complaint"],
-    )
-    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
-
-    tick_events = [
-        Event(
-            tick=2,
-            event_type="pending_interaction_due",
-            actor_id="agent:citizen_1",
-            payload={
-                "interaction_id": "pend:q1",
-                "target_agent_id": "agent:off_1",
-                "source_agent_id": "agent:citizen_1",
-                "category": "external_queue_complaint_response",
-                "summary": "Подготовь ответ на внешнюю жалобу по очереди разрешений.",
-                "due_tick": 3,
-                "artifact_id": "art:queue_external_complaint_queue_permits",
-                "org_id": "org:city_hall",
-            },
-            audience=["agent:off_1"],
-        )
-    ]
-
-    outcome = asyncio.run(
-        auditor.inspect_tick(
-            state=state,
-            tick_events=tick_events,
-            recent_events=tick_events,
-        )
-    )
-
-    assert outcome.findings
-    assert outcome.findings[0].violation_type == "service_degradation_response_ignored"
-    assert outcome.findings[0].recommended_action == "request_explanation"
-    assert any(event.event_type == "audit_explanation_requested" for event in outcome.events)
-    assert any(op.__class__.__name__ == "OpenAuditCaseOp" for op in outcome.ops)
-
-
-def test_runtime_auditor_flags_expired_media_response_obligation() -> None:
-    state = _mk_state()
-    state.tick = 4
-    state.agents["agent:reporter_1"] = AgentState(
-        agent_id="agent:reporter_1",
-        name="agent:reporter_1",
-        internal=False,
-        capabilities=["message"],
-    )
-    state.registry.register(
-        EntityRecord(
-            entity_id="agent:reporter_1",
-            kind=EntityKind.AGENT,
-            created_by=None,
-            created_tick=0,
-            meta={"name": "agent:reporter_1"},
-        )
-    )
-    state.artifacts["art:queue_press_inquiry_queue_permits"] = ArtifactState(
-        artifact_id="art:queue_press_inquiry_queue_permits",
-        artifact_type="press_inquiry",
-        title="Публичный запрос по очереди",
-        summary="Журналист запрашивает комментарий по задержкам.",
-        owner_org_id="org:city_hall",
-        visibility="public",
-        status="active",
-        tags=["queue", "media"],
-    )
-    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
-
-    tick_events = [
-        Event(
-            tick=4,
-            event_type="pending_interaction_expired",
-            actor_id="agent:reporter_1",
-            payload={
-                "interaction_id": "pend:q2",
-                "target_agent_id": "agent:off_1",
-                "source_agent_id": "agent:reporter_1",
-                "category": "media_response",
-                "summary": "Подготовь реакцию на публичный запрос по очереди разрешений.",
-                "due_tick": 3,
-                "artifact_id": "art:queue_press_inquiry_queue_permits",
-                "org_id": "org:city_hall",
-                "reason": "deadline_passed",
-            },
-            audience=["agent:off_1"],
-        )
-    ]
-
-    outcome = asyncio.run(
-        auditor.inspect_tick(
-            state=state,
-            tick_events=tick_events,
-            recent_events=tick_events,
-        )
-    )
-
-    assert outcome.findings
-    assert outcome.findings[0].violation_type == "service_degradation_response_ignored"
-    assert outcome.findings[0].recommended_action == "open_case"
-    assert any(event.event_type == "audit_flagged" for event in outcome.events)
-    assert any(op.__class__.__name__ == "OpenAuditCaseOp" for op in outcome.ops)
-
-
 def test_runtime_auditor_keeps_distinct_targets_for_same_violation_type() -> None:
     state = _mk_state()
     state.agents["agent:off_3"] = AgentState(
@@ -908,7 +779,7 @@ def test_engine_runtime_auditor_emits_audit_events_and_unfreezes_after_duration(
     )
     mock = _TickOneAuditorProvider(
         structured_responses={
-            "Раунд (tick): 0\nТы: Off 1": {
+            "Сегодняшний рабочий день: 0.\nТы — Off 1.": {
                 "actions": [
                     {
                         "type": "send_message",
@@ -919,9 +790,9 @@ def test_engine_runtime_auditor_emits_audit_events_and_unfreezes_after_duration(
                     }
                 ]
             },
-            "Раунд (tick): 0\nТы: Off 2": {"actions": [{"type": "noop", "justification": ""}]},
-            "Раунд (tick): 1\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
-            "Раунд (tick): 1\nТы: Off 2": {
+            "Сегодняшний рабочий день: 0.\nТы — Off 2.": {"actions": [{"type": "noop", "justification": ""}]},
+            "Сегодняшний рабочий день: 1.\nТы — Off 1.": {"actions": [{"type": "noop", "justification": ""}]},
+            "Сегодняшний рабочий день: 1.\nТы — Off 2.": {
                 "actions": [
                     {
                         "type": "nominate_position_change",
@@ -932,8 +803,8 @@ def test_engine_runtime_auditor_emits_audit_events_and_unfreezes_after_duration(
                     }
                 ]
             },
-            "Раунд (tick): 2\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
-            "Раунд (tick): 2\nТы: Off 2": {
+            "Сегодняшний рабочий день: 2.\nТы — Off 1.": {"actions": [{"type": "noop", "justification": ""}]},
+            "Сегодняшний рабочий день: 2.\nТы — Off 2.": {
                 "actions": [
                     {
                         "type": "cast_vote",
@@ -943,10 +814,10 @@ def test_engine_runtime_auditor_emits_audit_events_and_unfreezes_after_duration(
                     }
                 ]
             },
-            "Раунд (tick): 3\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
-            "Раунд (tick): 3\nТы: Off 2": {"actions": [{"type": "noop", "justification": ""}]},
-            "Раунд (tick): 4\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
-            "Раунд (tick): 4\nТы: Off 2": {"actions": [{"type": "noop", "justification": ""}]},
+            "Сегодняшний рабочий день: 3.\nТы — Off 1.": {"actions": [{"type": "noop", "justification": ""}]},
+            "Сегодняшний рабочий день: 3.\nТы — Off 2.": {"actions": [{"type": "noop", "justification": ""}]},
+            "Сегодняшний рабочий день: 4.\nТы — Off 1.": {"actions": [{"type": "noop", "justification": ""}]},
+            "Сегодняшний рабочий день: 4.\nТы — Off 2.": {"actions": [{"type": "noop", "justification": ""}]},
         }
     )
 
@@ -965,3 +836,4 @@ def test_engine_runtime_auditor_emits_audit_events_and_unfreezes_after_duration(
     assert "reputation_frozen" in event_types
     assert "reputation_unfrozen" in event_types
     assert state.agents["agent:off_2"].reputation_frozen is False
+

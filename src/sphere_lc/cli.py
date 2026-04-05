@@ -91,7 +91,6 @@ def _cmd_compose(args: argparse.Namespace) -> None:
         composer.compose(
             description=description,
             ticks=int(args.ticks),
-            seed=int(args.seed),
             language=args.language,
         )
     )
@@ -145,7 +144,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_comp.add_argument("--description-file", type=str, default=None, help="Путь к файлу с описанием")
     p_comp.add_argument("--out", type=str, required=True, help="Куда сохранить сценарий (.yaml/.json)")
     p_comp.add_argument("--ticks", type=int, default=25)
-    p_comp.add_argument("--seed", type=int, default=42)
     p_comp.add_argument("--language", type=str, default="ru")
     p_comp.add_argument("--model", type=str, default=None)
     p_comp.add_argument("--base-url", type=str, default=None)

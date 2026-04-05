@@ -8,7 +8,7 @@ SPHERE — исследовательская платформа для аген
 
 Движок симуляции не привязан к конкретной предметной области — он оперирует универсальными абстракциями: свободное действие, полномочие (`work`, `dao`, `audit`, `spawn` как legacy/runtime-слой), сущность (агент, канал, организация, рабочий элемент). Конкретные сценарии — закупки, найм, согласование бюджета — задаются конфигурацией в YAML, а не кодом.
 
-Когнитивные агенты больше не выбирают typed action menu: они формулируют один свободный `proposal` на тик, а гибридный арбитр переводит этот proposal во внутренние детерминированные операции: сообщения, рабочие изменения, DAO-голосования, создание сущностей и другие последствия мира. Отдельный `RuntimeAuditor` в governance-слое анализирует уже совершённые события, эмитит audit-сигналы и может запускать заморозку роста репутации и коллегиальное review. Перед первым тиком движок может обогащать персоны в режиме `full` (биография + интервью + expert reflection), извлекать вторичных агентов из социального графа и в ходе симуляции добавлять новых участников через worldgen и системные runtime-контуры, но только с человеко-читаемыми именами и без role-alias дублей. Веб-интерфейс (FastAPI + React 19 + D3.js) обеспечивает визуализацию социального графа, ленту событий и управление симуляциями.
+Когнитивные агенты больше не выбирают typed action menu: они формулируют один свободный `proposal` на тик, а гибридный арбитр переводит этот proposal во внутренние детерминированные операции: сообщения, рабочие изменения, DAO-голосования, создание сущностей и другие последствия мира. Отдельный `RuntimeAuditor` в governance-слое анализирует уже совершённые события, эмитит audit-сигналы и может запускать заморозку роста репутации и коллегиальное review. Перед первым тиком движок может обогащать персоны в режиме `full` (биография + интервью + expert reflection), извлекать вторичных агентов из социального графа и в ходе симуляции добавлять новых участников через worldgen и системные runtime-контуры, но только с человеко-читаемыми именами и без machine-like display-name. Веб-интерфейс (FastAPI + React 19 + D3.js) обеспечивает визуализацию социального графа, ленту событий и управление симуляциями.
 
 ## Быстрый старт
 
@@ -37,28 +37,35 @@ cp .env.example .env
 
 ```bash
 # Минимальный сценарий
-sphere-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
+sphere-lc run --scenario scenarios/lc_minimal.json --out results/lc_minimal_run
 
 # Богатый demo-сценарий
-sphere-lc run --scenario scenarios/procurement_tender.yaml --out results/procurement_tender_run
+sphere-lc run --scenario scenarios/procurement_tender.json --out results/procurement_tender_run
 
 # Исследовательский core-governance run: без worldgen, без secondary-spawn
-sphere-lc run --scenario scenarios/procurement_tender_core_governance.yaml --out results/procurement_tender_core_run
+sphere-lc run --scenario scenarios/procurement_tender_core_governance.json --out results/procurement_tender_core_run
 
 # Исследовательский full-ecology run: full-persona + secondary-spawn + worldgen
-sphere-lc run --scenario scenarios/procurement_tender_full_ecology.yaml --out results/procurement_tender_full_run
+sphere-lc run --scenario scenarios/procurement_tender_full_ecology.json --out results/procurement_tender_full_run
 
 # Baseline-серия для главы 2: один procurement-сценарий в режимах G0-G3
-python scripts/run_chapter2_baseline.py --scenario scenarios/procurement_tender_core_governance.yaml --out results/chapter2_procurement_baseline --seeds 42 43 44
+python scripts/run_chapter2_baseline.py --scenario scenarios/procurement_tender_core_governance.json --out results/chapter2_procurement_baseline --repeats 3
 
 # Генерация сценария из текстового описания (LLM)
-sphere-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" --out scenarios/composed.yaml
+sphere-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" --out scenarios/composed.json
 
 # Пост-фактум анализ нарушений (LLM-оракул, чанкинг по events.jsonl)
 sphere-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
 ```
 
 При запуске `sphere-lc run` движок пишет `events.jsonl`, `trace.jsonl`, `truth.jsonl`, `evaluation.json`, `fidelity.json` и `summary.json` в директорию прогона. Если `--out` не указан, используется `results/<timestamp>`, поэтому прогон сразу доступен web-интерфейсу.
+
+PowerShell может подтянуть `.env` в текущий process без ручного `set`:
+
+```powershell
+. .\scripts\Import-DotEnv.ps1
+python -m sphere_lc.cli run --scenario scenarios/procurement_tender.json --out results/procurement_tender_run
+```
 
 ### Запуск веб-интерфейса
 

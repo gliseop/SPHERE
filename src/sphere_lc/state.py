@@ -69,21 +69,6 @@ class InformationClimateState:
 
 
 @dataclass(slots=True)
-class OperationalQueueState:
-    """Материальная operational queue: backlog, capacity, delay."""
-
-    queue_id: str
-    title: str
-    owner_org_id: str | None = None
-    zone_id: str | None = None
-    backlog: int = 0
-    capacity_per_tick: int = 0
-    avg_delay_ticks: int = 0
-    status: str = "stable"
-    pressure: str = ""
-
-
-@dataclass(slots=True)
 class InformalLinkState:
     """Неформальная связь или зависимость между агентами."""
 
@@ -105,7 +90,6 @@ class EnvironmentState:
     institutions: dict[str, InstitutionRegimeState] = field(default_factory=dict)
     zones: dict[str, ZoneState] = field(default_factory=dict)
     resource_pools: dict[str, ResourcePoolState] = field(default_factory=dict)
-    operational_queues: dict[str, OperationalQueueState] = field(default_factory=dict)
     information_climate: InformationClimateState = field(default_factory=InformationClimateState)
     informal_links: dict[str, InformalLinkState] = field(default_factory=dict)
 
@@ -115,7 +99,6 @@ class EnvironmentState:
         max_institutions: int = 12,
         max_zones: int = 12,
         max_resource_pools: int = 12,
-        max_operational_queues: int = 12,
         max_informal_links: int = 20,
     ) -> dict[str, Any]:
         """Вернуть компактный срез среды для журналов и worldgen."""
@@ -124,7 +107,6 @@ class EnvironmentState:
                 "institutions": len(self.institutions),
                 "zones": len(self.zones),
                 "resource_pools": len(self.resource_pools),
-                "operational_queues": len(self.operational_queues),
                 "informal_links": len(self.informal_links),
             },
             "institutions": [
@@ -162,20 +144,6 @@ class EnvironmentState:
                     "pressure": item.pressure,
                 }
                 for _, item in sorted(self.resource_pools.items())[:max_resource_pools]
-            ],
-            "operational_queues": [
-                {
-                    "queue_id": item.queue_id,
-                    "title": item.title,
-                    "owner_org_id": item.owner_org_id,
-                    "zone_id": item.zone_id,
-                    "backlog": int(item.backlog),
-                    "capacity_per_tick": int(item.capacity_per_tick),
-                    "avg_delay_ticks": int(item.avg_delay_ticks),
-                    "status": item.status,
-                    "pressure": item.pressure,
-                }
-                for _, item in sorted(self.operational_queues.items())[:max_operational_queues]
             ],
             "information_climate": {
                 "public_mood": self.information_climate.public_mood,
@@ -522,7 +490,6 @@ class WorldState:
                 "votes": len(self.registry.list_ids(EntityKind.VOTE)),
                 "zones": len(self.registry.list_ids(EntityKind.ZONE)),
                 "resource_pools": len(self.registry.list_ids(EntityKind.RESOURCE)),
-                "operational_queues": len(self.environment.operational_queues),
                 "audit_cases": len(self.audit_cases),
             },
             "environment": self.environment.snapshot_dict(),

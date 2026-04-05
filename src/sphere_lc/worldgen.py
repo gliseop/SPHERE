@@ -87,17 +87,6 @@ class _ResourcePoolUpdateModel(BaseModel):
     pressure: str | None = None
 
 
-class _OperationalQueueUpdateModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    queue_id: str
-    backlog: int | None = None
-    capacity_per_tick: int | None = None
-    avg_delay_ticks: int | None = None
-    status: str | None = None
-    pressure: str | None = None
-
-
 class _InformationClimateUpdateModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -218,18 +207,6 @@ class ResourcePoolUpdate:
 
 
 @dataclass(slots=True)
-class OperationalQueueUpdate:
-    """Изменение operational queue среды."""
-
-    queue_id: str
-    backlog: int | None = None
-    capacity_per_tick: int | None = None
-    avg_delay_ticks: int | None = None
-    status: str | None = None
-    pressure: str | None = None
-
-
-@dataclass(slots=True)
 class InformationClimateUpdate:
     """Изменение глобального информационного климата."""
 
@@ -260,7 +237,6 @@ class EnvironmentUpdates:
     institutions: list[InstitutionUpdate] = field(default_factory=list)
     zones: list[ZoneUpdate] = field(default_factory=list)
     resource_pools: list[ResourcePoolUpdate] = field(default_factory=list)
-    operational_queues: list[OperationalQueueUpdate] = field(default_factory=list)
     information_climate: InformationClimateUpdate | None = None
     informal_links: list[InformalLinkUpdate] = field(default_factory=list)
 
@@ -399,22 +375,6 @@ def _worldgen_schema(
                                 "pressure": {"type": ["string", "null"]},
                             },
                             "required": ["resource_id"],
-                        },
-                    },
-                    "operational_queues": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "queue_id": {"type": "string"},
-                                "backlog": {"type": ["integer", "null"]},
-                                "capacity_per_tick": {"type": ["integer", "null"]},
-                                "avg_delay_ticks": {"type": ["integer", "null"]},
-                                "status": {"type": ["string", "null"]},
-                                "pressure": {"type": ["string", "null"]},
-                            },
-                            "required": ["queue_id"],
                         },
                     },
                     "information_climate": {
@@ -844,27 +804,6 @@ class WorldGenerator:
                         ResourcePoolUpdate(
                             resource_id=resource_id,
                             quantity=float(raw.quantity) if raw.quantity is not None else None,
-                            status=(raw.status or "").strip() or None,
-                            pressure=(raw.pressure or "").strip() or None,
-                        )
-                    )
-
-            operational_queues_raw = environment_updates_raw.get("operational_queues") or []
-            if isinstance(operational_queues_raw, list):
-                for item in operational_queues_raw:
-                    try:
-                        raw = _OperationalQueueUpdateModel.model_validate(item)
-                    except Exception:
-                        continue
-                    queue_id = raw.queue_id.strip()
-                    if not queue_id:
-                        continue
-                    environment_updates.operational_queues.append(
-                        OperationalQueueUpdate(
-                            queue_id=queue_id,
-                            backlog=int(raw.backlog) if raw.backlog is not None else None,
-                            capacity_per_tick=int(raw.capacity_per_tick) if raw.capacity_per_tick is not None else None,
-                            avg_delay_ticks=int(raw.avg_delay_ticks) if raw.avg_delay_ticks is not None else None,
                             status=(raw.status or "").strip() or None,
                             pressure=(raw.pressure or "").strip() or None,
                         )

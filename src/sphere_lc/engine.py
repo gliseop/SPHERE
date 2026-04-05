@@ -55,8 +55,6 @@ from .ops import (
     UpdateResourcePoolOp,
     UpdateArtifactOp,
     UpdateZoneStateOp,
-    UpdateOperationalQueueOp,
-    UpsertOperationalQueueOp,
 )
 from .persona import (
     INTERVIEW_QUESTIONS_V2,
@@ -74,7 +72,6 @@ from .state import (
     InformationClimateState,
     InformalLinkState,
     InstitutionRegimeState,
-    OperationalQueueState,
     PendingInteractionState,
     ResourcePoolState,
     ZoneState,
@@ -84,10 +81,8 @@ from .tracing import TraceLog
 from .truth import TruthDetector, TruthLog
 from .utils import (
     looks_like_machine_name,
-    looks_like_role_label,
     normalize_agent_display_name,
     redact_numbers,
-    social_name_key,
 )
 from .worldgen import (
     AgentDailyContext,
@@ -108,12 +103,6 @@ _SAME_TICK_PENDING_CATEGORIES = frozenset(
         "reply",
         "artifact_follow_up",
         "resource_pressure",
-        "queue_pressure",
-        "queue_escalation",
-        "queue_publication_push",
-        "issue_coordination",
-        "external_queue_complaint_response",
-        "media_response",
     }
 )
 
@@ -278,7 +267,6 @@ class WorldEngine:
         # История событий, доступная для агентов (для MVP храним в памяти).
         events_history: list[Event] = []
 
-        fired_scripted_events: set[str] = set()
         graph_app = None
         if self.cfg.runtime.use_langgraph:
             try:
@@ -337,16 +325,6 @@ class WorldEngine:
             scene_hooks_by_agent: dict[str, list[SceneHook]] = {}
             already_acted: set[str] = set()
             current_date, current_time = self._world_time_labels(tick=state.tick)
-
-            scripted_events = self._emit_scripted_events(
-                state=state,
-                tick=state.tick,
-                recent_events=events_history,
-                fired_ids=fired_scripted_events,
-            )
-            if scripted_events:
-                event_log.extend(scripted_events)
-                tick_events.extend(scripted_events)
 
             pending_due_events = self._emit_pending_interaction_due_events(
                 state=state,
@@ -500,21 +478,6 @@ class WorldEngine:
                         event_log=event_log,
                     )
                 )
-
-            queue_process_events = self._apply_operational_queue_processes(
-                state=state,
-                tick_events=tick_events,
-                event_log=event_log,
-            )
-            if queue_process_events:
-                tick_events.extend(queue_process_events)
-                queue_consequence_events = self._apply_environment_material_consequences(
-                    state=state,
-                    tick_events=queue_process_events,
-                    event_log=event_log,
-                )
-                if queue_consequence_events:
-                    tick_events.extend(queue_consequence_events)
 
             new_agents = self._detect_new_agents(state=state, runners=runners)
             if new_agents:
@@ -821,12 +784,6 @@ class WorldEngine:
         )
 
     def _environment_timeline_entry(self, *, state: WorldState, tick_events: list[Event]) -> dict[str, Any]:
-        queue_actor_counts: dict[str, int] = {}
-        for agent in state.agents.values():
-            role = str(agent.population_role or "").strip()
-            if not role.startswith("queue_"):
-                continue
-            queue_actor_counts[role] = queue_actor_counts.get(role, 0) + 1
         pending_by_category: dict[str, int] = {}
         for interaction in state.pending_interactions.values():
             if interaction.status != "open":
@@ -838,7 +795,6 @@ class WorldEngine:
             "environment": state.environment.snapshot_dict(),
             "pending_interactions_open": len([item for item in state.pending_interactions.values() if item.status == "open"]),
             "pending_interactions_by_category": pending_by_category,
-            "queue_actor_counts": queue_actor_counts,
             "tick_event_types": sorted({str(event.event_type or "") for event in tick_events if str(event.event_type or "").strip()}),
         }
 
@@ -856,11 +812,8 @@ class WorldEngine:
         open_pending = [item for item in state.pending_interactions.values() if item.status == "open"]
         completed_pending = [item for item in state.pending_interactions.values() if item.status == "completed"]
         expired_pending = [item for item in state.pending_interactions.values() if item.status == "expired"]
-        queue_roles: dict[str, int] = {}
         spawn_sources: dict[str, int] = {}
         for agent in state.agents.values():
-            if agent.population_role:
-                queue_roles[agent.population_role] = queue_roles.get(agent.population_role, 0) + 1
             if agent.spawn_source:
                 spawn_sources[agent.spawn_source] = spawn_sources.get(agent.spawn_source, 0) + 1
         payload = {
@@ -875,7 +828,6 @@ class WorldEngine:
                     for category in sorted({item.category for item in open_pending if item.category})
                 },
             },
-            "queue_actor_roles": queue_roles,
             "spawn_sources": spawn_sources,
         }
         self.artifacts.environment_summary_path.write_text(
@@ -1165,11 +1117,11 @@ class WorldEngine:
             logger.warning("Failed to write status sidecar: %s", exc)
 
     def _agent_order(self, *, state: WorldState, tick: int) -> list[str]:
-        """Детерминированный порядок агентов на тик (использует seed)."""
-        order = sorted(state.agents.keys())
-        rnd = random.Random(int(self.cfg.seed) + int(tick))
-        rnd.shuffle(order)
-        return order
+        """Детерминированный порядок агентов на тик."""
+        return sorted(
+            state.agents.keys(),
+            key=lambda agent_id: hashlib.sha1(f"{tick}|{agent_id}".encode("utf-8")).hexdigest(),
+        )
 
     def _world_time_labels(self, *, tick: int) -> tuple[str | None, str | None]:
         simulated = self.cfg.runtime.simulated_datetime(tick)
@@ -1481,14 +1433,6 @@ class WorldEngine:
             if pool is None:
                 return False
             return bool(agent.org_id) and pool.owner_org_id == agent.org_id
-        if event.event_type == "environment_operational_queue_updated":
-            queue_id = str(payload.get("queue_id") or "")
-            queue = state.environment.operational_queues.get(queue_id)
-            if queue is None:
-                return False
-            return (bool(agent.org_id) and queue.owner_org_id == agent.org_id) or (
-                bool(agent.zone_id) and queue.zone_id == agent.zone_id
-            )
         if event.event_type == "environment_information_climate_updated":
             return True
         if event.event_type == "environment_informal_link_updated":
@@ -1558,55 +1502,6 @@ class WorldEngine:
                 )
             )
         return events
-
-    def _emit_scripted_events(
-        self,
-        *,
-        state: WorldState,
-        tick: int,
-        recent_events: list[Event],
-        fired_ids: set[str],
-    ) -> list[Event]:
-        emitted: list[Event] = []
-        if not self.cfg.scripted_events:
-            return emitted
-
-        for idx, scripted in enumerate(self.cfg.scripted_events):
-            event_id = scripted.event_id.strip() or f"scripted:{idx}"
-            if scripted.once and event_id in fired_ids:
-                continue
-
-            has_trigger = scripted.tick is not None or bool(scripted.if_event_types) or bool(scripted.if_work_ids_open)
-            if scripted.tick is not None and scripted.tick != tick:
-                continue
-            if not has_trigger and scripted.once and tick != 0:
-                continue
-            if scripted.if_event_types:
-                recent_types = {str(ev.event_type or "") for ev in recent_events[-200:]}
-                if not all(event_type in recent_types for event_type in scripted.if_event_types):
-                    continue
-            if scripted.if_work_ids_open:
-                open_work_ids = {wid for wid, work in state.work_items.items() if work.status == "open"}
-                if not all(work_id in open_work_ids for work_id in scripted.if_work_ids_open):
-                    continue
-
-            audience = [PUBLIC_AUDIENCE] if scripted.audience == "public" else [INTERNAL_AUDIENCE]
-            emitted.append(
-                Event(
-                    tick=tick,
-                    event_type="world_event",
-                    actor_id=None,
-                    payload={
-                        "description": scripted.description,
-                        "source": "scripted",
-                        "scripted_event_id": event_id,
-                    },
-                    audience=audience,
-                )
-            )
-            if scripted.once:
-                fired_ids.add(event_id)
-        return emitted
 
     def _story_event_text(self, *, event: Event) -> str:
         payload = event.payload or {}
@@ -1806,40 +1701,6 @@ class WorldEngine:
         )
 
     @staticmethod
-    def _match_existing_agent_for_role_alias(
-        *,
-        state: WorldState,
-        link_name: str,
-        relation: str,
-    ) -> str | None:
-        normalized_name = normalize_agent_display_name(link_name)
-        if not normalized_name or not looks_like_role_label(normalized_name):
-            return None
-
-        name_key = social_name_key(normalized_name)
-        relation_key = social_name_key(relation)
-        for aid, agent in sorted(state.agents.items()):
-            title_key = social_name_key(agent.title)
-            if not title_key:
-                continue
-            if name_key and name_key == title_key:
-                return aid
-            if relation_key and relation_key == title_key:
-                return aid
-        return None
-
-    @staticmethod
-    def _secondary_link_is_concrete_person(link: SocialLink) -> bool:
-        normalized_name = normalize_agent_display_name(link.name)
-        if not normalized_name:
-            return False
-        if looks_like_machine_name(link.name):
-            return False
-        if looks_like_role_label(normalized_name):
-            return False
-        return True
-
-    @staticmethod
     def _match_existing_agent_for_social_link(
         *,
         state: WorldState,
@@ -1983,29 +1844,9 @@ class WorldEngine:
                         primary_id,
                     )
                     continue
-                role_alias_agent_id = self._match_existing_agent_for_role_alias(
-                    state=state,
-                    link_name=link.name,
-                    relation=link.relation,
-                )
-                if role_alias_agent_id is not None:
-                    existing_refs.setdefault(
-                        role_alias_agent_id,
-                        {
-                            "link_name": link.name,
-                            "sources": [],
-                        },
-                    )["sources"].append((primary_id, primary.name, link.relation))
+                if looks_like_machine_name(link.name):
                     logger.info(
-                        "Skipping role-alias social link %r from %s; mapped to existing agent %s",
-                        link.name,
-                        primary_id,
-                        role_alias_agent_id,
-                    )
-                    continue
-                if not self._secondary_link_is_concrete_person(link):
-                    logger.info(
-                        "Skipping abstract secondary social link %r (%s) from %s",
+                        "Skipping machine-like secondary social link %r (%s) from %s",
                         link.name,
                         link.relation,
                         primary_id,
@@ -2191,8 +2032,6 @@ class WorldEngine:
             display_name = normalize_agent_display_name(spawn.name, fallback=spawn.slug)
             if not display_name:
                 continue
-            if looks_like_role_label(display_name):
-                continue
             if self._match_existing_agent_for_social_link(state=state, link_name=display_name) is not None:
                 continue
             display_name_key = social_link_name_key(display_name)
@@ -2330,7 +2169,6 @@ class WorldEngine:
             not updates.institutions
             and not updates.zones
             and not updates.resource_pools
-            and not updates.operational_queues
             and updates.information_climate is None
             and not updates.informal_links
         ):
@@ -2363,18 +2201,6 @@ class WorldEngine:
                 UpdateResourcePoolOp(
                     resource_id=item.resource_id,
                     quantity=item.quantity,
-                    status=item.status,
-                    pressure=item.pressure,
-                )
-            )
-        for item in updates.operational_queues:
-            ops.append(
-                UpsertOperationalQueueOp(
-                    queue_id=item.queue_id,
-                    title=item.queue_id,
-                    backlog=item.backlog,
-                    capacity_per_tick=item.capacity_per_tick,
-                    avg_delay_ticks=item.avg_delay_ticks,
                     status=item.status,
                     pressure=item.pressure,
                 )
@@ -2478,6 +2304,7 @@ class WorldEngine:
             )
         return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_artifact")
 
+
     def _apply_environment_material_consequences(
         self,
         *,
@@ -2485,634 +2312,114 @@ class WorldEngine:
         tick_events: list[Event],
         event_log: EventLog,
     ) -> list[Event]:
-        resource_ids: list[str] = []
-        queue_ids: list[str] = []
-        seen_resources: set[str] = set()
-        seen_queues: set[str] = set()
-        for event in tick_events:
-            payload = event.payload or {}
-            if event.event_type == "environment_resource_updated":
-                resource_id = str(payload.get("resource_id") or "").strip()
-                if resource_id and resource_id not in seen_resources:
-                    seen_resources.add(resource_id)
-                    resource_ids.append(resource_id)
-                continue
-            if event.event_type == "environment_operational_queue_updated":
-                queue_id = str(payload.get("queue_id") or "").strip()
-                if queue_id and queue_id not in seen_queues:
-                    seen_queues.add(queue_id)
-                    queue_ids.append(queue_id)
-        if not resource_ids and not queue_ids:
-            return []
-
         ops: list[StateOp] = []
-        queue_shadow: dict[str, OperationalQueueState] = {
-            queue_id: OperationalQueueState(
-                queue_id=queue.queue_id,
-                title=queue.title,
-                owner_org_id=queue.owner_org_id,
-                zone_id=queue.zone_id,
-                backlog=int(queue.backlog),
-                capacity_per_tick=int(queue.capacity_per_tick),
-                avg_delay_ticks=int(queue.avg_delay_ticks),
-                status=queue.status,
-                pressure=queue.pressure,
-            )
-            for queue_id, queue in state.environment.operational_queues.items()
-        }
-        touched_queue_ids: set[str] = set(queue_ids)
-        for resource_id in resource_ids:
+        emitted: list[Event] = []
+        handled_resources: set[str] = set()
+        stable_statuses = {"stable", "normal", "ok", "routine"}
+
+        for event in tick_events:
+            if event.event_type != "environment_resource_updated":
+                continue
+            resource_id = str((event.payload or {}).get("resource_id") or "").strip()
+            if not resource_id or resource_id in handled_resources:
+                continue
+            handled_resources.add(resource_id)
+
             pool = state.environment.resource_pools.get(resource_id)
             if pool is None:
                 continue
-            parsed = parse_typed_id(resource_id)
-            artifact_id = make_id(EntityKind.ARTIFACT, f"resource_alert_{parsed.slug}")
-            tags = ["resource", pool.status]
-            if pool.owner_org_id:
-                tags.append("org_bound")
-            if pool.pressure:
-                tags.append("pressure")
-            tags = [tag for tag in tags if tag]
-            is_alert = bool(pool.pressure.strip()) or pool.quantity <= 0 or pool.status not in {"stable", "normal", "ok", "routine"}
-            summary = (
-                f"Ресурс {pool.title} ({resource_id}) перешёл в состояние '{pool.status}'. "
-                f"Остаток: {pool.quantity}{(' ' + pool.unit) if pool.unit else ''}."
-            )
-            if pool.pressure:
-                summary += f" Давление: {pool.pressure}"
 
-            current = state.artifacts.get(artifact_id)
-            if current is not None or is_alert:
-                desired_status = "active" if is_alert else "resolved"
-                desired_title = f"Сигнал по ресурсу: {pool.title}"
-                if current is None:
-                    ops.append(
-                        CreateArtifactOp(
-                            created_by=None,
-                            artifact_id=artifact_id,
-                            artifact_type="resource_alert",
-                            title=desired_title,
-                            summary=summary,
-                            owner_org_id=pool.owner_org_id,
-                            visibility="internal",
-                            status=desired_status,
-                            tags=tags,
-                        )
-                    )
-                elif (
-                    current.title != desired_title
-                    or current.summary != summary
-                    or current.status != desired_status
-                    or list(current.tags) != tags
-                ):
+            parsed = parse_typed_id(resource_id)
+            alert_id = make_id(
+                EntityKind.ARTIFACT,
+                f"resource_alert_{normalize_slug(parsed.slug, fallback='resource')}",
+            )
+            title = f"Сигнал по ресурсу: {pool.title or resource_id}"
+            summary = (
+                f"Ресурс {pool.title or resource_id} перешёл в состояние {pool.status or 'strained'} "
+                f"при остатке {pool.quantity}{(' ' + pool.unit) if pool.unit else ''}."
+            ).strip()
+            if pool.pressure:
+                summary = f"{summary} Давление: {pool.pressure}".strip()
+
+            is_pressure = bool((pool.pressure or "").strip()) or pool.quantity <= 0 or (pool.status or "").strip().lower() not in stable_statuses
+            if is_pressure:
+                if alert_id in state.artifacts:
                     ops.append(
                         UpdateArtifactOp(
                             actor_id=None,
-                            artifact_id=artifact_id,
-                            title=desired_title,
+                            artifact_id=alert_id,
+                            title=title,
                             summary=summary,
-                            status=desired_status,
-                            tags=tags,
+                            status="active",
+                            visibility="internal",
+                            tags=["resource", "pressure"],
                         )
                     )
-
-            if not pool.owner_org_id:
-                continue
-            severity = 2 if pool.quantity <= 0 or pool.status in {"critical", "depleted", "exhausted"} else 1 if is_alert else -1
-            linked_queues = [
-                queue
-                for queue in queue_shadow.values()
-                if queue.owner_org_id == pool.owner_org_id
-            ]
-            for queue in linked_queues:
-                touched_queue_ids.add(queue.queue_id)
-                next_backlog = max(0, int(queue.backlog) + severity)
-                if severity > 0:
-                    next_delay = int(queue.avg_delay_ticks) + 1
-                    next_status = (
-                        "overloaded"
-                        if next_backlog > max(int(queue.capacity_per_tick), 1) * 2 or next_delay >= 2
-                        else "strained"
-                    )
-                    next_pressure = (pool.pressure or "").strip() or f"Ресурс {pool.title} замедляет обработку очереди."
                 else:
-                    next_delay = max(0, int(queue.avg_delay_ticks) - 1)
-                    next_status = "stable" if next_backlog == 0 and next_delay == 0 else "recovering"
-                    next_pressure = "" if next_status == "stable" else queue.pressure
-                if (
-                    next_backlog != queue.backlog
-                    or next_delay != queue.avg_delay_ticks
-                    or next_status != queue.status
-                    or next_pressure != queue.pressure
-                ):
                     ops.append(
-                        UpdateOperationalQueueOp(
-                            queue_id=queue.queue_id,
-                            backlog=next_backlog,
-                            capacity_per_tick=queue.capacity_per_tick,
-                            avg_delay_ticks=next_delay,
-                            status=next_status,
-                            pressure=next_pressure,
+                        CreateArtifactOp(
+                            created_by=None,
+                            artifact_id=alert_id,
+                            artifact_type="resource_alert",
+                            title=title,
+                            summary=summary,
+                            owner_org_id=pool.owner_org_id,
+                            related_work_id=None,
+                            visibility="internal",
+                            status="active",
+                            tags=["resource", "pressure"],
                         )
                     )
-                    queue_shadow[queue.queue_id] = OperationalQueueState(
-                        queue_id=queue.queue_id,
-                        title=queue.title,
-                        owner_org_id=queue.owner_org_id,
-                        zone_id=queue.zone_id,
-                        backlog=next_backlog,
-                        capacity_per_tick=queue.capacity_per_tick,
-                        avg_delay_ticks=next_delay,
-                        status=next_status,
-                        pressure=next_pressure,
-                    )
-
-        for queue_id in sorted(touched_queue_ids):
-            queue = queue_shadow.get(queue_id)
-            if queue is None:
-                continue
-            artifact_id = make_id(EntityKind.ARTIFACT, f"queue_alert_{normalize_slug(queue.queue_id)}")
-            tags = ["queue", queue.status]
-            if queue.owner_org_id:
-                tags.append("org_bound")
-            if queue.zone_id:
-                tags.append("zone_bound")
-            if queue.pressure:
-                tags.append("pressure")
-            tags = [tag for tag in tags if tag]
-            is_alert = (
-                queue.backlog > max(int(queue.capacity_per_tick), 1)
-                or queue.avg_delay_ticks > 0
-                or queue.status not in {"stable", "normal", "ok", "routine"}
-            )
-            summary = (
-                f"Очередь {queue.title} ({queue.queue_id}) имеет backlog={queue.backlog}, "
-                f"capacity={queue.capacity_per_tick}/tick, avg_delay={queue.avg_delay_ticks}."
-            )
-            if queue.pressure:
-                summary += f" Давление: {queue.pressure}"
-            current = state.artifacts.get(artifact_id)
-            if current is None and not is_alert:
-                continue
-            desired_status = "active" if is_alert else "resolved"
-            desired_title = f"Сигнал очереди: {queue.title}"
-            if current is None:
-                ops.append(
-                    CreateArtifactOp(
-                        created_by=None,
-                        artifact_id=artifact_id,
-                        artifact_type="queue_alert",
-                        title=desired_title,
-                        summary=summary,
-                        owner_org_id=queue.owner_org_id,
-                        zone_id=queue.zone_id,
-                        visibility="internal",
-                        status=desired_status,
-                        tags=tags,
+                emitted.append(
+                    Event(
+                        tick=state.tick,
+                        event_type="world_event",
+                        actor_id=None,
+                        payload={
+                            "source": "resource_pressure",
+                            "resource_id": resource_id,
+                            "description": summary,
+                        },
+                        audience=[INTERNAL_AUDIENCE],
                     )
                 )
-                continue
-            if (
-                current.title != desired_title
-                or current.summary != summary
-                or current.status != desired_status
-                or list(current.tags) != tags
-            ):
+            elif alert_id in state.artifacts and state.artifacts[alert_id].status != "resolved":
                 ops.append(
                     UpdateArtifactOp(
                         actor_id=None,
-                        artifact_id=artifact_id,
-                        title=desired_title,
-                        summary=summary,
-                        status=desired_status,
-                        tags=tags,
+                        artifact_id=alert_id,
+                        summary=f"Ресурс {pool.title or resource_id} вернулся в стабильное состояние.",
+                        status="resolved",
+                        visibility="internal",
                     )
                 )
-
-        climate = state.environment.information_climate
-        next_active_signals = list(climate.active_signals)
-        next_public_mood = climate.public_mood
-        next_media_pressure = climate.media_pressure
-        climate_changed = False
-        world_events: list[Event] = []
-        existing_agent_ids = set(state.registry.list_ids()) | set(state.agents.keys())
-        reserved_name_keys = {
-            social_link_name_key(agent.name)
-            for agent in state.agents.values()
-            if social_link_name_key(agent.name)
-        }
-        queued_agent_spawns = 0
-        queue_role_agent_ids: dict[tuple[str, str], str] = {}
-
-        for queue_id in sorted(touched_queue_ids):
-            queue = queue_shadow.get(queue_id)
-            if queue is None:
-                continue
-            queue_slug = normalize_slug(queue.queue_id)
-            complaint_artifact_id = make_id(EntityKind.ARTIFACT, f"complaint_wave_{queue_slug}")
-            publication_artifact_id = make_id(EntityKind.ARTIFACT, f"queue_publication_{queue_slug}")
-            complaint_signal = f"очередь {queue.queue_id} перегружена"
-            complaint_active = (
-                queue.backlog > max(int(queue.capacity_per_tick), 1)
-                or queue.avg_delay_ticks >= 2
-                or queue.status == "overloaded"
-            )
-            publication_active = complaint_active and (
-                queue.status == "overloaded"
-                or bool((climate.media_pressure or "").strip())
-                or bool((climate.oversight_attention or "").strip())
-            )
-
-            complaint_summary = (
-                f"По {queue.title} ({queue.queue_id}) накапливается жалобный фон: "
-                f"backlog={queue.backlog}, avg_delay={queue.avg_delay_ticks}, status={queue.status}."
-            )
-            if queue.pressure:
-                complaint_summary += f" Давление: {queue.pressure}"
-            publication_summary = (
-                f"В публичном поле обсуждаются задержки по {queue.title} ({queue.queue_id}). "
-                f"backlog={queue.backlog}, avg_delay={queue.avg_delay_ticks}."
-            )
-
-            current_complaint = state.artifacts.get(complaint_artifact_id)
-            if current_complaint is not None or complaint_active:
-                desired_status = "active" if complaint_active else "resolved"
-                desired_title = f"Волна жалоб: {queue.title}"
-                if current_complaint is None:
-                    ops.append(
-                        CreateArtifactOp(
-                            created_by=None,
-                            artifact_id=complaint_artifact_id,
-                            artifact_type="complaint_wave",
-                            title=desired_title,
-                            summary=complaint_summary,
-                            owner_org_id=queue.owner_org_id,
-                            zone_id=queue.zone_id,
-                            visibility="public",
-                            status=desired_status,
-                            tags=["complaint", "queue", queue.status],
-                        )
-                    )
-                elif (
-                    current_complaint.title != desired_title
-                    or current_complaint.summary != complaint_summary
-                    or current_complaint.status != desired_status
-                    or list(current_complaint.tags) != ["complaint", "queue", queue.status]
-                ):
-                    ops.append(
-                        UpdateArtifactOp(
-                            actor_id=None,
-                            artifact_id=complaint_artifact_id,
-                            title=desired_title,
-                            summary=complaint_summary,
-                            status=desired_status,
-                            tags=["complaint", "queue", queue.status],
-                        )
-                    )
-
-            current_publication = state.artifacts.get(publication_artifact_id)
-            if current_publication is not None or publication_active:
-                desired_status = "active" if publication_active else "resolved"
-                desired_title = f"Публикация о задержках: {queue.title}"
-                if current_publication is None:
-                    ops.append(
-                        CreateArtifactOp(
-                            created_by=None,
-                            artifact_id=publication_artifact_id,
-                            artifact_type="publication",
-                            title=desired_title,
-                            summary=publication_summary,
-                            owner_org_id=queue.owner_org_id,
-                            zone_id=queue.zone_id,
-                            visibility="public",
-                            status=desired_status,
-                            tags=["publication", "queue", queue.status],
-                        )
-                    )
-                elif (
-                    current_publication.title != desired_title
-                    or current_publication.summary != publication_summary
-                    or current_publication.status != desired_status
-                    or list(current_publication.tags) != ["publication", "queue", queue.status]
-                ):
-                    ops.append(
-                        UpdateArtifactOp(
-                            actor_id=None,
-                            artifact_id=publication_artifact_id,
-                            title=desired_title,
-                            summary=publication_summary,
-                            status=desired_status,
-                            tags=["publication", "queue", queue.status],
-                        )
-                    )
-
-            if complaint_active and complaint_signal not in next_active_signals:
-                next_active_signals.append(complaint_signal)
-                climate_changed = True
-            if not complaint_active and complaint_signal in next_active_signals:
-                next_active_signals = [item for item in next_active_signals if item != complaint_signal]
-                climate_changed = True
-            if complaint_active and not next_public_mood.strip():
-                next_public_mood = f"Растёт раздражение из-за задержек по {queue.title}."
-                climate_changed = True
-            if publication_active and not next_media_pressure.strip():
-                next_media_pressure = f"Локальные медиа поднимают тему задержек по {queue.title}."
-                climate_changed = True
-
-            if complaint_active and (current_complaint is None or current_complaint.status != "active"):
-                world_events.append(
-                    Event.public(
+                emitted.append(
+                    Event(
                         tick=state.tick,
                         event_type="world_event",
                         actor_id=None,
                         payload={
-                            "description": f"По {queue.title} растут задержки и жалобы заявителей.",
-                            "source": "queue_process",
-                            "queue_id": queue.queue_id,
+                            "source": "resource_recovery",
+                            "resource_id": resource_id,
+                            "description": f"Ресурс {pool.title or resource_id} стабилизирован.",
                         },
-                    )
-                )
-            if not complaint_active and current_complaint is not None and current_complaint.status == "active":
-                world_events.append(
-                    Event.public(
-                        tick=state.tick,
-                        event_type="world_event",
-                        actor_id=None,
-                        payload={
-                            "description": f"По {queue.title} ситуация с жалобами начала стабилизироваться.",
-                            "source": "queue_recovery",
-                            "queue_id": queue.queue_id,
-                        },
-                    )
-                )
-            if publication_active and (current_publication is None or current_publication.status != "active"):
-                world_events.append(
-                    Event.public(
-                        tick=state.tick,
-                        event_type="world_event",
-                        actor_id=None,
-                        payload={
-                            "description": f"В публичном поле обсуждают задержки по {queue.title}.",
-                            "source": "queue_publication",
-                            "queue_id": queue.queue_id,
-                        },
+                        audience=[INTERNAL_AUDIENCE],
                     )
                 )
 
-            if self.cfg.runtime.allow_runtime_spawn and len(state.agents) + queued_agent_spawns < self.cfg.runtime.max_agents:
-                queue_slug = normalize_slug(queue.queue_id)
-                queue_roles = []
-                if complaint_active:
-                    queue_roles.append("complainant")
-                if publication_active:
-                    queue_roles.append("reporter")
-                for role in queue_roles:
-                    blueprint_id = f"queue_process:{queue_slug}:{role}"
-                    existing_agent = next((agent for agent in state.agents.values() if agent.blueprint_id == blueprint_id), None)
-                    if existing_agent is not None:
-                        queue_role_agent_ids[(queue.queue_id, role)] = existing_agent.agent_id
-                        continue
-                    queued_op = next(
-                        (
-                            op
-                            for op in ops
-                            if isinstance(op, CreateAgentOp) and op.blueprint_id == blueprint_id
-                        ),
-                        None,
-                    )
-                    if queued_op is not None:
-                        queue_role_agent_ids[(queue.queue_id, role)] = queued_op.entity_id
-                        continue
-                    display_name = self._pick_queue_process_display_name(
-                        queue_id=queue.queue_id,
-                        role=role,
-                        reserved_name_keys=reserved_name_keys,
-                    )
-                    display_name_key = social_link_name_key(display_name)
-                    if display_name_key:
-                        reserved_name_keys.add(display_name_key)
-                    entity_id = make_unique_id(
-                        EntityKind.AGENT,
-                        f"{queue_slug}_{role}",
-                        existing_ids=existing_agent_ids,
-                        fallback=role,
-                    )
-                    existing_agent_ids.add(entity_id)
-                    queue_role_agent_ids[(queue.queue_id, role)] = entity_id
-                    persona_hint = (
-                        f"Столкнулся с задержками по {queue.title}, раздражён и склонен добиваться ответа."
-                        if role == "complainant"
-                        else f"Следит за задержками по {queue.title} и ищет публично значимую историю."
-                    )
-                    ops.append(
-                        CreateAgentOp(
-                            entity_id=entity_id,
-                            name=display_name,
-                            internal=False,
-                            persona_hint=persona_hint,
-                            capabilities=Arbiter._sanitize_spawn_capabilities([], internal=False),
-                            org_id=queue.owner_org_id,
-                            zone_id=queue.zone_id,
-                            spawn_source="queue_process",
-                            blueprint_id=blueprint_id,
-                            population_role=f"queue_{role}",
-                            created_by=None,
-                            created_tick=state.tick,
-                        )
-                    )
-                    queued_agent_spawns += 1
-                    if len(state.agents) + queued_agent_spawns >= self.cfg.runtime.max_agents:
-                        break
-
-            complainant_id = queue_role_agent_ids.get((queue.queue_id, "complainant"))
-            reporter_id = queue_role_agent_ids.get((queue.queue_id, "reporter"))
-
-            if complaint_active and complainant_id:
-                earliest_tick, due_tick = self._pending_schedule_for_category(state=state, category="queue_escalation")
-                interaction_id = self._make_pending_interaction_id("queue_escalation", complainant_id, queue.queue_id)
-                ops.append(
-                    UpsertPendingInteractionOp(
-                        actor_id=None,
-                        interaction_id=interaction_id,
-                        target_agent_id=complainant_id,
-                        category="queue_escalation",
-                        summary=(
-                            f"Подними жалобу по {queue.title}: можно написать в {queue.owner_org_id or 'организацию'} "
-                            f"или выйти в публичный канал с сигналом о задержках."
-                        ),
-                        earliest_tick=earliest_tick,
-                        due_tick=due_tick,
-                        priority="high" if queue.status == "overloaded" else "normal",
-                        trigger_event_type="environment_operational_queue_updated",
-                        org_id=queue.owner_org_id,
-                        zone_id=queue.zone_id,
-                    )
-                )
-
-            if publication_active and reporter_id:
-                earliest_tick, due_tick = self._pending_schedule_for_category(
-                    state=state,
-                    category="queue_publication_push",
-                )
-                interaction_id = self._make_pending_interaction_id("queue_publication_push", reporter_id, queue.queue_id)
-                ops.append(
-                    UpsertPendingInteractionOp(
-                        actor_id=None,
-                        interaction_id=interaction_id,
-                        target_agent_id=reporter_id,
-                        source_agent_id=complainant_id,
-                        category="queue_publication_push",
-                        summary=(
-                            f"Подними тему задержек по {queue.title} публично или запроси комментарий у {queue.owner_org_id or 'организации'}."
-                        ),
-                        earliest_tick=earliest_tick,
-                        due_tick=due_tick,
-                        priority="high" if queue.status == "overloaded" else "normal",
-                        trigger_event_type="environment_operational_queue_updated",
-                        org_id=queue.owner_org_id,
-                        zone_id=queue.zone_id,
-                    )
-                )
-
-            if complainant_id and reporter_id and complainant_id != reporter_id:
-                ops.append(
-                    UpsertInformalLinkOp(
-                        actor_id=None,
-                        agent_a_id=complainant_id,
-                        agent_b_id=reporter_id,
-                        link_type="shared_issue",
-                        strength=0.55,
-                        visibility="emerging",
-                        pressure=f"Обе стороны завязаны на проблемную очередь {queue.queue_id}.",
-                        source="queue_process",
-                    )
-                )
-                earliest_tick, coordination_due = self._pending_schedule_for_category(
-                    state=state,
-                    category="issue_coordination",
-                )
-                ops.append(
-                    UpsertPendingInteractionOp(
-                        actor_id=None,
-                        interaction_id=self._make_pending_interaction_id("issue_coordination", reporter_id, complainant_id, queue.queue_id),
-                        target_agent_id=reporter_id,
-                        source_agent_id=complainant_id,
-                        category="issue_coordination",
-                        summary=f"Свяжись с {complainant_id} и собери конкретику по задержкам в {queue.title}.",
-                        earliest_tick=earliest_tick,
-                        due_tick=coordination_due,
-                        priority="normal",
-                        trigger_event_type="environment_operational_queue_updated",
-                        org_id=queue.owner_org_id,
-                        zone_id=queue.zone_id,
-                    )
-                )
-
-        if climate_changed:
-            ops.append(
-                UpdateInformationClimateOp(
-                    public_mood=next_public_mood,
-                    media_pressure=next_media_pressure,
-                    active_signals=next_active_signals,
-                )
-            )
-
-        emitted = self._apply_ops(state=state, ops=ops, event_log=event_log, origin="environment_material")
-        if world_events:
-            event_log.extend(world_events)
-            emitted.extend(world_events)
+        if ops:
+            emitted = self._apply_ops(
+                state=state,
+                ops=ops,
+                event_log=event_log,
+                origin="environment_material",
+            ) + emitted
+        if emitted:
+            world_events = [event for event in emitted if event.event_type == "world_event"]
+            if world_events:
+                event_log.extend(world_events)
         return emitted
-
-    def _apply_operational_queue_processes(
-        self,
-        *,
-        state: WorldState,
-        tick_events: list[Event],
-        event_log: EventLog,
-    ) -> list[Event]:
-        if not state.environment.operational_queues:
-            return []
-
-        touched_queue_ids = {
-            str((event.payload or {}).get("queue_id") or "").strip()
-            for event in tick_events
-            if event.event_type == "environment_operational_queue_updated"
-        }
-        service_actions_by_agent: dict[str, int] = {}
-        for event in tick_events:
-            if event.event_type not in {"work_item_created", "work_note_added", "work_proposal_submitted", "artifact_updated"}:
-                continue
-            actor_id = str(event.actor_id or "").strip()
-            if actor_id and actor_id in state.agents:
-                service_actions_by_agent[actor_id] = service_actions_by_agent.get(actor_id, 0) + 1
-
-        ops: list[StateOp] = []
-        for queue_id, queue in sorted(state.environment.operational_queues.items()):
-            if queue_id in touched_queue_ids:
-                continue
-            relevant_actions = 0
-            for agent_id, count in service_actions_by_agent.items():
-                agent = state.agents.get(agent_id)
-                if agent is None:
-                    continue
-                if queue.owner_org_id and agent.org_id == queue.owner_org_id:
-                    relevant_actions += count
-                    continue
-                if queue.zone_id and agent.zone_id == queue.zone_id:
-                    relevant_actions += count
-
-            capacity = max(0, int(queue.capacity_per_tick))
-            backlog = max(0, int(queue.backlog))
-            delay = max(0, int(queue.avg_delay_ticks))
-            natural_incoming = 1 if backlog > 0 or queue.status in {"strained", "overloaded", "recovering"} else 0
-            escalation_incoming = 1 if queue.status == "overloaded" and relevant_actions == 0 else 0
-            incoming = natural_incoming + escalation_incoming
-            throughput = 0
-            if backlog > 0 and capacity > 0:
-                throughput = min(capacity, 1 + max(0, relevant_actions))
-            next_backlog = max(0, backlog + incoming - throughput)
-            if next_backlog < backlog or relevant_actions > 0:
-                next_delay = max(0, delay - 1)
-            elif next_backlog > max(capacity, 1):
-                next_delay = delay + 1
-            elif next_backlog == 0:
-                next_delay = 0
-            else:
-                next_delay = delay
-
-            if next_backlog == 0 and next_delay == 0:
-                next_status = "stable"
-                next_pressure = ""
-            elif next_backlog > max(capacity, 1) * 2 or next_delay >= 3:
-                next_status = "overloaded"
-                next_pressure = queue.pressure or "Очередь не справляется с накопившимися задачами."
-            elif next_backlog > max(capacity, 1) or next_delay >= 1:
-                next_status = "strained"
-                next_pressure = queue.pressure or "Очередь начинает буксовать."
-            else:
-                next_status = "recovering" if queue.status in {"strained", "overloaded"} else queue.status
-                next_pressure = "" if next_status == "recovering" else queue.pressure
-
-            if (
-                next_backlog != backlog
-                or next_delay != delay
-                or next_status != queue.status
-                or next_pressure != queue.pressure
-            ):
-                ops.append(
-                    UpdateOperationalQueueOp(
-                        queue_id=queue_id,
-                        backlog=next_backlog,
-                        capacity_per_tick=capacity,
-                        avg_delay_ticks=next_delay,
-                        status=next_status,
-                        pressure=next_pressure,
-                    )
-                )
-
-        if not ops:
-            return []
-        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="operational_queue_process")
 
     @staticmethod
     def _make_pending_interaction_id(*parts: str) -> str:
@@ -3122,95 +2429,20 @@ class WorldEngine:
         slug = "_".join(part for part in slug_parts if part)[:48].strip("_") or "item"
         return f"pend:{slug}_{digest}"
 
-    @staticmethod
-    def _queue_process_name_pool(*, role: str) -> list[str]:
-        if role == "complainant":
-            return [
-                "Ирина Климова",
-                "Павел Власов",
-                "Марина Ершова",
-                "Сергей Дроздов",
-                "Елена Лапина",
-                "Андрей Рябов",
-            ]
-        return [
-            "Ольга Савельева",
-            "Дмитрий Корнеев",
-            "Наталья Белова",
-            "Алексей Фомин",
-            "Татьяна Лазарева",
-            "Игорь Чистяков",
-        ]
-
-    def _pick_queue_process_display_name(
-        self,
-        *,
-        queue_id: str,
-        role: str,
-        reserved_name_keys: set[str],
-    ) -> str:
-        pool = self._queue_process_name_pool(role=role)
-        start_index = int(hashlib.sha1(f"{queue_id}|{role}".encode("utf-8")).hexdigest(), 16) % len(pool)
-        for offset in range(len(pool)):
-            candidate = pool[(start_index + offset) % len(pool)]
-            key = social_link_name_key(candidate)
-            if not key or key in reserved_name_keys:
-                continue
-            return candidate
-        fallback = pool[start_index]
-        suffix = 2
-        while True:
-            candidate = f"{fallback} {suffix}"
-            key = social_link_name_key(candidate)
-            if key and key not in reserved_name_keys:
-                return candidate
-            suffix += 1
-
-    def _pending_due_tick(self, *, earliest_tick: int) -> int:
-        horizon = max(0, int(self.cfg.runtime.pending_interaction_horizon_ticks))
-        return int(earliest_tick) + max(0, horizon)
-
     def _pending_schedule_for_category(
         self,
         *,
         state: WorldState,
         category: str,
     ) -> tuple[int, int]:
-        same_tick_enabled = int(self.cfg.runtime.micro_reaction_rounds) > 0
-        earliest_tick = int(state.tick) if (same_tick_enabled and category in _SAME_TICK_PENDING_CATEGORIES) else int(state.tick) + 1
-        return earliest_tick, self._pending_due_tick(earliest_tick=earliest_tick)
+        """Вернуть окно реакции для pending-interaction текущего тика."""
+        current_tick = int(state.tick)
+        horizon = max(0, int(self.cfg.runtime.pending_interaction_horizon_ticks))
+        same_tick_categories = _SAME_TICK_PENDING_CATEGORIES
+        earliest_tick = current_tick if category in same_tick_categories else current_tick + 1
+        due_tick = earliest_tick + horizon + (1 if category in same_tick_categories else 0)
+        return earliest_tick, due_tick
 
-    def _queue_process_context_for_agent(
-        self,
-        *,
-        state: WorldState,
-        agent_id: str,
-    ) -> tuple[str, OperationalQueueState] | None:
-        agent = state.agents.get(agent_id)
-        if agent is None or agent.spawn_source != "queue_process":
-            return None
-        blueprint_id = str(agent.blueprint_id or "")
-        parts = blueprint_id.split(":")
-        if len(parts) < 3 or parts[0] != "queue_process":
-            return None
-        queue_slug = parts[1]
-        for queue_id, queue in state.environment.operational_queues.items():
-            if normalize_slug(queue_id) == queue_slug:
-                return queue_id, queue
-        return None
-
-    @staticmethod
-    def _queue_internal_agent_ids(*, state: WorldState, queue: OperationalQueueState) -> list[str]:
-        selected: list[str] = []
-        for aid, agent in sorted(state.agents.items()):
-            if not agent.internal:
-                continue
-            if queue.owner_org_id and agent.org_id == queue.owner_org_id:
-                selected.append(aid)
-                continue
-            if queue.zone_id and agent.zone_id == queue.zone_id:
-                selected.append(aid)
-        return selected
 
     def _expire_pending_interactions(
         self,
@@ -3389,52 +2621,6 @@ class WorldEngine:
                 )
             return ops
 
-        if event.event_type == "environment_operational_queue_updated":
-            queue_id = str(payload.get("queue_id") or "").strip()
-            queue = state.environment.operational_queues.get(queue_id)
-            if queue is None:
-                return ops
-            is_pressure = (
-                queue.backlog > max(int(queue.capacity_per_tick), 1)
-                or queue.avg_delay_ticks > 0
-                or queue.status not in {"stable", "normal", "ok", "routine"}
-                or bool((queue.pressure or "").strip())
-            )
-            if not is_pressure:
-                return ops
-            priority = "high" if queue.status == "overloaded" or queue.avg_delay_ticks >= 2 else "normal"
-            earliest_tick, due_tick = self._pending_schedule_for_category(state=state, category="queue_pressure")
-            for aid, agent in sorted(state.agents.items()):
-                if "work" not in agent.capabilities:
-                    continue
-                if queue.owner_org_id and agent.org_id == queue.owner_org_id:
-                    pass
-                elif queue.zone_id and agent.zone_id == queue.zone_id:
-                    pass
-                else:
-                    continue
-                interaction_id = self._make_pending_interaction_id("queue", aid, queue_id)
-                ops.append(
-                    UpsertPendingInteractionOp(
-                        actor_id=event.actor_id,
-                        interaction_id=interaction_id,
-                        target_agent_id=aid,
-                        category="queue_pressure",
-                        summary=(
-                            f"Нужно отреагировать на очередь {queue_id}: backlog={queue.backlog}, "
-                            f"delay={queue.avg_delay_ticks}, status={queue.status}."
-                            f"{(' Давление: ' + queue.pressure) if queue.pressure else ''}"
-                        ),
-                        earliest_tick=earliest_tick,
-                        due_tick=due_tick,
-                        priority=priority,
-                        trigger_event_type=event.event_type,
-                        org_id=queue.owner_org_id,
-                        zone_id=queue.zone_id,
-                    )
-                )
-            return ops
-
         if event.event_type in {"audit_explanation_requested", "audit_documents_requested"}:
             target_id = str(payload.get("subject_agent_id") or payload.get("target_agent_id") or "").strip()
             if target_id in state.agents:
@@ -3457,145 +2643,6 @@ class WorldEngine:
                     )
                 )
             return ops
-
-        if event.event_type == "message_sent":
-            actor_id = str(event.actor_id or "").strip()
-            queue_ctx = self._queue_process_context_for_agent(state=state, agent_id=actor_id)
-            if queue_ctx is None:
-                return ops
-            queue_id, queue = queue_ctx
-            actor = state.agents.get(actor_id)
-            if actor is None:
-                return ops
-            to_id = str(payload.get("to_id") or "").strip()
-            text = str(payload.get("text") or "").strip()
-            private = bool(payload.get("private", True))
-            queue_slug = normalize_slug(queue_id)
-            internal_agent_ids = self._queue_internal_agent_ids(state=state, queue=queue)
-            current_climate = state.environment.information_climate
-
-            if actor.population_role == "queue_complainant" and not private and to_id.startswith("org:"):
-                earliest_tick, due_tick = self._pending_schedule_for_category(
-                    state=state,
-                    category="external_queue_complaint_response",
-                )
-                artifact_id = make_id(EntityKind.ARTIFACT, f"queue_external_complaint_{queue_slug}")
-                title = f"Внешняя жалоба по очереди: {queue.title}"
-                summary = f"{actor.name} направил жалобу по {queue.title}. {text}".strip()
-                current_artifact = state.artifacts.get(artifact_id)
-                if current_artifact is None:
-                    ops.append(
-                        CreateArtifactOp(
-                            created_by=actor_id,
-                            artifact_id=artifact_id,
-                            artifact_type="external_complaint",
-                            title=title,
-                            summary=summary,
-                            owner_org_id=queue.owner_org_id,
-                            zone_id=queue.zone_id,
-                            visibility="internal",
-                            status="active",
-                            tags=["queue", "complaint", queue.status],
-                        )
-                    )
-                elif current_artifact.summary != summary or current_artifact.status != "active":
-                    ops.append(
-                        UpdateArtifactOp(
-                            actor_id=actor_id,
-                            artifact_id=artifact_id,
-                            summary=summary,
-                            status="active",
-                            tags=["queue", "complaint", queue.status],
-                        )
-                    )
-                signal = f"внешняя жалоба по {queue.queue_id}"
-                if signal not in current_climate.active_signals:
-                    ops.append(AddInformationSignalOp(actor_id=actor_id, signal=signal))
-                if not current_climate.public_mood.strip():
-                    ops.append(
-                        UpdateInformationClimateOp(
-                            public_mood=f"Недовольство по {queue.title} выходит наружу.",
-                        )
-                    )
-                for internal_id in internal_agent_ids:
-                    ops.append(
-                        UpsertPendingInteractionOp(
-                            actor_id=actor_id,
-                            interaction_id=self._make_pending_interaction_id("queue_complaint_response", internal_id, actor_id, queue_id),
-                            target_agent_id=internal_id,
-                            source_agent_id=actor_id,
-                            category="external_queue_complaint_response",
-                            summary=f"Подготовь ответ на внешнюю жалобу {actor_id} по {queue.title}.",
-                            earliest_tick=earliest_tick,
-                            due_tick=due_tick,
-                            priority="high",
-                            trigger_event_type=event.event_type,
-                            artifact_id=artifact_id,
-                            org_id=queue.owner_org_id,
-                            zone_id=queue.zone_id,
-                        )
-                    )
-                return ops
-
-            if actor.population_role == "queue_reporter" and not private and (to_id.startswith("chan:") or to_id.startswith("org:")):
-                earliest_tick, due_tick = self._pending_schedule_for_category(state=state, category="media_response")
-                artifact_id = make_id(EntityKind.ARTIFACT, f"queue_press_inquiry_{queue_slug}")
-                title = f"Публичный запрос по очереди: {queue.title}"
-                summary = f"{actor.name} вынес тему задержек по {queue.title} в публичное поле. {text}".strip()
-                current_artifact = state.artifacts.get(artifact_id)
-                if current_artifact is None:
-                    ops.append(
-                        CreateArtifactOp(
-                            created_by=actor_id,
-                            artifact_id=artifact_id,
-                            artifact_type="press_inquiry",
-                            title=title,
-                            summary=summary,
-                            owner_org_id=queue.owner_org_id,
-                            zone_id=queue.zone_id,
-                            visibility="public",
-                            status="active",
-                            tags=["queue", "media", queue.status],
-                        )
-                    )
-                elif current_artifact.summary != summary or current_artifact.status != "active":
-                    ops.append(
-                        UpdateArtifactOp(
-                            actor_id=actor_id,
-                            artifact_id=artifact_id,
-                            summary=summary,
-                            status="active",
-                            tags=["queue", "media", queue.status],
-                        )
-                    )
-                signal = f"публичное давление по {queue.queue_id}"
-                if signal not in current_climate.active_signals:
-                    ops.append(AddInformationSignalOp(actor_id=actor_id, signal=signal))
-                if not current_climate.media_pressure.strip():
-                    ops.append(
-                        UpdateInformationClimateOp(
-                            media_pressure=f"Нужен комментарий по {queue.title}.",
-                        )
-                    )
-                for internal_id in internal_agent_ids:
-                    ops.append(
-                        UpsertPendingInteractionOp(
-                            actor_id=actor_id,
-                            interaction_id=self._make_pending_interaction_id("media_response", internal_id, actor_id, queue_id),
-                            target_agent_id=internal_id,
-                            source_agent_id=actor_id,
-                            category="media_response",
-                            summary=f"Подготовь реакцию на публичный запрос/публикацию {actor_id} по {queue.title}.",
-                            earliest_tick=earliest_tick,
-                            due_tick=due_tick,
-                            priority="high",
-                            trigger_event_type=event.event_type,
-                            artifact_id=artifact_id,
-                            org_id=queue.owner_org_id,
-                            zone_id=queue.zone_id,
-                        )
-                    )
-                return ops
 
         return ops
 
@@ -3630,38 +2677,6 @@ class WorldEngine:
                 "artifact_updated",
                 "message_sent",
             }
-        if interaction.category == "queue_pressure":
-            return event.event_type in {
-                "work_item_created",
-                "work_note_added",
-                "work_proposal_submitted",
-                "artifact_updated",
-                "message_sent",
-            }
-        if interaction.category == "queue_escalation":
-            if event.event_type != "message_sent":
-                return False
-            to_id = str(payload.get("to_id") or "").strip()
-            return bool(to_id) and (to_id.startswith("org:") or to_id.startswith("chan:"))
-        if interaction.category == "queue_publication_push":
-            if event.event_type == "publish":
-                return True
-            if event.event_type != "message_sent":
-                return False
-            return not bool(payload.get("private", True))
-        if interaction.category == "issue_coordination":
-            return (
-                event.event_type == "message_sent"
-                and interaction.source_agent_id is not None
-                and str(payload.get("to_id") or "").strip() == interaction.source_agent_id
-            )
-        if interaction.category in {"external_queue_complaint_response", "media_response"}:
-            if event.event_type != "message_sent":
-                return False
-            to_id = str(payload.get("to_id") or "").strip()
-            if interaction.source_agent_id and to_id == interaction.source_agent_id:
-                return True
-            return to_id.startswith("org:") or to_id.startswith("chan:")
         if interaction.category == "audit_response":
             return event.event_type in {
                 "message_sent",
@@ -3790,7 +2805,6 @@ class WorldEngine:
                 }
             )
         return {
-            "seed": int(self.cfg.seed),
             "language": self.cfg.runtime.language,
             "persona_enrich_mode": self.cfg.runtime.persona_enrich_mode,
             "llm_model": self.cfg.llm.model,
@@ -4022,23 +3036,6 @@ class WorldEngine:
                 unit=pool.unit,
                 status=pool.status,
                 pressure=pool.pressure,
-            )
-
-        for queue in self.cfg.world.environment.operational_queues:
-            if queue.owner_org_id is not None and not state.registry.exists(queue.owner_org_id):
-                raise ValueError(f"Unknown owner_org_id for operational queue {queue.queue_id!r}: {queue.owner_org_id!r}")
-            if queue.zone_id is not None and queue.zone_id not in state.environment.zones:
-                raise ValueError(f"Unknown zone_id for operational queue {queue.queue_id!r}: {queue.zone_id!r}")
-            state.environment.operational_queues[queue.queue_id] = OperationalQueueState(
-                queue_id=queue.queue_id,
-                title=queue.title,
-                owner_org_id=queue.owner_org_id,
-                zone_id=queue.zone_id,
-                backlog=int(queue.backlog),
-                capacity_per_tick=int(queue.capacity_per_tick),
-                avg_delay_ticks=int(queue.avg_delay_ticks),
-                status=queue.status,
-                pressure=queue.pressure,
             )
 
         info = self.cfg.world.environment.information_climate
@@ -4347,18 +3344,6 @@ class WorldEngine:
                     for aid, agent in sorted(state.agents.items()):
                         if agent.org_id == pool.owner_org_id:
                             _push(aid)
-                continue
-
-            if event.event_type == "environment_operational_queue_updated":
-                queue_id = str(payload.get("queue_id") or "")
-                queue = state.environment.operational_queues.get(queue_id)
-                if queue is None:
-                    continue
-                for aid, agent in sorted(state.agents.items()):
-                    if queue.owner_org_id and agent.org_id == queue.owner_org_id:
-                        _push(aid)
-                    elif queue.zone_id and agent.zone_id == queue.zone_id:
-                        _push(aid)
                 continue
 
             if event.event_type == "environment_information_climate_updated":
@@ -4990,3 +3975,5 @@ def default_artifacts(out_dir: str | Path) -> RunArtifacts:
         evaluation_path=d / "evaluation.json",
         perf_summary_path=d / "perf_summary.json",
     )
+
+

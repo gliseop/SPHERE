@@ -97,7 +97,7 @@ def _write_names_json(run_name: str, scenario_id: str, governance: str) -> None:
     режимов управления, чтобы они отображались на графе с именами.
 
     Args:
-        run_name: Имя прогона (S1_G1_seed42).
+        run_name: Имя прогона (например, S1_G1_web).
         scenario_id: Идентификатор сценария (S0, S1, S2).
         governance: Идентификатор режима управления (G0-G3).
     """
@@ -178,7 +178,6 @@ def _build_run_metadata(
     run_name: str,
     scenario_config: dict,
     governance: str,
-    seed: int,
     runner_type: str,
     variant: str | None,
     started_at: datetime,
@@ -225,7 +224,6 @@ def _build_run_metadata(
         "scenario_id": str(scenario_config.get("scenario_id") or "").strip() or None,
         "scenario_title": title,
         "governance": str(governance or "").strip(),
-        "seed": int(seed),
         "runner_type": runner_type,
         "variant": variant or runner_type,
         "ticks_total": ticks_total,
@@ -298,7 +296,6 @@ def _read_run_metadata_for_name(run_name: str) -> dict[str, object]:
 def launch_simulation_from_config(
     scenario_config: dict,
     governance: str,
-    seed: int = 42,
     runner_type: str = "cognitive",
     rounds: int = 10,
     variant: str | None = None,
@@ -319,7 +316,6 @@ def launch_simulation_from_config(
             None = определить из env.
     """
     config = dict(scenario_config or {})
-    config["seed"] = int(seed)
     if rounds is not None:
         config["ticks"] = int(rounds)
     resolved_parallel_agents, resolved_parallel_workers, resolved_parallel_window = (
@@ -334,7 +330,6 @@ def launch_simulation_from_config(
     base_name = _make_run_name(
         scenario=str(config.get("scenario_id") or config.get("id") or config.get("title") or "scenario"),
         governance=governance,
-        seed=seed,
         variant=variant or runner_type,
     )
     run_name, out_dir = _reserve_run_dir(base_name)
@@ -356,7 +351,6 @@ def launch_simulation_from_config(
                 run_name=run_name,
                 scenario_config=config,
                 governance=governance,
-                seed=seed,
                 runner_type=runner_type,
                 variant=variant or runner_type,
                 started_at=started_at,
@@ -433,7 +427,6 @@ def launch_simulation_from_config(
 def launch_simulation(
     scenario: str,
     governance: str,
-    seed: int = 42,
     runner_type: str = "cognitive",
     rounds: int = 10,
     *,
@@ -448,7 +441,6 @@ def launch_simulation(
     Args:
         scenario: Идентификатор сценария (S0, S1, S2).
         governance: Идентификатор режима управления (G0-G3).
-        seed: Начальное значение для генератора случайных чисел.
         runner_type: Тип раннера (mock или cognitive).
         rounds: Количество раундов.
 
@@ -466,7 +458,6 @@ def launch_simulation(
     return launch_simulation_from_config(
         scenario_config=payload,
         governance=governance,
-        seed=seed,
         runner_type=runner_type,
         rounds=rounds,
         variant=runner_type,
@@ -482,12 +473,11 @@ def _make_run_name(
     *,
     scenario: str,
     governance: str,
-    seed: int,
     variant: str | None,
 ) -> str:
     scenario_slug = _safe_run_part(str(scenario or "scenario"))
     governance_slug = _safe_run_part(str(governance or "G0"))
-    parts = [scenario_slug, governance_slug, f"seed{int(seed)}"]
+    parts = [scenario_slug, governance_slug]
     if variant:
         parts.append(_safe_run_part(variant))
     return "_".join(part for part in parts if part)

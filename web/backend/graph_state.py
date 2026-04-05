@@ -78,7 +78,6 @@ class GraphStateBuilder:
     agents: dict[str, dict] = field(default_factory=dict)
     edges: dict[tuple[str, str], float] = field(default_factory=dict)
     _thread_strength: dict[str, float] = field(default_factory=dict)
-    environment_queues: dict[str, dict] = field(default_factory=dict)
     environment_signals: list[str] = field(default_factory=list)
     information_climate: dict[str, Any] = field(
         default_factory=lambda: {
@@ -177,22 +176,6 @@ class GraphStateBuilder:
                     self.agents[target]["position_title"] = new_title
             return
 
-        if event_type == "environment_operational_queue_updated":
-            queue_id = str(payload.get("queue_id", "") or "")
-            if queue_id:
-                self.environment_queues[queue_id] = {
-                    "queue_id": queue_id,
-                    "title": str(payload.get("title", self.environment_queues.get(queue_id, {}).get("title", queue_id)) or queue_id),
-                    "backlog": int(_as_float(payload.get("backlog", 0), default=0.0)),
-                    "capacity_per_tick": int(_as_float(payload.get("capacity_per_tick", 0), default=0.0)),
-                    "avg_delay_ticks": int(_as_float(payload.get("avg_delay_ticks", 0), default=0.0)),
-                    "status": str(payload.get("status", "") or ""),
-                    "pressure": str(payload.get("pressure", "") or ""),
-                    "owner_org_id": str(payload.get("owner_org_id", "") or ""),
-                    "zone_id": str(payload.get("zone_id", "") or ""),
-                }
-            return
-
         if event_type == "environment_information_climate_updated":
             signals = payload.get("active_signals") or []
             if isinstance(signals, list):
@@ -259,7 +242,6 @@ class GraphStateBuilder:
             "nodes": nodes,
             "edges": edge_list,
             "environment": {
-                "queues": list(self.environment_queues.values()),
                 "active_signals": list(self.environment_signals),
                 "information_climate": dict(self.information_climate),
                 "informal_links": sorted(

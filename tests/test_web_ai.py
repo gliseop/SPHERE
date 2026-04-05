@@ -73,7 +73,6 @@ def _minimal_sim_config() -> dict:
         "version": 1,
         "title": "Secondary Demo",
         "description": "Проверка генерации вторичных агентов.",
-        "seed": 7,
         "ticks": 4,
         "runtime": {"parallel_agents": True},
         "agents": [

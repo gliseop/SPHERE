@@ -10,7 +10,6 @@ YAML-файлы с полной конфигурацией сценария. К�
 version: 1
 title: "LC Minimal"
 description: "Минимальный пример сценария."
-seed: 42
 ticks: 3
 
 llm:
@@ -144,29 +143,12 @@ world:
         unit: "тыс. руб."
         status: "strained"
         pressure: "Сроки поджимают."
-    operational_queues:
-      - queue_id: "queue:permits"
-        title: "Очередь разрешений"
-        owner_org_id: "org:admin"
-        zone_id: "zone:main_office"
-        backlog: 6
-        capacity_per_tick: 2
-        avg_delay_ticks: 2
-        status: "strained"
-        pressure: "Заявки копятся быстрее, чем их успевают разбирать."
     information_climate:
       public_mood: "Раздражение из-за задержек."
       oversight_attention: "Повышенное."
       media_pressure: "Локальные медиа ищут тему."
       narrative_temperature: "Напряжённая повестка."
       active_signals: ["жалобы на ремонт"]
-
-scripted_events:
-  - event_id: "fork_deadline"
-    tick: 2
-    audience: "internal"
-    description: "Министерство требует ускорить подготовку документов до конца недели."
-    once: true
 ```
 
 ### Блоки конфигурации
@@ -179,7 +161,6 @@ scripted_events:
 | `memory` | Рабочий буфер, долгосрочный индекс, веса retrieval, эмбеддинги |
 | `agents` | Список агентов с ID, именем, персоной, полномочиями |
 | `world` | Каналы, организации, рабочие элементы, `artifacts` и стартовый `environment`-слой |
-| `scripted_events` | Предопределённые внешние события / развилки сценария |
 
 Поле `agents[].initial_reputation` задаёт стартовую репутацию внутреннего агента. Движок применяет её при инициализации `WorldState`, а первый `reputation_snapshot` в `events.jsonl` отражает именно это значение.
 
@@ -224,19 +205,7 @@ scripted_events:
 | `freeform_truth_window_ticks` | `int` | Размер окна событий для `FreeformTruthRecorder` |
 | `agent_prompt` | `object` | Декларативные prompt-guardrails для когнитивного агента: дополнительные правила адресации, хорошие/плохие примеры и scenario-specific подсказки |
 
-### `scripted_events`
-
-`ScenarioConfig.scripted_events` позволяет задать предопределённые события мира без изменения кода движка.
-
-| Поле | Тип | Назначение |
-|---|---|---|
-| `event_id` | `str` | Стабильный ID scripted-события; если пуст, движок сгенерирует `scripted:{index}` |
-| `tick` | `int \| null` | Если задан, событие эмитится на конкретном тике |
-| `if_event_types` | `list[str]` | Необязательные условия: какие типы событий должны уже встретиться в истории |
-| `if_work_ids_open` | `list[str]` | Необязательные условия: какие work items должны быть в статусе `open` |
-| `audience` | `public` / `internal` | Аудитория `world_event` |
-| `description` | `str` | Текст внешнего события |
-| `once` | `bool` | При `true` scripted event срабатывает только один раз |
+`ScenarioConfig` больше не содержит `seed` и `scripted_events`. Повторяемость authoring-конфига обеспечивается детерминированным runtime-порядком, а внешний фон моделируется через `worldgen`, `world.artifacts`, `information_climate` и реальные действия агентов.
 
 ### `agent_daily_context` (prompt-layer)
 
@@ -286,7 +255,7 @@ scripted_events:
 - эмитить `pending_interaction_due`, когда локальное обязательство доходит до адресата;
 - закрывать его через `pending_interaction_completed` или `pending_interaction_expired`.
 
-Если `runtime.micro_reaction_rounds > 0`, часть локальных категорий (`reply`, `artifact_follow_up`, `resource_pressure`, `queue_pressure`, `queue_escalation`, `queue_publication_push`, `issue_coordination`, `external_queue_complaint_response`, `media_response`) может переходить в `pending_interaction_due` уже в том же тике и закрываться через same-tick follow-up без ожидания следующего глобального шага.
+Если `runtime.micro_reaction_rounds > 0`, часть локальных категорий (`reply`, `artifact_follow_up`, `resource_pressure`) может переходить в `pending_interaction_due` уже в том же тике и закрываться через same-tick follow-up без ожидания следующего глобального шага.
 
 ### Ключевые поля `memory`
 
@@ -362,7 +331,6 @@ Post-worldgen теперь также может возвращать:
 | `institution_modes` | `InstitutionRegimeConfig[]` | Операционные режимы организаций (`org:*`) |
 | `zones` | `ZoneConfig[]` | Зоны/территории среды с собственными режимами доступа и прозрачности |
 | `resource_pools` | `ResourcePoolConfig[]` | Ресурсные контуры с количеством, владельцем и текущим давлением |
-| `operational_queues` | `OperationalQueueConfig[]` | Material queues / backlog-контуры с пропускной способностью, задержкой и operational pressure |
 | `information_climate` | `InformationClimateConfig` | Глобальный информационный фон мира |
 | `informal_links` | `InformalLinkConfig[]` | Стартовые неформальные связи и зависимости между агентами |
 | `population_blueprints` | `PopulationBlueprintConfig[]` | Шаблоны для систематического наращивания периферийной агентности вокруг `org:*` / `zone:*` |
@@ -374,53 +342,12 @@ Post-worldgen теперь также может возвращать:
 - попадает в `state_snapshot`, который видит worldgen;
 - не заменяет собой `orgs`/`work_items`, а существует параллельно им.
 
-Post-worldgen может дополнительно вернуть `environment_updates`, которые движок применяет детерминированно к `org:*`, `zone:*` и `res:*`. Для `operational_queues` движок теперь поддерживает `upsert`: очередь может либо обновиться, либо materialize по `queue_id`, если её ещё не было. На текущем этапе поддерживаются:
+Post-worldgen может дополнительно вернуть `environment_updates`, которые движок применяет детерминированно к `org:*`, `zone:*` и `res:*`. На текущем этапе поддерживаются:
 
 - обновление режимов организаций;
 - обновление режимов зон;
 - обновление ресурсных пулов;
-- обновление operational queues;
 - обновление глобального информационного климата.
-
-### `world.environment.operational_queues`
-
-`OperationalQueueConfig` задаёт материализованные operational queues: backlog’и, задержки и пропускную способность процессов вокруг организации или зоны.
-
-| Поле | Тип | Назначение |
-|---|---|---|
-| `queue_id` | `str` | Стабильный ID очереди |
-| `title` | `str` | Человеко-читаемое название |
-| `owner_org_id` | `org:* \| null` | Какая организация несёт ответственность за очередь |
-| `zone_id` | `zone:* \| null` | В какой зоне локализована очередь |
-| `backlog` | `int` | Текущий накопленный хвост задач / заявок |
-| `capacity_per_tick` | `int` | Сколько единиц очередь в среднем способна обработать за тик |
-| `avg_delay_ticks` | `int` | Средняя задержка обработки в тиках |
-| `status` | `str` | Качественное состояние (`stable`, `strained`, `overloaded`, `recovering`) |
-| `pressure` | `str` | Текстовое описание текущего operational pressure |
-
-Этот слой нужен для того, чтобы материальные ограничения мира проявлялись не только через `res:*`, но и через накопление backlog / просрочки.
-
-В текущем runtime поверх таких очередей уже могут детерминированно появляться:
-
-- `queue_alert` — внутренний сигнал перегрузки;
-- `complaint_wave` — публичная волна жалоб;
-- `publication` — публичное обсуждение задержек;
-- `world_event` и допсигналы в `information_climate.active_signals`.
-
-Дополнительно эти очереди теперь участвуют в per-tick process loop: без реакции backlog и delay могут продолжать ухудшаться, а при реальной `work`-активности релевантных агентов очередь может перейти в `recovering` / `stable` и закрыть complaint/publication-контур.
-
-При включённом `runtime.allow_runtime_spawn` тот же service-degradation контур теперь может детерминированно порождать внешних акторов с `spawn_source="queue_process"` и `population_role` вроде `queue_complainant` / `queue_reporter`.
-
-Для таких акторов движок дополнительно может seed’ить:
-
-- `pending_interactions` категорий `queue_escalation`, `queue_publication_push`, `issue_coordination`;
-- неформальную связь `shared_issue` между complainant и reporter вокруг одной и той же очереди.
-
-Когда такие акторы реально совершают свои действия, движок дополнительно может materialize:
-
-- `external_complaint` и `press_inquiry` артефакты;
-- internal `pending_interactions` категорий `external_queue_complaint_response` и `media_response`;
-- новые pressure-signals в `information_climate.active_signals`.
 
 ### `world.environment.population_blueprints`
 
@@ -553,7 +480,6 @@ persona:
     "version": 1,
     "fingerprint": "sha256...",
     "input": {
-      "seed": 42,
       "language": "ru",
       "persona_enrich_mode": "core"
     }
@@ -717,7 +643,7 @@ JSON-файлы с результатами нарративных интерв�
 - `status.json` — heartbeat-статус прогона (`running` / `finished` / `failed`) с `updated_at`, `pid` и последним tick.
 - `summary.json` — итоговая агрегированная сводка (`governance` + `fidelity`).
 - `perf_summary.json` — агрегированные performance-метрики: суммарные токены, LLM-duration, overlap, `p50/p95/max`, slowest calls, timeout/error counters, разрез по фазам, по локальным embedding-фазам и по тикам.
-- `environment_summary.json` — финальный компактный срез усиленной среды, pending-interactions и queue-actor roles.
+- `environment_summary.json` — финальный компактный срез среды и pending-interactions.
 - `environment_timeline.jsonl` — покадровая телеметрия среды по тикам.
 
 Примеры:
@@ -763,11 +689,10 @@ JSON-файлы с результатами нарративных интерв�
 {
   "tick": 2,
   "environment": {
-    "counts": {"institutions": 1, "zones": 1, "resource_pools": 1, "operational_queues": 1, "informal_links": 2}
+    "counts": {"institutions": 1, "zones": 1, "resource_pools": 1, "informal_links": 2}
   },
   "pending_interactions": {"open": 1, "completed": 3, "expired": 0},
-  "queue_actor_roles": {"queue_complainant": 1, "queue_reporter": 1},
-  "spawn_sources": {"scenario": 2, "queue_process": 2}
+  "spawn_sources": {"scenario": 2, "population_blueprint": 2}
 }
 ```
 
@@ -837,7 +762,6 @@ Deterministic truth-layer после удаления lexical/keyword-эврис
 - `self_nomination`;
 - `nomination_after_private_contact`;
 - `support_vote_after_private_contact`;
-- `service_degradation_response_ignored`.
 
 `truth.jsonl` постепенно смещается в сторону unified finding contract:
 

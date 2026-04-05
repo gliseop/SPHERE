@@ -33,7 +33,6 @@ _CANONICAL_VIOLATION_TYPES = {
     "preferential_treatment_for_connected_actor",
     "non_escalation_under_pressure",
     "partial_disclosure_under_deadline_pressure",
-    "service_degradation_response_ignored",
     "narrative_manipulation",
     "process_manipulation",
     "non_disclosure_under_deadline_pressure",
@@ -1069,8 +1068,6 @@ class RuntimeAuditor:
             if has_yes_vote and recent_private_contacts:
                 return "support_vote_after_private_contact"
 
-        if "pending_interaction_due" in evidence_types or "pending_interaction_expired" in evidence_types:
-            return "service_degradation_response_ignored"
         return None
 
     def _resolve_recommended_action(
@@ -1120,10 +1117,6 @@ class RuntimeAuditor:
             return "open_case"
         if violation_type == "self_nomination":
             return "open_case"
-        if violation_type == "service_degradation_response_ignored":
-            if "public_pressure" in risk_tags:
-                return "request_documents" if severity != "high" else "open_case"
-            return "request_explanation" if severity != "high" else "open_case"
         if violation_type in {
             "preferential_treatment_for_connected_actor",
             "non_escalation_under_pressure",
@@ -1289,9 +1282,6 @@ class RuntimeAuditor:
                 and not bool(payload.get("private", True))
                 and str(payload.get("to_id") or "").startswith(("chan:", "org:"))
             ):
-                score += 2.0
-        elif finding.violation_type == "service_degradation_response_ignored":
-            if event.event_type in {"pending_interaction_due", "pending_interaction_expired"}:
                 score += 2.0
         return score
 
@@ -1633,77 +1623,6 @@ class RuntimeAuditor:
 
         if event_type in {"pending_interaction_due", "pending_interaction_expired"}:
             category = str(payload.get("category") or "")
-            if category in {"external_queue_complaint_response", "media_response"}:
-                subject_agent_id = str(payload.get("target_agent_id") or "")
-                source_agent_id = str(payload.get("source_agent_id") or "")
-                subject = state.agents.get(subject_agent_id)
-                if subject is None or not subject.internal:
-                    return out
-                artifact_id = str(payload.get("artifact_id") or "")
-                artifact = state.artifacts.get(artifact_id) if artifact_id else None
-                due_tick = payload.get("due_tick")
-                queue_summary = str(payload.get("summary") or "").strip()
-                evidence_refs = [_event_ref(event)]
-                if artifact is not None:
-                    evidence_refs.append(
-                        {
-                            "tick": current_tick,
-                            "event_type": "artifact_snapshot",
-                            "artifact_id": artifact.artifact_id,
-                            "artifact_type": artifact.artifact_type,
-                            "owner_org_id": artifact.owner_org_id,
-                            "zone_id": artifact.zone_id,
-                        }
-                    )
-                expired = event_type == "pending_interaction_expired"
-                media_case = category == "media_response"
-                confidence = 0.84 if expired else 0.69
-                recommended_action: Literal[
-                    "none",
-                    "signal_only",
-                    "open_case",
-                    "request_explanation",
-                    "request_documents",
-                    "freeze_reputation_growth",
-                    "route_to_collegial_review",
-                    "heightened_monitoring",
-                    "close_case",
-                ] = "open_case" if expired else ("request_documents" if media_case else "request_explanation")
-                mechanism = (
-                    "ignored media / press response obligation under service degradation"
-                    if media_case
-                    else "ignored external complaint response obligation under service degradation"
-                )
-                summary = (
-                    f"На фоне service-degradation по очереди агент не закрыл обязательство ответа на внешнюю жалобу: {queue_summary}"
-                    if not media_case
-                    else f"На фоне service-degradation по очереди агент не закрыл обязательство ответа на публичное / медийное давление: {queue_summary}"
-                )
-                if expired and due_tick is not None:
-                    summary += f" Срок ответа истёк на tick {due_tick}."
-                out.append(
-                    self._make_finding(
-                        tick=current_tick,
-                        subject_agent_id=subject_agent_id,
-                        target_agent_id=source_agent_id or None,
-                        violation_type="service_degradation_response_ignored",
-                        risk_family="pressure_not_to_escalate",
-                        severity="high" if expired else "medium",
-                        confidence=confidence,
-                        summary=summary,
-                        mechanism=mechanism,
-                        beneficiary=source_agent_id or None,
-                        risk_tags=[
-                            "service_degradation",
-                            "queue_pressure",
-                            "public_pressure" if media_case else "external_complaint",
-                            "response_delay",
-                        ],
-                        recommended_action=recommended_action,
-                        related_agent_ids=[source_agent_id] if source_agent_id else [],
-                        evidence_refs=evidence_refs,
-                    )
-                )
             return out
 
         if event_type == "vote_opened":

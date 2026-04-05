@@ -80,13 +80,13 @@ def _motivation_block(agent: AgentState, visible_events: list[Event]) -> str:
     fear_text = threat_text or "Потерять влияние, доверие или контроль над развитием ситуации."
     incentive_text = biography_hint or summary
     return (
-        "Твоя ситуация прямо сейчас:\n"
-        f"- Твои цели: {summary}\n"
-        f"- Твои страхи: {fear_text}\n"
-        f"- Кому и чему ты обязан: ответственность за {role_obligation}; также учитывай свои личные связи и обязательства\n"
-        f"- Что тебе выгодно: {incentive_text}\n"
-        f"- Текущая внутренняя линия: {story_state}\n"
-        f"- Что тебе угрожает: {threat_text or 'ошибка в выборе, потеря репутации, внешний шум или чужая инициатива'}\n"
+        "Что для тебя сейчас действительно поставлено на карту:\n"
+        f"- Чего ты добиваешься: {summary}\n"
+        f"- Чего ты опасаешься: {fear_text}\n"
+        f"- Перед кем и чем ты связан обязательствами: ответственность за {role_obligation}; помни и о личных связях\n"
+        f"- Что для тебя выглядит выгодой: {incentive_text}\n"
+        f"- Что у тебя внутри сейчас не отпускает: {story_state}\n"
+        f"- Откуда может прийти удар: {threat_text or 'ошибка в выборе, потеря репутации, внешний шум или чужая инициатива'}\n"
     )
 
 
@@ -94,7 +94,7 @@ def _format_daily_context(daily_context: AgentDailyContext | None, scene_hooks: 
     if daily_context is None and not scene_hooks:
         return ""
 
-    lines = ["Контекст начала дня:"]
+    lines = ["Утро складывается так:"]
     if daily_context is not None:
         lines.extend(
             [
@@ -110,9 +110,9 @@ def _format_daily_context(daily_context: AgentDailyContext | None, scene_hooks: 
         )
         if daily_context.lightweight_contacts:
             contacts = ", ".join(daily_context.lightweight_contacts[:4])
-            lines.append(f"- Лёгкие контакты дня: {contacts}")
+            lines.append(f"- Мимолётные контакты дня: {contacts}")
             lines.append(
-                "- Лёгкие контакты не имеют typed-id; не адресуй им действия напрямую, если они не стали сущностью мира."
+                "- У этих людей пока нет служебного обозначения в деле; не обращайся к ним напрямую, пока они не появились в общей картине как оформленные участники."
             )
     if scene_hooks:
         lines.append("Сценовые поводы:")
@@ -127,7 +127,7 @@ def _format_environment_brief(*, agent: AgentState, state: WorldState) -> str:
     if not agent.org_id and not agent.zone_id:
         return ""
 
-    lines = ["Релевантная среда:"]
+    lines = ["Вокруг тебя сейчас вот что:"]
     if agent.org_id:
         inst = state.environment.institutions.get(agent.org_id)
         if inst is not None:
@@ -152,20 +152,6 @@ def _format_environment_brief(*, agent: AgentState, state: WorldState) -> str:
             lines.append(
                 f"- Зона {agent.zone_id} ({zone.title}): доступ={zone.access_mode}, прозрачность={zone.transparency_mode}, безопасность={zone.security_level}"
             )
-
-    relevant_queues = []
-    for _, queue in sorted(state.environment.operational_queues.items()):
-        if agent.org_id and queue.owner_org_id == agent.org_id:
-            relevant_queues.append(queue)
-            continue
-        if agent.zone_id and queue.zone_id == agent.zone_id:
-            relevant_queues.append(queue)
-            continue
-    for queue in relevant_queues[:3]:
-        lines.append(
-            f"- Очередь {queue.queue_id}: backlog={queue.backlog}, capacity={queue.capacity_per_tick}/tick, delay={queue.avg_delay_ticks}, status={queue.status}"
-            + (f", pressure={queue.pressure}" if queue.pressure else "")
-        )
 
     climate = state.environment.information_climate
     if any(
@@ -205,7 +191,7 @@ def _format_relevant_artifacts(*, agent: AgentState, state: WorldState) -> str:
     if not relevant:
         return ""
 
-    lines = ["Релевантные документы и артефакты:"]
+    lines = ["На столе, в почте и в папках у тебя сейчас:"]
     for artifact_id in relevant[:6]:
         artifact = state.artifacts[artifact_id]
         relation: list[str] = []
@@ -237,7 +223,7 @@ def _format_informal_links(*, agent: AgentState, state: WorldState) -> str:
     if not relevant:
         return ""
 
-    lines = ["Неформальные связи и зависимости:"]
+    lines = ["Невидимые связи, о которых ты помнишь:"]
     for counterpart, link in relevant[:6]:
         pressure = f" | давление={link.pressure}" if link.pressure else ""
         lines.append(
@@ -263,7 +249,7 @@ def _format_pending_interactions(*, agent: AgentState, state: WorldState) -> str
             item.interaction_id,
         )
     )
-    lines = ["Ожидающие локальные обязательства и follow-up:"]
+    lines = ["Незакрытые хвосты и ожидания:"]
     for interaction in relevant[:6]:
         source = f" от {interaction.source_agent_id}" if interaction.source_agent_id else ""
         window = f" | окно=t{interaction.earliest_tick}..t{interaction.due_tick}" if interaction.due_tick is not None else f" | c t{interaction.earliest_tick}"
@@ -284,20 +270,17 @@ def _format_pending_interactions(*, agent: AgentState, state: WorldState) -> str
 
 
 def _format_spawn_context(*, agent: AgentState) -> str:
-    if not agent.spawn_source and not agent.population_role and not agent.blueprint_id:
+    if not agent.population_role:
         return ""
-    lines = ["Локальное происхождение и роль:"]
-    if agent.spawn_source:
-        lines.append(f"- Источник появления: {agent.spawn_source}")
+    readable_role = agent.population_role.replace("_", " ").strip()
+    lines = ["Какую роль ты сейчас невольно играешь в этой истории:"]
     if agent.population_role:
-        lines.append(f"- Текущая локальная роль: {agent.population_role}")
-    if agent.blueprint_id:
-        lines.append(f"- Локальный контур: {agent.blueprint_id}")
+        lines.append(f"- Твоя локальная роль: {readable_role}")
     return "\n".join(lines) + "\n\n"
 
 
 def _format_prompt_policy(*, policy: AgentPromptPolicyConfig) -> str:
-    lines = ["Локальные правила адресации и materialization:"]
+    lines = ["Практические ориентиры:"]
     if policy.addressing_hint:
         lines.append(f"- {policy.addressing_hint}")
     if policy.private_message_hint:
@@ -331,7 +314,7 @@ def _format_proposal_examples(
         "",
     )
 
-    lines = ["Примеры materializable proposal:"]
+    lines = ["Примеры хода, который звучит по-человечески и реально сдвигает дело:"]
     if "work" in caps and peer_id and work_id:
         lines.append(
             f"- Хорошо для тебя: \"Сразу напишу {peer_id}, попрошу сегодня уточнить требования по {work_id}, а затем сам добавлю туда короткую заметку с критериями.\""
@@ -366,13 +349,84 @@ def _format_proposal_examples(
     for example in policy.extra_bad_examples:
         lines.append(f"- Плохо: \"{example}\"")
     if "work" not in caps:
-        lines.append("- Для тебя плохо: обещать самому добавить заметку, создать work или менять документы, если у тебя нет capability `work`.")
+        lines.append("- Для тебя плохо: обещать самому править дело, создавать новый рабочий трек или менять документы, если у тебя нет на это прямого служебного доступа.")
     if "dao" not in caps and not targeted_vote_id:
-        lines.append("- Для тебя плохо: обещать самому открыть голосование или голосовать, если у тебя нет capability `dao`.")
+        lines.append("- Для тебя плохо: обещать самому открывать голосование или участвовать в нём, если по твоему положению это не твоя процедура.")
     lines.append(
-        "- Если хочешь подготовить документ или обсуждение, переведи это в наблюдаемый шаг: кому напишешь, что опубликуешь, в какой существующий work добавишь заметку, по какому vote ответишь."
+        "- Если хочешь что-то подготовить или сдвинуть обсуждение, переведи это в наблюдаемый шаг: кому напишешь, что вынесешь в канал, куда положишь заметку, на какую процедуру ответишь."
     )
     return "\n".join(lines) + "\n\n"
+
+
+def _label_for_id(*, state: WorldState, entity_id: str) -> str:
+    entity_id = str(entity_id or "").strip()
+    if not entity_id:
+        return ""
+    agent = state.agents.get(entity_id)
+    if agent is not None:
+        return f"{agent.name} ({entity_id})"
+    work = state.work_items.get(entity_id)
+    if work is not None:
+        return f"{work.title} ({entity_id})"
+    artifact = state.artifacts.get(entity_id)
+    if artifact is not None:
+        return f"{artifact.title} ({entity_id})"
+    return entity_id
+
+
+def _event_fact_line(*, state: WorldState, event: Event) -> str:
+    payload = event.payload or {}
+    actor_label = _label_for_id(state=state, entity_id=str(event.actor_id or "")) or "кто-то"
+    event_type = str(event.event_type or "")
+
+    if event_type == "world_event":
+        return f"- {_truncate(str(payload.get('description') or 'Во внешнем фоне произошло заметное событие.'), 220)}"
+    if event_type == "message_sent":
+        to_label = _label_for_id(state=state, entity_id=str(payload.get("to_id") or "")) or str(payload.get("to_id") or "адресат")
+        prefix = "лично написал" if bool(payload.get("private", True)) else "сказал публично"
+        text = _truncate(str(payload.get("text") or ""), 180)
+        return f"- {actor_label} {prefix} {to_label}: {text}"
+    if event_type == "work_note_added":
+        work_label = _label_for_id(state=state, entity_id=str(payload.get("work_id") or "")) or str(payload.get("work_id") or "дело")
+        text = _truncate(str(payload.get("text") or ""), 180)
+        return f"- {actor_label} оставил заметку в {work_label}: {text}"
+    if event_type == "work_item_created":
+        work_label = _label_for_id(state=state, entity_id=str(payload.get("work_id") or "")) or str(payload.get("title") or "новое дело")
+        return f"- Появилось новое дело: {work_label}"
+    if event_type == "artifact_created":
+        artifact_label = _label_for_id(state=state, entity_id=str(payload.get("artifact_id") or "")) or str(payload.get("artifact_id") or "документ")
+        return f"- Появился документ: {artifact_label}"
+    if event_type == "artifact_updated":
+        artifact_label = _label_for_id(state=state, entity_id=str(payload.get("artifact_id") or "")) or str(payload.get("artifact_id") or "документ")
+        return f"- Обновился документ: {artifact_label}"
+    if event_type == "vote_opened":
+        target_label = _label_for_id(state=state, entity_id=str(payload.get("target_agent_id") or "")) or str(payload.get("target_agent_id") or "кандидат")
+        new_title = str(payload.get("new_title") or "").strip()
+        suffix = f" на роль {new_title}" if new_title else ""
+        return f"- {actor_label} вынес вопрос по {target_label}{suffix}"
+    if event_type == "vote_cast":
+        vote_id = str(payload.get("vote_id") or "").strip()
+        choice = str(payload.get("choice") or "").strip()
+        return f"- {actor_label} проголосовал по {vote_id}: {choice or 'без отметки'}"
+    if event_type == "pending_interaction_due":
+        return f"- На очереди ожидается ответ: {_truncate(str(payload.get('summary') or ''), 220)}"
+    if event_type == "pending_interaction_expired":
+        return f"- Был пропущен срок по обязательству: {_truncate(str(payload.get('summary') or ''), 220)}"
+    if event_type == "audit_flagged":
+        violation = str(payload.get("violation_type") or "").strip()
+        summary = str(payload.get("summary") or "").strip()
+        return f"- Контрольный контур отметил риск{(': ' + violation) if violation else ''}{('; ' + _truncate(summary, 180)) if summary else ''}"
+    if event_type == "audit_case_opened":
+        return f"- По спорному эпизоду открыт контрольный кейс: {_truncate(str(payload.get('summary') or payload.get('case_id') or ''), 200)}"
+    if event_type == "audit_escalated":
+        return f"- Контрольный кейс переведён в жёсткий режим: {_truncate(str(payload.get('summary') or payload.get('case_id') or ''), 200)}"
+    if event_type == "environment_information_climate_updated":
+        signals = payload.get("active_signals") or []
+        if isinstance(signals, list) and signals:
+            return f"- Общий фон изменился: {', '.join(str(item).strip() for item in signals[:3] if str(item).strip())}"
+
+    details = _truncate(redact_numbers(payload), 220)
+    return f"- {_truncate(f'{event_type}: {details}', 220)}"
 
 
 def _recent_rejection_hints(visible_events: list[Event]) -> list[str]:
@@ -412,8 +466,8 @@ def _recent_rejection_hints(visible_events: list[Event]) -> list[str]:
             match = _ACTION_WORK_ID_RE.search(action)
             if match:
                 hint = (
-                    f"у тебя нет capability work; не пытайся работать с {match.group(1)} "
-                    "через create_work_item/add_work_note/submit_work_proposal"
+                    f"у тебя нет прямого рабочего доступа; не пытайся сам вести {match.group(1)} "
+                    "через создание дела, заметку или формальное предложение"
                 )
         if not hint or hint in seen:
             continue
@@ -437,8 +491,9 @@ class AgentRunner:
     def _build_system(self, agent: AgentState) -> str:
         lang = self.runtime.language
         return (
-            "Ты — автономный участник организационного процесса.\n"
-            "Действуй в рамках своей роли, наблюдений, памяти и здравого смысла.\n"
+            "Ты находишься внутри обычного рабочего дня и действуешь как живой участник происходящего.\n"
+            "Не отстраняйся, не комментируй правила и не описывай происходящее как упражнение или задачу.\n"
+            "Думай как человек со своей должностью, памятью, страхами, привычками, интересами и самооправданиями.\n"
             f"ВАЖНО: отвечай строго на языке: {lang!r}.\n"
             "Возвращай только JSON, без пояснений и без markdown.\n"
         )
@@ -480,22 +535,16 @@ class AgentRunner:
         simulated_datetime = self.runtime.simulated_datetime(state.tick)
         if simulated_datetime is not None and self.runtime.tick_granularity in {"hour", "half_day"}:
             time_line = (
-                f"Текущее время мира: тик {state.tick}, дата {simulated_datetime.date().isoformat()}, "
-                f"время {simulated_datetime.strftime('%H:%M')} (1 tick = {self.runtime.tick_duration_label()})\n"
+                f"Сегодня {simulated_datetime.date().isoformat()}, сейчас примерно {simulated_datetime.strftime('%H:%M')}.\n"
             )
         elif simulated_date is not None:
-            time_line = (
-                f"Текущее время мира: тик {state.tick}, дата {simulated_date.isoformat()} "
-                f"(1 tick = {self.runtime.tick_duration_label()})\n"
-            )
+            time_line = f"Сегодня {simulated_date.isoformat()}.\n"
         else:
-            time_line = f"Текущее время мира: тик {state.tick}\n"
+            time_line = f"Сегодняшний рабочий день: {state.tick}.\n"
 
-        # Для MVP даём события как короткие факты.
         facts = []
         for ev in visible_events[-20:]:
-            # не показываем сырые числа репутации и т.п.
-            facts.append(f"- [{ev.event_type}] {_truncate(redact_numbers(ev.payload), 220)}")
+            facts.append(_event_fact_line(state=state, event=ev))
         facts_text = "\n".join(facts) if facts else "- (нет)"
         rejection_hints = _recent_rejection_hints(visible_events)
         rejection_hints_text = "\n".join(f"- {item}" for item in rejection_hints) if rejection_hints else "- (нет)"
@@ -517,27 +566,27 @@ class AgentRunner:
 
         # Инструкция по действиям.
         max_actions = max(1, int(max_actions_override or self.runtime.max_actions_per_turn))
-        votes_line = f"- Open votes: {vote_ids}\n"
+        votes_line = f"- Голосования в ходу: {vote_ids}\n"
 
         return (
-            f"Раунд (tick): {state.tick}\n"
-            f"Ты: {agent.name} ({agent.agent_id}).\n"
             f"{time_line}"
+            f"Ты — {agent.name}.\n"
+            f"Твоё служебное обозначение в документах: {agent.agent_id}.\n"
             f"Твоя должность: {agent.title if agent.internal else '(внешний)'}.\n\n"
             f"{motivation_block}\n"
-            "Доступные сущности (используй только эти ID):\n"
-            f"- Agents: {agent_ids}\n"
-            f"- Work items: {work_ids}\n"
-            f"- Channels: {channel_ids}\n"
-            f"- Orgs: {org_ids}\n"
+            "Если пишешь или ссылаешься на людей, дела и площадки, можешь прямо использовать такие служебные обозначения:\n"
+            f"- Люди: {agent_ids}\n"
+            f"- Дела: {work_ids}\n"
+            f"- Каналы: {channel_ids}\n"
+            f"- Организации: {org_ids}\n"
             f"{votes_line}\n"
-            "Открытые голосования / review:\n"
+            "Какие процедуры уже открыты:\n"
             f"{vote_summaries_text}\n\n"
-            "Открытые/известные дела (кратко):\n"
+            "Что сейчас лежит на столе:\n"
             f"{work_summaries_text}\n\n"
-            "Наблюдения (последние события, доступные тебе):\n"
+            "Что ты знаешь по последним событиям:\n"
             f"{facts_text}\n\n"
-            "Недавние недопустимые действия / ID:\n"
+            "Во что ты уже упирался и чего лучше не повторять дословно:\n"
             f"{rejection_hints_text}\n\n"
             f"{daily_context_text}"
             f"{environment_brief}"
@@ -547,29 +596,30 @@ class AgentRunner:
             f"{spawn_context_brief}"
             f"{prompt_policy_text}"
             f"{proposal_examples_text}"
-            f"Память:\n{mem_text}\n\n"
-            "Формат ответа:\n"
-            "- Верни одно поле `proposal` со свободным описанием своего хода на этот тик.\n"
-            "- Не используй menu/action-type, не пиши `perform`, `noop`, enum-значения или JSON-массивы действий.\n"
-            "- Если нужен формальный эффект, всё равно описывай его как намерение обычного участника процесса: поговорить, подать, сообщить, инициировать, проголосовать, ответить, попросить создать канал, донести документ, вывести вопрос на рассмотрение.\n"
-            "- Если не хочешь делать ничего существенного, так и опиши это человеческим языком внутри `proposal`.\n"
-            "- Пиши достаточно конкретно, чтобы из `proposal` можно было вывести наблюдаемый шаг мира; избегай абстракций вроде «укреплю позиции», «разберусь» или «проработаю вопрос» без конкретного действия.\n\n"
+            f"Что всплывает в памяти:\n{mem_text}\n\n"
+            "Как оформить ответ:\n"
+            "- Верни только JSON с одним полем `reply`.\n"
+            "- Внутри `reply` дай один связный живой фрагмент: что именно ты сейчас сделаешь и почему именно так.\n"
+            "- Не отвечай списком команд, не называй внутренние ярлыки и не обсуждай механику ответа.\n"
+            "- Если нужен формальный эффект, всё равно описывай его как намерение обычного участника процесса: поговорить, подать, запросить, написать, вынести вопрос, зафиксировать, ответить, донести документ.\n"
+            "- Если решаешь пока не делать резкого шага, опиши это как человеческое решение, а не как технический пропуск.\n"
+            "- Пиши достаточно конкретно, чтобы из `reply` можно было вывести наблюдаемый шаг; избегай абстракций вроде «укреплю позиции», «разберусь» или «проработаю вопрос» без конкретного действия.\n"
+            "- Не подменяй ход пустым публичным заявлением, если сначала естественнее личный разговор, служебная заметка, уточняющий запрос или работа по уже открытому делу.\n\n"
             f"{(turn_note.strip() + chr(10)) if turn_note else ''}"
-            "Сгенерируй действия на этот тик.\n"
-            "Но верни их не как menu-команды, а как единый свободный `proposal`.\n"
-            f"Правила:\n"
-            f"- в одном `proposal` можно описать до {max_actions} осмысленных шагов, если они составляют один связный ход\n"
-            "- если упоминаешь даты или сроки, не противоречь канонической дате мира\n"
-            "- не расписывай внутреннюю механику движка; описывай только то, что намерен сделать как участник процесса\n"
-            "- избегай ритуальных повторов: не дублируй один и тот же формальный ход без нового эффекта или новой ставки\n"
-            "- предпочитай действия, которые реально меняют ситуацию, а не только повторно фиксируют уже известное\n"
-            "- не выдумывай новые typed-id; используй только реально существующие сущности мира\n"
-            "- если хочешь публикацию или сообщение, буквально укажи существующий адресат `agent:*`, `chan:*` или `org:*`; не выдумывай новый канал или новую сущность\n"
-            "- если у тебя нет capability `work`, не обещай сам добавлять заметку, создавать work или обновлять документы; вместо этого пиши тем, у кого такой доступ может быть\n"
-            "- если у тебя нет capability `dao`, не обещай сам открывать голосование или голосовать; исключение только одно: если текущий vote адресован тебе, можешь описать согласие или отказ как цель номинации\n"
-            "- самономинация на должность запрещена; инициировать голосование можно только за другого агента\n"
-            "- цель голосования не голосует сама за себя; если тебя номинировали, явно опиши согласие или отказ как свободное действие\n"
-            "- если контекст дня и формальная процедура конфликтуют, ты вправе выбрать любой правдоподобный путь\n"
+            "Сделай следующий ход в этой ситуации.\n"
+            "Помни:\n"
+            f"- в одном `reply` можно описать до {max_actions} осмысленных шагов, если это один связный ход\n"
+            "- если упоминаешь даты или сроки, не противоречь текущему календарю событий\n"
+            "- не отстраняйся от происходящего; описывай только то, что собираешься сделать как участник процесса\n"
+            "- избегай ритуальных повторов: не дублируй один и тот же формальный шаг без новой ставки, нового риска или нового эффекта\n"
+            "- предпочитай действия, которые реально меняют ситуацию, а не просто ещё раз проговаривают уже известное\n"
+            "- не выдумывай новые служебные коды; используй только те обозначения, которые уже есть в обстановке\n"
+            "- если хочешь сделать публикацию или направить сообщение, прямо назови существующий адресат `agent:*`, `chan:*` или `org:*`; не придумывай новые площадки\n"
+            "- если ты сам не ведёшь дела и документы напрямую, не обещай от своего имени править записи, создавать новое дело или переписывать документы; вместо этого обращайся к тем, кто может это сделать\n"
+            "- если ты не открываешь и не ведёшь голосования по своей роли, не обещай этого; исключение только одно: если текущая процедура адресована тебе, можешь явно дать согласие или отказ\n"
+            "- самому выдвигать себя на должность нельзя; выносить на голосование можно только другого человека\n"
+            "- если тебя выдвинули, ты можешь прямо согласиться или отказаться\n"
+            "- если между осторожностью, выгодой, долгом и страхом есть конфликт, выбирай любой правдоподобный путь, но веди себя как живой человек, а не как безличная инструкция\n"
         )
 
     async def _render_memory(
@@ -714,21 +764,25 @@ class AgentRunner:
         )
 
         raw = resp.data
-        if isinstance(raw, dict) and isinstance(raw.get("proposal"), str):
-            proposal = _norm(str(raw.get("proposal") or ""))
-            if not proposal:
-                return []
-            return [
-                PerformAction(
-                    type=ActionType.PERFORM,
-                    description=proposal,
-                    justification="freeform_turn_proposal",
-                )
-            ]
-
+        if isinstance(raw, dict):
+            reply_text = raw.get("reply")
+            if not isinstance(reply_text, str):
+                reply_text = raw.get("proposal")
+            if isinstance(reply_text, str):
+                proposal = _norm(str(reply_text or ""))
+                if not proposal:
+                    return []
+                return [
+                    PerformAction(
+                        type=ActionType.PERFORM,
+                        description=proposal,
+                        justification="freeform_turn_proposal",
+                    )
+                ]
         # Typed-action compat: MockLLMProvider и тесты могут возвращать
         # {"actions": [...]} с typed actions. В production с реальным LLM
-        # сюда не попадаем — LLM всегда возвращает {"proposal": "..."}.
+        # сюда обычно не попадаем — модель возвращает {"reply": "..."}
+        # или legacy {"proposal": "..."}.
         # Typed actions идут в детерминированный путь арбитра напрямую.
         legacy_raw: list[object] | None = None
         if isinstance(raw, dict):

@@ -20,7 +20,6 @@ interface SavedScenario {
   scenario: string
   governance: string
   rounds: number
-  seed: number | null
   sim_config?: Record<string, unknown> | null
 }
 

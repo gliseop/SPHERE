@@ -78,7 +78,7 @@ web/backend/
 Для SPHERE-LC backend дополнительно нормализует события к legacy-совместимому виду (`tick` → `round`, `actor_id` → `agent_id`, `target_agent_id` → `payload.target`), а `/api/run/{name}/prompts` читает LLM-трейсы из `trace.jsonl`, если они вынесены из `events.jsonl`.
 Перед отдачей `GET /api/run/{name}`, `GET /api/run/{name}/snapshot` и `GET /api/run/{name}/export` backend применяет `audience`-policy: viewer не получает point-to-point события, адресованные только конкретным `agent:*`, а admin по-прежнему видит полный поток. Это же правило используется и для построения `graph_state`, чтобы скрытые события не просачивались через побочные изменения графа. В ответ `GET /api/run/{name}` теперь также входит компактный `environment`-блок, `GET /api/run/{name}/snapshot` возвращает финальный graph-state и tail событий для monitor snapshot, а `GET /api/run/{name}/export` дополнительно включает `environment` и `environment_timeline`.
 
-Для directory-based run backend теперь предпочитает sidecar `run.json` как источник UI-метаданных прогона. Это позволяет хранить не только legacy `scenario/governance/seed`, но и `display_name`, `scenario_title`, `governance_label`, `ticks_total`, параметры runtime и симуляционный диапазон дат. Старый разбор имени прогона через regex остаётся fallback только для legacy артефактов без `run.json`.
+Для directory-based run backend теперь предпочитает sidecar `run.json` как источник UI-метаданных прогона. Это позволяет хранить `display_name`, `scenario_title`, `governance_label`, `ticks_total`, параметры runtime и симуляционный диапазон дат. Старый разбор имени прогона через regex остаётся fallback только для legacy артефактов без `run.json`.
 
 При выдаче событий backend дополнительно материализует симуляционное время из runtime-конфига (`start_date`, `tick_granularity`, `tick_duration_days`) и добавляет в события поля `simulated_date`, `simulated_time`, `simulated_timestamp`. Благодаря этому monitor и timeline могут опираться на каноническое время мира, а не только на wall-clock `timestamp` записи в JSONL.
 
@@ -97,7 +97,7 @@ Web launcher запускает `sphere_lc` как отдельный subprocess
 
 Внешние CLI-прогоны и ранее запущенные web-launcher subprocess теперь попадают в `/api/runs/active` не по одному только свежему `events.jsonl`, а по sidecar-файлу `status.json`/`*_status.json` со статусом `running` и свежим heartbeat (`updated_at`). Это позволяет переживать рестарт backend и снижает число ложноположительных «живых» прогонов после аварийного завершения без `summary.json`.
 
-Метаданные прогона (`scenario`, `governance`, `seed`, `variant`) извлекаются из правого суффикса имени прогона, поэтому пользовательское название сценария может содержать фрагменты вида `G2` или `G10` без поломки карточки прогона и WebSocket `meta`.
+Метаданные прогона (`scenario`, `governance`, `variant`) извлекаются из правого суффикса имени прогона, поэтому пользовательское название сценария может содержать фрагменты вида `G2` или `G10` без поломки карточки прогона и WebSocket `meta`.
 
 #### Сценарии
 
@@ -109,9 +109,9 @@ Web launcher запускает `sphere_lc` как отдельный subprocess
 | PUT | `/api/scenarios/{id}` | Обновить сценарий |
 | DELETE | `/api/scenarios/{id}` | Удалить сценарий |
 
-Маршруты сценариев читают файлы `*.json`, `*.yaml` и `*.yml`, но поддерживают только полноценный `ScenarioConfig`. Backend возвращает web-совместимую карточку сценария и кладёт исходный конфиг в поле `sim_config`, чтобы фронтенд мог редактировать его без потери данных. Старый web-формат (`name/scenario/governance/agents` без полного `ScenarioConfig`) больше не поддерживается и должен быть мигрирован вручную.
+Маршруты сценариев работают прежде всего с `*.json` и поддерживают только полноценный `ScenarioConfig`. YAML всё ещё может читаться как compatibility input, но встроенные и сохраняемые через web сценарии теперь считаются `json-only`. Backend возвращает web-совместимую карточку сценария и кладёт исходный конфиг в поле `sim_config`, чтобы фронтенд мог редактировать его без потери данных. Старый web-формат (`name/scenario/governance/agents` без полного `ScenarioConfig`) больше не поддерживается и должен быть мигрирован вручную.
 
-`/api/scenarios` теперь показывает только пользовательские сценарии. Встроенные seed-файлы (`seed_s*_g*.json`) считаются template-backend'ом для `/api/templates/scenarios/*`, не выдаются в CRUD-списке и не могут быть изменены или удалены через `/api/scenarios/{id}`.
+`/api/scenarios` теперь показывает только пользовательские сценарии. Встроенные template-файлы (`template_s*_g*.json`) считаются template-backend'ом для `/api/templates/scenarios/*`, не выдаются в CRUD-списке и не могут быть изменены или удалены через `/api/scenarios/{id}`.
 
 При round-trip между `ScenarioConfig` и web-карточкой backend сохраняет `agents[].capabilities`, `agents[].initial_reputation` и runtime-поля параллелизации, чтобы обычное редактирование сценария не стирало нестандартные capability-наборы и стартовые условия эксперимента.
 
@@ -168,7 +168,7 @@ Web launcher запускает `sphere_lc` как отдельный subprocess
 | GET | `/api/templates/governance` | Шаблоны режимов управления |
 | GET | `/api/debug/llm-log` | Журнал LLM-вызовов |
 
-Шаблоны сценариев собираются из поддерживаемых `seed_s*_g*.json` сценариев репозитория, которые также хранятся как валидный `ScenarioConfig` (включая built-in `S3 -> seed_s3_g3.json` для коллегиального review). Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G*` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора. Для built-in режимов (`G0..G3`) backend теперь использует canonical mapping из `sphere_lc.governance_modes`:
+Шаблоны сценариев собираются из поддерживаемых `template_s*_g*.json` сценариев репозитория, которые также хранятся как валидный `ScenarioConfig` (включая built-in `S3 -> template_s3_g3.json` для коллегиального review). Endpoint `GET /api/templates/scenarios/{id}` принимает optional query `governance=G*` и возвращает уже нормализованный `ScenarioConfig`, пригодный для web launcher'а и редактора. Для built-in режимов (`G0..G3`) backend теперь использует canonical mapping из `sphere_lc.governance_modes`:
 
 - `G0`: аудит выключен;
 - `G1`: аудит включён, но без freeze и без collegial review;

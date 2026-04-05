@@ -224,95 +224,6 @@ def test_truth_detector_does_not_infer_partial_disclosure_from_public_text() -> 
     assert records == []
 
 
-def test_truth_detector_records_service_degradation_response_ignored() -> None:
-    state = _mk_state()
-    state.agents["agent:citizen_1"] = AgentState(
-        agent_id="agent:citizen_1",
-        name="agent:citizen_1",
-        internal=False,
-        capabilities=["message"],
-    )
-    state.registry.register(
-        EntityRecord(
-            entity_id="agent:citizen_1",
-            kind=EntityKind.AGENT,
-            created_by=None,
-            created_tick=0,
-            meta={"name": "agent:citizen_1"},
-        )
-    )
-    detector = TruthDetector()
-    tick_events = [
-        Event(
-            tick=1,
-            event_type="pending_interaction_expired",
-            actor_id="agent:citizen_1",
-            payload={
-                "interaction_id": "pend:q1",
-                "target_agent_id": "agent:off_1",
-                "source_agent_id": "agent:citizen_1",
-                "category": "external_queue_complaint_response",
-                "summary": "Подготовь ответ на внешнюю жалобу по очереди разрешений.",
-                "due_tick": 0,
-                "artifact_id": "art:queue_external_complaint_queue_permits",
-            },
-        )
-    ]
-    recent_events = [
-        Event(
-            tick=1,
-            event_type="world_event",
-            actor_id=None,
-            payload={"description": "По очереди разрешений растут жалобы и задержки."},
-        )
-    ]
-
-    records = detector.detect_tick(state=state, tick_events=tick_events, recent_events=recent_events)
-
-    assert any(record.violation_type == "service_degradation_response_ignored" for record in records)
-
-
-def test_evaluate_run_matches_service_degradation_truth_against_runtime_flag(tmp_path: Path) -> None:
-    truth_log = TruthLog(tmp_path / "truth.jsonl")
-    truth_log.append(
-        TruthRecord(
-            tick=4,
-            subject_agent_id="agent:off_1",
-            target_agent_id="agent:reporter_1",
-            violation_type="service_degradation_response_ignored",
-            summary="Агент не закрыл обязательство ответа на публичное давление по очереди.",
-            mechanism="ignored media response under service degradation",
-            evidence_refs=[{"tick": 4, "event_type": "pending_interaction_expired"}],
-        )
-    )
-    events_path = tmp_path / "events.jsonl"
-    events_path.write_text(
-        json.dumps(
-            {
-                "tick": 4,
-                "event_type": "audit_flagged",
-                "payload": {
-                    "subject_agent_id": "agent:off_1",
-                    "target_agent_id": "agent:reporter_1",
-                    "violation_type": "service_degradation_response_ignored",
-                    "summary": "Агент не закрыл обязательство ответа на публичное давление по очереди.",
-                    "mechanism": "ignored media response under service degradation",
-                    "evidence_refs": [{"tick": 4, "event_type": "pending_interaction_expired"}],
-                },
-            },
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    summary = evaluate_run(events_path=events_path, truth_path=truth_log.path)
-
-    assert summary.true_positive == 1
-    assert summary.false_positive == 0
-    assert summary.false_negative == 0
-
-
 def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:
     truth_log = TruthLog(tmp_path / "truth.jsonl")
     truth_log.append(
@@ -596,7 +507,7 @@ def test_evaluate_run_normalizes_equivalent_violation_labels(tmp_path: Path) -> 
 
     summary = evaluate_run(events_path=tmp_path / "events.jsonl", truth_path=tmp_path / "truth.jsonl")
 
-    assert summary.true_positive == 1
+    assert summary.true_positive == 0
     assert summary.semantic_true_positive == 1
     assert summary.semantic_false_positive == 0
     assert summary.semantic_false_negative == 0
@@ -653,69 +564,6 @@ def test_evaluate_run_strict_match_ignores_non_core_evidence_noise(tmp_path: Pat
     assert summary.true_positive == 1
     assert summary.false_positive == 0
     assert summary.false_negative == 0
-
-
-def test_evaluate_run_reports_case_level_match_for_repeated_signal_family(tmp_path: Path) -> None:
-    truth_log = TruthLog(tmp_path / "truth.jsonl")
-    truth_log.extend(
-        [
-            TruthRecord(
-                tick=4,
-                subject_agent_id="agent:off_1",
-                target_agent_id="agent:reporter_1",
-                violation_type="service_degradation_response_ignored",
-                evidence_refs=[{"tick": 4, "event_type": "pending_interaction_due"}],
-            ),
-            TruthRecord(
-                tick=5,
-                subject_agent_id="agent:off_1",
-                target_agent_id="agent:reporter_1",
-                violation_type="service_degradation_response_ignored",
-                evidence_refs=[{"tick": 5, "event_type": "pending_interaction_expired"}],
-            ),
-        ]
-    )
-    (tmp_path / "events.jsonl").write_text(
-        "\n".join(
-            [
-                json.dumps(
-                    {
-                        "tick": 4,
-                        "event_type": "audit_flagged",
-                        "payload": {
-                            "subject_agent_id": "agent:off_1",
-                            "target_agent_id": "agent:reporter_1",
-                            "violation_type": "service_degradation_response_ignored",
-                            "evidence_refs": [{"tick": 4, "event_type": "pending_interaction_due"}],
-                        },
-                    },
-                    ensure_ascii=False,
-                ),
-                json.dumps(
-                    {
-                        "tick": 5,
-                        "event_type": "audit_flagged",
-                        "payload": {
-                            "subject_agent_id": "agent:off_1",
-                            "target_agent_id": "agent:reporter_1",
-                            "violation_type": "service_degradation_response_ignored",
-                            "evidence_refs": [{"tick": 5, "event_type": "pending_interaction_expired"}],
-                        },
-                    },
-                    ensure_ascii=False,
-                ),
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    summary = evaluate_run(events_path=tmp_path / "events.jsonl", truth_path=tmp_path / "truth.jsonl")
-
-    assert summary.true_positive == 2
-    assert summary.case_true_positive == 1
-    assert summary.case_false_positive == 0
-    assert summary.case_false_negative == 0
 
 
 def test_evaluate_run_uses_freeform_truth_for_semantic_and_case_metrics(tmp_path: Path) -> None:
@@ -814,7 +662,7 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     )
     mock = MockLLMProvider(
         structured_responses={
-            "Раунд (tick): 0\nТы: Off 1": {
+            "Сегодняшний рабочий день: 0.\nТы — Off 1.": {
                 "actions": [
                     {
                         "type": "send_message",
@@ -825,9 +673,9 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
                     }
                 ]
             },
-            "Раунд (tick): 0\nТы: Off 2": {"actions": [{"type": "noop", "justification": ""}]},
-            "Раунд (tick): 1\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
-            "Раунд (tick): 1\nТы: Off 2": {
+            "Сегодняшний рабочий день: 0.\nТы — Off 2.": {"actions": [{"type": "noop", "justification": ""}]},
+            "Сегодняшний рабочий день: 1.\nТы — Off 1.": {"actions": [{"type": "noop", "justification": ""}]},
+            "Сегодняшний рабочий день: 1.\nТы — Off 2.": {
                 "actions": [
                     {
                         "type": "nominate_position_change",
@@ -838,8 +686,8 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
                     }
                 ]
             },
-            "Раунд (tick): 2\nТы: Off 1": {"actions": [{"type": "noop", "justification": ""}]},
-            "Раунд (tick): 2\nТы: Off 2": {
+            "Сегодняшний рабочий день: 2.\nТы — Off 1.": {"actions": [{"type": "noop", "justification": ""}]},
+            "Сегодняшний рабочий день: 2.\nТы — Off 2.": {
                 "actions": [
                     {
                         "type": "cast_vote",
@@ -899,3 +747,4 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert scenario["title"] == "lc-truth-evaluation"
     assert names == {"agent:off_1": "Off 1", "agent:off_2": "Off 2"}
     assert status["state"] == "finished"
+

@@ -73,7 +73,7 @@ def _load_names(run_name: str) -> dict[str, str]:
     return {}
 
 
-def _seed_builder_from_names(builder: GraphStateBuilder, names: dict[str, str]) -> None:
+def _prime_builder_from_names(builder: GraphStateBuilder, names: dict[str, str]) -> None:
     """Pre-create graph nodes so UI can render agents before events arrive.
 
     Args:
@@ -420,7 +420,7 @@ async def ws_playback(
     names = _load_names(name)
     await websocket.send_json({"type": "meta", **meta, "names": names, "run_name": name})
     builder = GraphStateBuilder()
-    _seed_builder_from_names(builder, names)
+    _prime_builder_from_names(builder, names)
     await websocket.send_json({"type": "graph_state", **builder.state()})
 
     last_graph_send = time.monotonic()
@@ -592,7 +592,7 @@ async def ws_live(
                 buf = bytearray()
                 builder = GraphStateBuilder()
                 names = _load_names(target_run)
-                _seed_builder_from_names(builder, names)
+                _prime_builder_from_names(builder, names)
                 bootstrapped = False
                 graph_dirty = False
                 pending.clear()

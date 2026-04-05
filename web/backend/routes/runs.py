@@ -121,8 +121,6 @@ def _read_run_meta(ref) -> dict[str, Any]:
             meta["governance"] = scenario_payload.get("governance") or ""
         if not meta.get("ticks_total"):
             meta["ticks_total"] = int(scenario_payload.get("rounds") or 0)
-        if meta.get("seed") is None:
-            meta["seed"] = scenario_payload.get("seed")
         if not isinstance(meta.get("runtime"), dict):
             runtime_payload = _runtime_payload_from_sim_config(scenario_payload.get("sim_config"))
             if runtime_payload is not None:

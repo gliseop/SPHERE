@@ -2028,7 +2028,6 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 .runs-date-cell,
-.runs-seed-cell,
 .runs-size-cell {
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);

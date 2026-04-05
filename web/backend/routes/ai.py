@@ -15,7 +15,6 @@ from sphere_lc.llm import create_provider
 from sphere_lc.persona import social_link_match_key, social_link_name_key
 from sphere_lc.utils import (
     looks_like_machine_name,
-    looks_like_role_label,
     normalize_agent_display_name,
 )
 
@@ -36,37 +35,6 @@ from web.backend.validators import validate_library_id
 router = APIRouter(tags=["ai"])
 
 _SECONDARY_ALLOWED_CAPABILITIES = frozenset({"message", "work"})
-_SECONDARY_FAMILY_KEYWORDS = (
-    "сем",
-    "родств",
-    "брат",
-    "сест",
-    "жена",
-    "муж",
-    "дочь",
-    "сын",
-    "мать",
-    "отец",
-    "family",
-    "relative",
-)
-_SECONDARY_SOCIETY_KEYWORDS = (
-    "обще",
-    "медиа",
-    "журналист",
-    "пресс",
-    "активист",
-    "избират",
-    "жител",
-    "пациент",
-    "родител",
-    "public",
-    "media",
-    "journal",
-    "press",
-    "community",
-    "citizen",
-)
 
 
 async def _generate_structured_via_provider(
@@ -101,8 +69,6 @@ def _load_secondary_base_config(payload: SecondaryAgentsPayload) -> ScenarioConf
     else:
         cfg = load_template_config_for_web(payload.scenario, governance=payload.governance)
     cfg = cfg.model_copy(deep=True)
-    if payload.seed is not None:
-        cfg.seed = int(payload.seed)
     if payload.rounds is not None:
         cfg.ticks = int(payload.rounds)
     return cfg
@@ -201,19 +167,13 @@ def _secondary_agents_user_prompt(payload: SecondaryAgentsPayload, cfg: Scenario
     )
 
 
-def _normalize_secondary_kind(kind: str, relation: str) -> str:
+def _normalize_secondary_kind(kind: str) -> str:
     """Нормализовать категорию secondary-актора."""
 
     normalized_kind = (kind or "").strip().casefold()
     if normalized_kind in {"family", "society"}:
         return normalized_kind
-
-    relation_key = social_link_name_key(relation)
-    if any(token in relation_key for token in _SECONDARY_FAMILY_KEYWORDS):
-        return "family"
-    if any(token in relation_key for token in _SECONDARY_SOCIETY_KEYWORDS):
-        return "society"
-    return "society"
+    return ""
 
 
 def _secondary_title(kind: str, relation: str) -> str:
@@ -532,8 +492,10 @@ async def generate_secondary_agents(
 
         kind = _normalize_secondary_kind(
             str(item.get("kind") or ""),
-            str(item.get("relation") or ""),
         )
+        if not kind:
+            skipped_agents.append({"reason": "invalid kind", "candidate": item})
+            continue
         if kind == "family" and family_slots <= 0:
             skipped_agents.append({"reason": "family quota reached", "candidate": item})
             continue
@@ -542,7 +504,7 @@ async def generate_secondary_agents(
             continue
 
         display_name = normalize_agent_display_name(str(item.get("name") or ""))
-        if not display_name or looks_like_machine_name(display_name) or looks_like_role_label(display_name):
+        if not display_name or looks_like_machine_name(display_name):
             skipped_agents.append({"reason": "invalid display name", "candidate": item})
             continue
 

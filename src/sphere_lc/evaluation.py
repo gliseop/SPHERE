@@ -3,26 +3,10 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
-
-_CANONICAL_TYPE_EQUIVALENTS: dict[str, set[str]] = {
-    "partial_disclosure_under_deadline_pressure": {
-        "partial_disclosure_under_deadline_pressure",
-        "non_disclosure_under_deadline_pressure",
-        "narrative_manipulation",
-    },
-    "non_escalation_under_pressure": {
-        "non_escalation_under_pressure",
-        "process_manipulation",
-        "narrative_manipulation",
-    },
-}
-
 
 class EvaluationSummary(BaseModel):
     """Итог сравнения runtime-сигналов и truth-layer."""
@@ -245,13 +229,7 @@ def _signal_strict_entry(item: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _normalize_violation_type(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    for canonical, aliases in _CANONICAL_TYPE_EQUIVALENTS.items():
-        if text in aliases:
-            return canonical
-    return text
+    return str(value or "").strip()
 
 
 def _extract_evidence_refs(value: Any) -> list[dict[str, Any]]:
@@ -286,13 +264,6 @@ def _evidence_signature(evidence_refs: list[dict[str, Any]]) -> str:
         return json.dumps(signatures, ensure_ascii=False, sort_keys=True)
     except TypeError:
         return repr(signatures)
-
-
-_TOKEN_SPLIT_RE = re.compile(r"[^A-Za-zА-Яа-я0-9_]+")
-
-
-def _tokenize(text: str) -> set[str]:
-    return {token for token in _TOKEN_SPLIT_RE.split((text or "").casefold()) if token}
 
 
 def _truth_finding(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -436,10 +407,12 @@ def _finding_match_score(*, truth: dict[str, Any], signal: dict[str, Any]) -> fl
     if _compatible_target(truth.get("beneficiary"), signal.get("beneficiary")):
         score += 0.1
     score += 0.25 * _evidence_overlap(truth.get("evidence_refs", []), signal.get("evidence_refs", []))
-    score += 0.15 * _jaccard(truth.get("risk_tags", set()), signal.get("risk_tags", set()))
-    truth_text = f"{truth.get('summary','')} {truth.get('mechanism','')}"
-    signal_text = f"{signal.get('summary','')} {signal.get('mechanism','')}"
-    score += 0.2 * _jaccard(_tokenize(truth_text), _tokenize(signal_text))
+    if not _violation_type_match(truth.get("violation_type"), signal.get("violation_type")):
+        same_case_shape = bool(_compatible_target(truth.get("target"), signal.get("target"))) or bool(
+            _compatible_target(truth.get("beneficiary"), signal.get("beneficiary"))
+        )
+        if same_case_shape and _evidence_overlap(truth.get("evidence_refs", []), signal.get("evidence_refs", [])) >= 0.5:
+            score += 0.1
     return min(score, 1.0)
 
 

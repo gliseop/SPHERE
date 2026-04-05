@@ -55,6 +55,12 @@ cp .env.example .env
 | `JWT_EXPIRE_HOURS` | Нет | Время жизни токена, по умолчанию 24 часа |
 | `SPHERE_DEV` | Нет | `1` для режима разработки (если `JWT_SECRET` не задан, backend создаёт одноразовый секрет на текущий процесс) |
 
+PowerShell может импортировать `.env` в текущий процесс так:
+
+```powershell
+. .\scripts\Import-DotEnv.ps1
+```
+
 ### Установка фронтенда (опционально)
 
 ```bash
@@ -68,20 +74,20 @@ cd ../..
 ### Запуск симуляции по сценарию
 
 ```bash
-# Минимальный сценарий (YAML)
-sphere-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
+# Минимальный сценарий (JSON)
+sphere-lc run --scenario scenarios/lc_minimal.json --out results/lc_minimal_run
 ```
 
 ### Переопределение числа тиков
 
 ```bash
-sphere-lc run --scenario scenarios/lc_minimal.yaml --ticks 50 --out results/long_run
+sphere-lc run --scenario scenarios/lc_minimal.json --ticks 50 --out results/long_run
 ```
 
 ### Генерация сценария из описания (LLM)
 
 ```bash
-sphere-lc compose --description "Кумовство при найме в муниципальном учреждении" --out scenarios/composed.yaml
+sphere-lc compose --description "Кумовство при найме в муниципальном учреждении" --out scenarios/composed.json
 ```
 
 Команда генерирует сценарий и обогащает персоны (биография + интервью), поэтому делает несколько LLM-вызовов (примерно 1 на агента).
@@ -89,7 +95,7 @@ sphere-lc compose --description "Кумовство при найме в мун�
 Описание можно передать из файла:
 
 ```bash
-sphere-lc compose --description-file docs/scenario_brief.txt --out scenarios/composed.yaml
+sphere-lc compose --description-file docs/scenario_brief.txt --out scenarios/composed.json
 ```
 
 ### Анализ нарушений (оракул)

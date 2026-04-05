@@ -139,7 +139,6 @@ class MemoryConfig(BaseModel):
             "environment_institution_updated": 5.0,
             "environment_zone_updated": 5.0,
             "environment_resource_updated": 5.0,
-            "environment_operational_queue_updated": 5.0,
             "environment_information_climate_updated": 5.0,
             "audit_flagged": 7.0,
             "audit_case_opened": 7.0,
@@ -701,53 +700,6 @@ class ResourcePoolConfig(BaseModel):
         return float(v)
 
 
-class OperationalQueueConfig(BaseModel):
-    """Стартовая operational queue: backlog, capacity, average delay."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    queue_id: str
-    title: str
-    owner_org_id: str | None = None
-    zone_id: str | None = None
-    backlog: int = 0
-    capacity_per_tick: int = 0
-    avg_delay_ticks: int = 0
-    status: str = "stable"
-    pressure: str = ""
-
-    @field_validator("queue_id", "title", "status")
-    @classmethod
-    def _validate_non_empty_string(cls, v: str) -> str:
-        value = str(v or "").strip()
-        if not value:
-            raise ValueError("value must be non-empty")
-        return value
-
-    @field_validator("owner_org_id")
-    @classmethod
-    def _validate_queue_owner_org_id(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        ensure_kind(v, EntityKind.ORG)
-        return v
-
-    @field_validator("zone_id")
-    @classmethod
-    def _validate_queue_zone_id(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        ensure_kind(v, EntityKind.ZONE)
-        return v
-
-    @field_validator("backlog", "capacity_per_tick", "avg_delay_ticks")
-    @classmethod
-    def _validate_non_negative_queue_int(cls, v: int) -> int:
-        if v < 0:
-            raise ValueError("queue values must be >= 0")
-        return int(v)
-
-
 class ArtifactConfig(BaseModel):
     """Стартовый документ/артефакт мира."""
 
@@ -912,7 +864,6 @@ class EnvironmentConfig(BaseModel):
     institution_modes: list[InstitutionRegimeConfig] = Field(default_factory=list)
     zones: list[ZoneConfig] = Field(default_factory=list)
     resource_pools: list[ResourcePoolConfig] = Field(default_factory=list)
-    operational_queues: list[OperationalQueueConfig] = Field(default_factory=list)
     information_climate: InformationClimateConfig = Field(default_factory=InformationClimateConfig)
     informal_links: list[InformalLinkConfig] = Field(default_factory=list)
     population_blueprints: list[PopulationBlueprintConfig] = Field(default_factory=list)
@@ -957,39 +908,6 @@ class WorldConfig(BaseModel):
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
 
 
-class ScriptedEventConfig(BaseModel):
-    """Предопределённое внешнее событие мира."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    event_id: str = ""
-    tick: int | None = None
-    if_event_types: list[str] = Field(default_factory=list)
-    if_work_ids_open: list[str] = Field(default_factory=list)
-    audience: Literal["public", "internal"] = "internal"
-    description: str
-    once: bool = True
-
-    @field_validator("tick")
-    @classmethod
-    def _validate_tick(cls, v: int | None) -> int | None:
-        if v is None:
-            return None
-        if v < 0:
-            raise ValueError("scripted event tick must be >= 0")
-        return v
-
-    @field_validator("if_event_types", "if_work_ids_open")
-    @classmethod
-    def _normalize_non_empty_strings(cls, v: list[str]) -> list[str]:
-        out: list[str] = []
-        for item in v or []:
-            value = str(item or "").strip()
-            if value:
-                out.append(value)
-        return out
-
-
 class ScenarioConfig(BaseModel):
     """Корневой конфиг сценария SPHERE-LC."""
 
@@ -998,7 +916,6 @@ class ScenarioConfig(BaseModel):
     version: int = 1
     title: str = "Untitled"
     description: str = ""
-    seed: int = 42
     ticks: int = 25
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -1008,7 +925,6 @@ class ScenarioConfig(BaseModel):
 
     agents: list[AgentConfig] = Field(default_factory=list)
     world: WorldConfig = Field(default_factory=WorldConfig)
-    scripted_events: list[ScriptedEventConfig] = Field(default_factory=list)
 
     @field_validator("ticks")
     @classmethod

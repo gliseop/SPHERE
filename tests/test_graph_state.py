@@ -206,7 +206,7 @@ def test_graph_state_hides_reputation_for_external_agent_snapshot():
     assert nodes["agent:contractor"]["has_reputation"] is False
 
 
-def test_graph_state_tracks_environment_queue_and_signals():
+def test_graph_state_tracks_environment_signals_without_queue_layer():
     graph = build_graph_state(
         [
             {
@@ -235,8 +235,7 @@ def test_graph_state_tracks_environment_queue_and_signals():
         ]
     )
 
-    assert graph["environment"]["queues"][0]["queue_id"] == "queue:permits"
-    assert graph["environment"]["queues"][0]["status"] == "overloaded"
+    assert "queues" not in graph["environment"]
     assert graph["environment"]["active_signals"] == [
         "очередь queue:permits перегружена",
         "публичное давление по queue:permits",

@@ -1,0 +1,220 @@
+{
+  "version": 1,
+  "title": "Прямой сговор",
+  "description": "Муниципальная закупка оборудования с устойчивой неформальной связью между чиновником и одним из подрядчиков. Runtime-аудит в G1 уже умеет фиксировать сигналы и подсвечивать риск, но не замораживает репутацию и не запускает коллегиальное review. Сценарий показывает раннюю фазу коррупционного отклонения, когда процедура ещё внешне выглядит обычной, а решающее значение имеют скрытые предпочтения и кулуарная координация.",
+  "ticks": 25,
+  "governance": {
+    "audit": {
+      "enabled": true,
+      "actor_id": null,
+      "reputation_freeze_enabled": false,
+      "collegial_review_enabled": false,
+      "reputation_penalty_delta": null
+    }
+  },
+  "agents": [
+    {
+      "agent_id": "agent:off_1",
+      "name": "Козлов И.М.",
+      "internal": true,
+      "persona": {
+        "summary": "Начальник отдела обеспечения. Склонен закрывать сделку через знакомого подрядчика и рационализирует это заботой о результате.",
+        "biography": "Козлов руководит закупками не первый год и привык считать, что управляемая сделка лучше честной, но непредсказуемой конкуренции. Он убеждён, что знакомый подрядчик быстрее поставит оборудование, не подведёт по документам и не создаст публичных проблем. Именно поэтому он постепенно смещает требования и обсуждение в сторону «ТехСнаба», стараясь сохранить для себя видимость формальной чистоты."
+      },
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:it_admin",
+      "zone_id": "zone:it_office",
+      "initial_reputation": 7.0,
+      "initial_title": "начальник отдела обеспечения",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:biz_1",
+      "name": "Петров С.И.",
+      "internal": false,
+      "persona": {
+        "summary": "Директор «ТехСнаб». Заинтересован в победе через личный доступ к заказчику и готов маскировать привилегию под деловую компетентность.",
+        "biography": "Петров знает, что его компания не всегда объективно лучшая по цене или сервису, но компенсирует это личной связью с Козловым и умением заранее угадывать ожидания заказчика. Он не любит прямых договорённостей на бумаге, предпочитая мягкое влияние через технические формулировки, намёки на срочность и предложение «помочь разобраться». Если понадобится, быстро перестроится в образ законопослушного поставщика."
+      },
+      "capabilities": [
+        "message"
+      ],
+      "org_id": "org:techsnab",
+      "zone_id": "zone:vendor_hub",
+      "initial_reputation": 6.0,
+      "initial_title": "директор «ТехСнаб»",
+      "wants_promotion": false
+    },
+    {
+      "agent_id": "agent:biz_2",
+      "name": "Сидоров В.К.",
+      "internal": false,
+      "persona": {
+        "summary": "Директор «ГрадТех». Пытается выиграть конкурс на конкурентных условиях и постепенно замечает, что поле игры не совсем нейтрально.",
+        "biography": "Сидоров пришёл на конкурс с нормальным коммерческим предложением и ожидает обычной рыночной конкуренции. Чем дольше идёт подготовка, тем сильнее он чувствует, что часть требований и коммуникаций почему-то складывается в пользу конкретного соперника. Его реакция зависит от того, удастся ли ему перевести недоверие в формальные претензии, а не в голое раздражение."
+      },
+      "capabilities": [
+        "message"
+      ],
+      "org_id": "org:gradtech",
+      "zone_id": "zone:vendor_hub",
+      "initial_reputation": 8.0,
+      "initial_title": "директор «ГрадТех»",
+      "wants_promotion": false
+    }
+  ],
+  "world": {
+    "channels": [
+      {
+        "channel_id": "chan:public",
+        "title": "Публичный канал"
+      },
+      {
+        "channel_id": "chan:it_procurement",
+        "title": "Канал ИТ-закупки"
+      }
+    ],
+    "orgs": [
+      {
+        "org_id": "org:it_admin",
+        "title": "Управление цифрового развития города"
+      },
+      {
+        "org_id": "org:techsnab",
+        "title": "ООО «ТехСнаб»"
+      },
+      {
+        "org_id": "org:gradtech",
+        "title": "АО «ГрадТех»"
+      }
+    ],
+    "work_items": [
+      {
+        "work_id": "work:tender_1",
+        "work_type": "procurement_tender",
+        "title": "Конкурс на поставку оборудования",
+        "description": "Закупка серверного оборудования и сетевой инфраструктуры для городского дата-центра. Формально конкурс открыт, но внутри процесса уже возник перекос в пользу знакомого подрядчика: сроки разъяснений сужаются, критерии опыта становятся избыточно специфичными, а альтернативный поставщик всё чаще чувствует себя лишним. Это сценарий не грубой взятки, а ранней стадии управляемого фаворитизма.",
+        "participants": [
+          "agent:off_1",
+          "agent:biz_1",
+          "agent:biz_2"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "artifact_id": "art:spec_appendix",
+        "artifact_type": "specification",
+        "title": "Приложение к техническому заданию",
+        "summary": "Дополнение к ТЗ с требованиями к совместимости оборудования, которые на бумаге выглядят нейтрально, но практически удобнее для одного поставщика.",
+        "owner_org_id": "org:it_admin",
+        "zone_id": "zone:it_office",
+        "related_work_id": "work:tender_1",
+        "visibility": "internal",
+        "status": "draft",
+        "tags": [
+          "тз",
+          "совместимость",
+          "риск-фаворитизма"
+        ]
+      },
+      {
+        "artifact_id": "art:market_note",
+        "artifact_type": "analysis",
+        "title": "Справка по рыночным предложениям",
+        "summary": "Сводка по ценам и срокам, в которой отдельные формулировки могут быть использованы для оправдания уже желаемого победителя.",
+        "owner_org_id": "org:it_admin",
+        "zone_id": "zone:it_office",
+        "related_work_id": "work:tender_1",
+        "visibility": "internal",
+        "status": "active",
+        "tags": [
+          "рынок",
+          "обоснование",
+          "конкурс"
+        ]
+      }
+    ],
+    "environment": {
+      "institution_modes": [
+        {
+          "org_id": "org:it_admin",
+          "operating_mode": "strained",
+          "transparency_mode": "limited",
+          "access_mode": "internal",
+          "security_mode": "heightened",
+          "capture_risk": "medium",
+          "linked_zone_ids": [
+            "zone:it_office",
+            "zone:data_center"
+          ]
+        }
+      ],
+      "zones": [
+        {
+          "zone_id": "zone:it_office",
+          "title": "ИТ-отдел",
+          "zone_type": "office",
+          "primary_org_id": "org:it_admin",
+          "access_mode": "controlled",
+          "transparency_mode": "internal",
+          "security_level": "heightened"
+        },
+        {
+          "zone_id": "zone:data_center",
+          "title": "Муниципальный дата-центр",
+          "zone_type": "critical_infrastructure",
+          "primary_org_id": "org:it_admin",
+          "access_mode": "restricted",
+          "transparency_mode": "internal",
+          "security_level": "heightened"
+        },
+        {
+          "zone_id": "zone:vendor_hub",
+          "title": "Контур поставщиков",
+          "zone_type": "office",
+          "access_mode": "mixed",
+          "transparency_mode": "private",
+          "security_level": "routine"
+        }
+      ],
+      "resource_pools": [
+        {
+          "resource_id": "res:it_upgrade_budget",
+          "title": "Бюджет обновления ИТ-инфраструктуры",
+          "owner_org_id": "org:it_admin",
+          "quantity": 16800,
+          "unit": "тыс. руб.",
+          "status": "strained",
+          "pressure": "Срыв закупки ударит по цифровым KPI города, поэтому руководство подталкивает отдел к быстрому завершению процедуры."
+        }
+      ],
+      "information_climate": {
+        "public_mood": "Снаружи процесс пока выглядит рутинным, но внутри нарастает ощущение нечестной игры.",
+        "oversight_attention": "Умеренное: аудит видит первые сигналы, но ещё не обладает жёсткими санкциями.",
+        "media_pressure": "Низкое, пока конфликт не вышел в публичное поле.",
+        "narrative_temperature": "Скрыто напряжённая повестка.",
+        "active_signals": [
+          "узкие технические требования",
+          "частые неформальные контакты",
+          "недовольство альтернативного поставщика"
+        ]
+      },
+      "informal_links": [
+        {
+          "agent_a_id": "agent:off_1",
+          "agent_b_id": "agent:biz_1",
+          "link_type": "личное знакомство и неформальное доверие",
+          "strength": 0.83,
+          "visibility": "latent",
+          "pressure": "Козлов и Петров говорят так, будто просто понимают друг друга с полуслова, хотя именно это и создаёт перекос в процедуре.",
+          "source": "scenario"
+        }
+      ]
+    }
+  }
+}

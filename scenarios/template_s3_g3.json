@@ -1,0 +1,257 @@
+{
+  "version": 1,
+  "title": "Кумовство при найме: коллегиальное review",
+  "description": "Кадровый конкурс с тем же ядром кумовства, что и в S2, но в режиме G3 спорные сигналы уже могут переводиться в коллегиальное review. Это меняет поведение участников: начальник и лоббист понимают, что сомнительное решение рискует стать предметом не только аудиторской фиксации, но и коллективного разбора. Сценарий нужен для наблюдения за тем, как перспектива публичизации внутри системы перестраивает тактику мягкого давления и самооправдания.",
+  "ticks": 25,
+  "governance": {
+    "audit": {
+      "enabled": true,
+      "actor_id": null,
+      "reputation_freeze_enabled": true,
+      "collegial_review_enabled": true,
+      "reputation_penalty_delta": null
+    }
+  },
+  "agents": [
+    {
+      "agent_id": "agent:off_1",
+      "name": "Козлов И.М.",
+      "internal": true,
+      "persona": {
+        "summary": "Начальник отдела. Склонен к компромиссам ради спокойствия внутри коллектива, но сильнее боится институционального скандала, чем в сценарии S2.",
+        "biography": "Козлову по-человечески легче уступить просьбе своего сотрудника, чем устраивать жёсткий конфликт из-за одной вакансии. Но здесь он знает, что спорное решение может уйти на коллегиальный разбор, а значит, его логика выбора будет обсуждаться уже не кулуарно. Это делает его осторожнее, заставляет думать не только о локальной гармонии в отделе, но и о том, как будет выглядеть вся история при внешнем внутриорганизационном пересказе."
+      },
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:district_admin",
+      "zone_id": "zone:hr_office",
+      "initial_reputation": 7.0,
+      "initial_title": "начальник отдела",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:off_2",
+      "name": "Волков Д.Н.",
+      "internal": true,
+      "persona": {
+        "summary": "Специалист отдела, продвигающий родственника и пытающийся упаковать семейный интерес как заботу о надёжности команды.",
+        "biography": "Волков убеждён, что племянника можно «дотянуть» до нужного уровня уже в процессе работы, а потому не видит в своей протекции большого зла. Однако перспектива коллегиального review делает его нервнее: привычные аргументы про доверие и семейную ответственность уже не так легко работают, когда их потенциально услышит не один начальник, а несколько коллег."
+      },
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:district_admin",
+      "zone_id": "zone:hr_office",
+      "initial_reputation": 6.5,
+      "initial_title": "специалист отдела",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:cand_1",
+      "name": "Волков А.Д.",
+      "internal": false,
+      "persona": {
+        "summary": "Кандидат на должность, который получает семейное прикрытие, но уже понимает, что процедура может выйти на уровень коллективного обсуждения.",
+        "biography": "Волков А.Д. привык опираться на поддержку родственников и не слишком задумывался о том, как выглядит его преимущество для других участников. В этой версии сценария он начинает чувствовать, что решение могут оценивать шире и жёстче, чем обычное собеседование. Это создаёт смесь неуверенности, желания понравиться и попыток доказать, что он всё-таки не совсем случайный кандидат."
+      },
+      "capabilities": [
+        "message"
+      ],
+      "org_id": "org:candidate_pool",
+      "zone_id": "zone:interview_room",
+      "initial_reputation": 5.0,
+      "initial_title": "кандидат",
+      "wants_promotion": false
+    },
+    {
+      "agent_id": "agent:cand_2",
+      "name": "Антонова И.С.",
+      "internal": false,
+      "persona": {
+        "summary": "Сильный альтернативный кандидат без связей. Готова настаивать на прозрачности и получает больше шансов быть услышанной, если спор дойдёт до review.",
+        "biography": "Антонова видит в коллегиальном формате шанс вытащить разговор из режима личных симпатий в режим аргументов и критериев. Она по-прежнему не обладает внутренним покровителем, но уже понимает, что при правильной фиксации фактов несправедливость можно сделать видимой. Это придаёт ей больше настойчивости и дисциплины в защите своей позиции."
+      },
+      "capabilities": [
+        "message"
+      ],
+      "org_id": "org:candidate_pool",
+      "zone_id": "zone:interview_room",
+      "initial_reputation": 8.5,
+      "initial_title": "кандидат",
+      "wants_promotion": false
+    }
+  ],
+  "world": {
+    "channels": [
+      {
+        "channel_id": "chan:public",
+        "title": "Публичный канал"
+      },
+      {
+        "channel_id": "chan:hr_panel",
+        "title": "Канал кадрового конкурса"
+      },
+      {
+        "channel_id": "chan:ethics",
+        "title": "Канал этического review"
+      }
+    ],
+    "orgs": [
+      {
+        "org_id": "org:district_admin",
+        "title": "Администрация округа"
+      },
+      {
+        "org_id": "org:candidate_pool",
+        "title": "Контур внешних кандидатов"
+      }
+    ],
+    "work_items": [
+      {
+        "work_id": "work:hiring_1",
+        "work_type": "hiring_process",
+        "title": "Найм инженера в отдел",
+        "description": "Срочный кадровый конкурс на позицию инженера сопровождения коммунальной инфраструктуры. Внутри процесса сталкиваются дефицит людей, лояльность к действующему сотруднику и риск того, что семейное продвижение кандидата станет предметом официального review. Это уже не просто тихий HR-эпизод, а потенциальный кейс о справедливости внутри учреждения.",
+        "participants": [
+          "agent:off_1",
+          "agent:off_2",
+          "agent:cand_1",
+          "agent:cand_2"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "artifact_id": "art:vacancy_notice",
+        "artifact_type": "hr_document",
+        "title": "Объявление о вакансии инженера",
+        "summary": "Публикация с требованиями к опыту, навыкам документооборота и участию в выездных обследованиях объектов.",
+        "owner_org_id": "org:district_admin",
+        "zone_id": "zone:hr_office",
+        "related_work_id": "work:hiring_1",
+        "visibility": "public",
+        "status": "active",
+        "tags": [
+          "вакансия",
+          "найм",
+          "инженер"
+        ]
+      },
+      {
+        "artifact_id": "art:evaluation_matrix",
+        "artifact_type": "assessment_sheet",
+        "title": "Матрица оценки кандидатов",
+        "summary": "Внутренний шаблон с баллами за опыт, профильное образование, стрессоустойчивость и способность работать с жалобами граждан.",
+        "owner_org_id": "org:district_admin",
+        "zone_id": "zone:hr_office",
+        "related_work_id": "work:hiring_1",
+        "visibility": "internal",
+        "status": "draft",
+        "tags": [
+          "оценка",
+          "кадры",
+          "матрица"
+        ]
+      },
+      {
+        "artifact_id": "art:ethics_memo",
+        "artifact_type": "policy_note",
+        "title": "Памятка по конфликту интересов при найме",
+        "summary": "Краткое внутреннее напоминание о том, что личные и семейные связи должны раскрываться до принятия кадрового решения.",
+        "owner_org_id": "org:district_admin",
+        "zone_id": "zone:hr_office",
+        "related_work_id": "work:hiring_1",
+        "visibility": "internal",
+        "status": "active",
+        "tags": [
+          "этика",
+          "конфликт интересов",
+          "найм"
+        ]
+      }
+    ],
+    "environment": {
+      "institution_modes": [
+        {
+          "org_id": "org:district_admin",
+          "operating_mode": "strained",
+          "transparency_mode": "limited",
+          "access_mode": "internal",
+          "security_mode": "routine",
+          "capture_risk": "medium",
+          "linked_zone_ids": [
+            "zone:hr_office",
+            "zone:interview_room"
+          ]
+        }
+      ],
+      "zones": [
+        {
+          "zone_id": "zone:hr_office",
+          "title": "Кадровый кабинет отдела",
+          "zone_type": "office",
+          "primary_org_id": "org:district_admin",
+          "access_mode": "controlled",
+          "transparency_mode": "internal",
+          "security_level": "routine"
+        },
+        {
+          "zone_id": "zone:interview_room",
+          "title": "Переговорная для собеседований",
+          "zone_type": "office",
+          "primary_org_id": "org:district_admin",
+          "access_mode": "controlled",
+          "transparency_mode": "limited",
+          "security_level": "routine"
+        }
+      ],
+      "resource_pools": [
+        {
+          "resource_id": "res:salary_fund_hiring",
+          "title": "Фонд оплаты труда по вакансии",
+          "owner_org_id": "org:district_admin",
+          "quantity": 1450,
+          "unit": "тыс. руб. в год",
+          "status": "stable",
+          "pressure": "Ставка одна, а дефицит кадров уже влияет на качество работы отдела и реакцию на обращения граждан."
+        }
+      ],
+      "information_climate": {
+        "public_mood": "Снаружи история почти невидима, но внутри организации уже считывается как тест на справедливость процедуры.",
+        "oversight_attention": "Высокое: режим G3 делает даже локальный кадровый эпизод потенциальным кейсом для review.",
+        "media_pressure": "Низкое, но растущее при любой утечке.",
+        "narrative_temperature": "Выше, чем в S2, потому что участники чувствуют вероятность формального разбора.",
+        "active_signals": [
+          "семейная связь кандидата",
+          "этические риски",
+          "возможность коллегиального review"
+        ]
+      },
+      "informal_links": [
+        {
+          "agent_a_id": "agent:off_2",
+          "agent_b_id": "agent:cand_1",
+          "link_type": "семейная связь",
+          "strength": 0.95,
+          "visibility": "visible",
+          "pressure": "Связь нельзя полностью скрыть, а значит, любой перекос в оценке всё легче интерпретировать как фаворитизм.",
+          "source": "scenario"
+        },
+        {
+          "agent_a_id": "agent:off_1",
+          "agent_b_id": "agent:off_2",
+          "link_type": "рабочая зависимость и внутренняя солидарность",
+          "strength": 0.55,
+          "visibility": "visible",
+          "pressure": "Козлову хочется удержать команду от конфликта, но теперь он понимает цену слишком мягкого решения.",
+          "source": "scenario"
+        }
+      ]
+    }
+  }
+}

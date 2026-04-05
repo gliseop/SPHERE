@@ -18,8 +18,7 @@ flowchart TD
     BOOT --> TICK[Тик N]
 
     TICK --> THAW[Снять истёкшие заморозки репутации]
-    THAW --> SCRIPT[Scripted events: предопределённые развилки]
-    SCRIPT --> PREW{pre-tick worldgen включён?}
+    THAW --> PREW{pre-tick worldgen включён?}
     PREW -->|да| PRECTX[WorldGenerator pre: global events + agent_contexts + scene_hooks]
     PREW -->|нет| SHUFFLE
     PRECTX --> SHUFFLE[Перемешать порядок агентов]
@@ -48,20 +47,19 @@ flowchart TD
     EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + status.json + evaluation.json + fidelity.json + summary.json + perf_summary.json + environment_summary.json + environment_timeline.jsonl]
 ```
 
-Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы, стартовый `environment`-слой и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry`, материализует `world.environment` как отдельный слой состояния среды, включая operational queues / backlog-контуры, и запускает цикл тиков.
+Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы, стартовый `environment`-слой и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry`, материализует `world.environment` как отдельный слой состояния среды и запускает цикл тиков.
 
 ## Агент (AgentRunner)
 
 `AgentRunner` реализует модель «один LLM-вызов на ход». На каждом тике агент получает:
-- системный промпт с ролью автономного участника организационного процесса, без мета-фрейма «ты в симуляции»;
-- пользовательский промпт с текущей ситуацией: текущее время мира (`tick` всегда и каноническая дата/время мира, если задана через `runtime.start_date`), мотивационный блок (`цели/страхи/обязательства/выгоды/угрозы`), личность, должность, полномочия, список известных агентов, каналов, организаций, рабочих элементов, открытых голосований, релевантные воспоминания и последние события.
+- системный промпт с diegetic framing: он живёт внутри обычного рабочего дня, не видит мета-фрейм «ты в симуляции» и не должен говорить как внешний аналитик;
+- пользовательский промпт с текущей ситуацией: сегодняшняя дата/время (если заданы через `runtime.start_date`), мотивационный блок (`цели/страхи/обязательства/выгоды/угрозы`), личность, должность, служебные обозначения людей/дел/каналов/организаций, открытые процедуры, релевантные воспоминания и последние события.
 
 Если у агента заданы `org_id` и/или `zone_id`, движок дополнительно подаёт краткий релевантный environment-brief:
 
 - режим организации;
 - режим зоны;
 - связанные ресурсные пулы организации;
-- связанные operational queues / backlog-контуры;
 - текущий информационный климат.
 
 Если в мире есть релевантные `art:*`-артефакты (по `org_id`, `zone_id` или связанному `work item`), агент дополнительно видит краткий список документов и следов, относящихся к его локальной среде.
@@ -84,7 +82,7 @@ flowchart TD
 - `opportunity` — какую практическую выгоду даёт серый shortcut;
 - `exposure_risk` — чем это грозит при раскрытии.
 
-Когнитивный агент возвращает один свободный `proposal` на ход: краткое естественное описание того, что он собирается сделать в этот тик. Typed actions сохраняются внутри runtime как внутренний слой арбитра и `StateOp`, но не как меню, из которого агент должен выбирать. Agent prompt теперь дополнительно содержит contrastive examples: что считается materializable proposal, а что является слишком абстрактной декларацией без наблюдаемого шага мира. Эти examples также condition-ятся по доступным `capabilities`: агент без `work` не получает шаблоны self-work-операций, а цель открытой номинации без `dao` получает шаблон ответа на `vote`, а не открытия нового голосования.
+Когнитивный агент возвращает один свободный `reply` на ход: краткое естественное описание ближайшего намерения изнутри своей роли. Typed actions сохраняются внутри runtime как внутренний слой арбитра и `StateOp`, но не как меню, из которого агент должен выбирать. Agent prompt дополнительно содержит contrastive examples: какой ход звучит по-человечески и materializable, а какой остаётся пустой декларацией без наблюдаемого шага мира. Эти examples также condition-ятся по доступным полномочиям: агент без рабочего доступа не получает шаблоны self-work-операций, а цель открытой номинации без права голоса получает шаблон ответа на `vote`, а не открытия нового голосования.
 
 Этап `propose_actions` может идти как последовательно, так и параллельно. Это задаётся через `runtime.parallel_agents`; при включённом режиме `runtime.parallel_workers` ограничивает число одновременных LLM-вызовов. Применение результатов к `WorldState` всё равно остаётся последовательным и детерминированным.
 
@@ -94,23 +92,9 @@ flowchart TD
 
 Если включены `runtime.micro_reaction_rounds`, часть локальных категорий `pending_interactions` теперь может доезжать до `pending_interaction_due` уже в том же тике. После основного apply движок делает same-tick follow-up sweep и даёт адресатам короткое окно закрыть reply / queue / artifact-follow-up без обязательного ожидания следующего глобального шага.
 
-Материальный слой среды теперь не ограничивается только `res:*`. Движок также поддерживает `environment.operational_queues`: backlog, задержки и пропускную способность локальных процессов. Ресурсное давление может детерминированно переводить такие очереди в `strained` / `overloaded`, эмитить `environment_operational_queue_updated`, создавать `queue_alert`-артефакты и через них давить на релевантных агентов.
+Материальный слой среды в актуальной модели больше не включает отдельный queue-layer и scripted external events. Остаются режимы организаций, зоны, ресурсные пулы, информационный климат и неформальные связи.
 
-Поверх queue-layer добавлен и простой local-process контур: перегруженная очередь может детерминированно порождать `complaint_wave` и `publication` артефакты, дописывать service-degradation сигнал в `information_climate.active_signals` и эмитить публичные `world_event` о росте задержек и жалоб. Это делает backlog не только числом в состоянии, но и источником наблюдаемых последствий для внешней среды.
-
-Кроме того, у operational queues теперь есть собственный per-tick процесс. Если релевантные агенты ничего не делают, backlog и delay могут продолжать расти даже без нового worldgen-update. Если же внутри организации или зоны появляется фактическая `work`-активность, очередь может начать переход в `recovering`, а complaint/publication-контур — закрываться через recovery-world-event.
-
-На следующем уровне этот же queue-process уже умеет materialize external actors: при тяжёлой service-degradation и включённом `runtime.allow_runtime_spawn` движок может детерминированно порождать внешнего complainant и/или reporter, привязанных к конкретной очереди и организации/зоне. Это превращает service-degradation из чисто средового сигнала в источник новой агентности мира.
-
-Спавн не остаётся пустым. Для таких акторов движок сразу seed’ит локальные `pending_interactions` (`queue_escalation`, `queue_publication_push`, `issue_coordination`) и неформальную связь `shared_issue`, поэтому они могут начать собственную action-chain: жалоба в организацию, координация между собой, публикация в публичный канал. При включённых local reaction windows часть такого follow-up теперь может материализоваться уже в рамках того же тика.
-
-Этот контур теперь замыкается обратно в ядро организации. Когда complainant или reporter действительно совершают свои действия, движок детерминированно материализует:
-
-- `external_complaint` / `press_inquiry` артефакты;
-- новые signals в `information_climate.active_signals`;
-- internal `pending_interactions` категорий `external_queue_complaint_response` и `media_response` для релевантных внутренних агентов.
-
-За счёт этого queue-driven ecology начинает влиять не только на внешнюю среду, но и на decisions core-акторов.
+Внешняя агентность теперь наращивается только через `population_blueprints`, secondary-spawn и обычный worldgen, без отдельного queue-driven контура.
 
 Дополнительно после применения действий движок может детерминированно обновлять `environment.informal_links`: частные сообщения усиливают связи типа `private_contact`, а совместная работа по одному делу — связи типа `coordination`. Это даёт среде накапливаемый латентный слой зависимостей даже без отдельной worldgen-подсказки.
 
@@ -118,7 +102,7 @@ flowchart TD
 
 Если `runtime.ecology_activation_window_ticks > 0`, не-core акторы (secondary/worldgen/runtime-spawned) не ходят автоматически каждый тик. Движок активирует их только если они недавно были затронуты событиями, hook-ами, созданием, прямым взаимодействием или открытым `pending_interaction`. Это уменьшает public-process capture со стороны ecology без отключения самой среды.
 
-Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью + expert reflection). Результат сохраняется в `{out_dir}/personas.json` и дополнительно пишется в persistent fingerprint-cache рядом с директориями прогонов. За счёт этого одинаковые repeated runs могут переиспользовать enrichment между разными `out_dir` при совпадении fingerprint входов (seed, язык, модель, режим, описание сценария и базовые данные агентов).
+Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью + expert reflection). Результат сохраняется в `{out_dir}/personas.json` и дополнительно пишется в persistent fingerprint-cache рядом с директориями прогонов. За счёт этого одинаковые repeated runs могут переиспользовать enrichment между разными `out_dir` при совпадении fingerprint входов (язык, модель, режим, описание сценария и базовые данные агентов).
 
 Если `runtime.spawn_secondary=true`, после enrichment запускается `SocialGraphExtractor`: он извлекает из биографий и интервью значимых людей, создаёт вторичных агентов до первого тика, обогащает их персоны в том же режиме, что и основной сценарий (`core` или `full`), и связывает первичные/вторичные пары через память. Role-only ссылки и alias-дубли существующих должностей не материализуются в новых агентов.
 
@@ -192,12 +176,7 @@ Prompt-layer агента теперь частично декларативен
 
 Дополнительно у открытых кейсов есть follow-up policy: если по `request_explanation` / `request_documents` истёк `response_due_tick`, аудитор либо поднимает `audit_monitoring_enabled`, либо открывает `audit_review`, либо закрывает кейс при детектированном ответе/пакете документов.
 
-В baseline-эвристиках аудитора теперь есть и queue-driven governance bridge. Если service-degradation породила internal obligations категорий `external_queue_complaint_response` или `media_response`, аудитор рассматривает их как значимую governance-поверхность:
-
-- `pending_interaction_due` по таким обязательствам может привести к `service_degradation_response_ignored` с `request_explanation` / `request_documents`;
-- `pending_interaction_expired` по ним может привести к `open_case`.
-
-Тем самым очередь, жалобы и медийное давление влияют уже не только на ecology и core-agent prompts, но и на формальный oversight path.
+Baseline-эвристики аудитора теперь сфокусированы на структурных governance- и контактных паттернах мира, а не на искусственно материализованном queue-driven контуре.
 
 `RuntimeAuditor` не подменяет собой `ViolationOracle` и не создаёт ground truth эксперимента. Его выход — это governance-treatment, а не пост-фактум измерение качества режима.
 
@@ -317,7 +296,7 @@ Agent prompt использует не один общий retrieval-блок, �
 
 Движок принимает `spawns` только если `runtime.allow_runtime_spawn=true`. Для совместимости worldgen по-прежнему понимает legacy-формат `list[world_event]` без блока `spawns`. Дополнительно движок требует человеко-читаемый display-name, отсекает role-only ярлыки и не принимает внутренних акторов от worldgen, если `runtime.worldgen_allow_internal_spawns=false`.
 
-Если worldgen возвращает `environment_updates`, движок применяет их детерминированно к организациям, зонам, ресурсным пулам и информационному климату через отдельные события `environment_institution_updated`, `environment_zone_updated`, `environment_resource_updated`, `environment_information_climate_updated`. Для `operational_queues` контур теперь допускает `upsert`: worldgen может не только менять уже существующую очередь, но и materialize новую queue по `queue_id`, если она ещё не была объявлена в стартовом `world.environment`.
+Если worldgen возвращает `environment_updates`, движок применяет их детерминированно к организациям, зонам, ресурсным пулам и информационному климату через отдельные события `environment_institution_updated`, `environment_zone_updated`, `environment_resource_updated`, `environment_information_climate_updated`.
 
 Если worldgen возвращает `artifact_creations` или `artifact_updates`, движок аналогично применяет их детерминированно через `artifact_created` и `artifact_updated`. Для совместимости legacy-prefix `artifact:*` нормализуется в канонический `art:*` до применения ops. Тем самым документарный слой становится самостоятельной поверхностью мира, а не только текстом в `world_event`.
 
@@ -372,7 +351,6 @@ Deterministic `TruthDetector` при этом расширяется остор�
 - `self_nomination`;
 - `nomination_after_private_contact`;
 - `support_vote_after_private_contact`;
-- `service_degradation_response_ignored`.
 
 Для спорных кейсов runtime-аудитор может открывать `audit_review`: это отдельный collegial review path, в котором детерминированно подбираются внутренние reviewers, а результат review закрывает audit-case и при необходимости подтверждает freeze growth.
 
@@ -393,7 +371,6 @@ Deterministic `TruthDetector` при этом расширяется остор�
 | `governance` | `GovernanceConfig` | Политика должностей, голосование и настройки runtime-аудита |
 | `agents` | `AgentConfig[]` | Агенты: ID, имя, персона, полномочия, стартовая репутация, должность |
 | `world` | `WorldConfig` | Каналы, организации, рабочие элементы, `artifacts` и стартовый stateful environment layer |
-| `scripted_events` | `ScriptedEventConfig[]` | Предопределённые внешние события и развилки сценария |
 
 Ключевые поля `runtime`:
 - `start_date`: каноническая календарная дата тика `0`.

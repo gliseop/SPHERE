@@ -22,7 +22,7 @@ sphere-lc run --scenario <путь> [--out <директория>] [--ticks <ч�
 
 | Аргумент | Тип | По умолчанию | Описание |
 |---|---|---|---|
-| `--scenario` | путь | (обязательный) | Путь к сценарию (.yaml или .json) |
+| `--scenario` | путь | (обязательный) | Путь к сценарию (.json; YAML также читается как compatibility input) |
 | `--out` | путь | `results/<timestamp>` | Выходная директория (events.jsonl, trace.jsonl) |
 | `--ticks` | целое | из сценария | Переопределить число тиков |
 | `--enrich-personas` | флаг | `false` | Включить runtime-обогащение персон перед первым тиком |
@@ -38,9 +38,8 @@ sphere-lc compose --description <текст> --out <путь> [опции]
 |---|---|---|---|
 | `--description` | строка | `""` | Текстовое описание сценария |
 | `--description-file` | путь | — | Путь к файлу с описанием (альтернатива `--description`) |
-| `--out` | путь | (обязательный) | Куда сохранить сценарий (.yaml/.json) |
+| `--out` | путь | (обязательный) | Куда сохранить сценарий (.json; YAML допустим только как compatibility output) |
 | `--ticks` | целое | `25` | Число тиков |
-| `--seed` | целое | `42` | Зерно генератора |
 | `--language` | строка | `ru` | Язык генерации |
 | `--model` | строка | из LLMConfig | Модель LLM |
 | `--base-url` | строка | — | Базовый URL API; если не указан, берётся из `OPENAI_BASE_URL` |
@@ -69,21 +68,21 @@ sphere-lc oracle --events <путь> --out <путь> [опции]
 
 ```bash
 # Минимальный прогон
-sphere-lc run --scenario scenarios/lc_minimal.yaml
+sphere-lc run --scenario scenarios/lc_minimal.json
 
 # Прогон с указанием выходной директории и числа тиков
-sphere-lc run --scenario scenarios/lc_minimal.yaml --out results/run_50 --ticks 50
+sphere-lc run --scenario scenarios/lc_minimal.json --out results/run_50 --ticks 50
 
 # Реалистичный сценарий с enrichment/social graph/worldgen
-sphere-lc run --scenario scenarios/procurement_tender.yaml --out results/procurement_tender_run
+sphere-lc run --scenario scenarios/procurement_tender.json --out results/procurement_tender_run
 
 # Генерация сценария через LLM
 sphere-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" \
-    --out scenarios/tender.yaml
+    --out scenarios/tender.json
 
 # Генерация из файла с описанием
 sphere-lc compose --description-file docs/brief.txt \
-    --out scenarios/brief.yaml --ticks 30 --seed 123
+    --out scenarios/brief.json --ticks 30
 
 # Анализ нарушений с указанием модели
 sphere-lc oracle --events results/run_50/events.jsonl \

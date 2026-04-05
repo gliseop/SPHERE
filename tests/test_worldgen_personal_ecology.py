@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from pathlib import Path
 
 from sphere_lc.agent import AgentRunner
@@ -23,7 +22,6 @@ from sphere_lc.state import (
     AgentState,
     ArtifactState,
     InstitutionRegimeState,
-    OperationalQueueState,
     PendingInteractionState,
     ResourcePoolState,
     Vote,
@@ -47,7 +45,7 @@ class _CaptureAgentPromptProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             self.agent_prompts.append(user)
             return StructuredLLMResponse(
                 data={"actions": [{"type": "noop", "justification": "idle"}]},
@@ -103,6 +101,31 @@ class _PreTickWorldgenProvider(_CaptureAgentPromptProvider):
         return super().generate_structured(system, user, schema, temperature)
 
 
+class _PreTickRiskEventProvider(_CaptureAgentPromptProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if '"phase": "pre"' in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [
+                        {
+                            "audience": "internal",
+                            "description": "Обнаружено подозрительное совпадение формулировок и риск санкций за конфликт интересов.",
+                        }
+                    ],
+                    "agent_contexts": [],
+                    "scene_hooks": [],
+                },
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
+
+
 class _FreeformTruthProvider(MockLLMProvider):
     def __init__(self) -> None:
         super().__init__()
@@ -133,7 +156,7 @@ class _FreeformTruthProvider(MockLLMProvider):
                 ],
                 model="mock",
             )
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             self.agent_prompts.append((0, user))
             return StructuredLLMResponse(
                 data={"actions": [{"type": "noop", "justification": "idle"}]},
@@ -154,12 +177,12 @@ class _DormantEcologyProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             tick = 0
-            marker = "Раунд (tick): "
+            marker = "Сегодняшний рабочий день: "
             if marker in user:
-                tick = int(user.split(marker, 1)[1].split("\n", 1)[0])
-            if "(agent:spawner)." in user and tick == 0:
+                tick = int(user.split(marker, 1)[1].split(".", 1)[0].strip())
+            if "Твоё служебное обозначение в документах: agent:spawner." in user and tick == 0:
                 self.prompts.append((tick, "agent:spawner"))
                 return StructuredLLMResponse(
                     data={
@@ -176,13 +199,13 @@ class _DormantEcologyProvider(MockLLMProvider):
                     },
                     model="mock",
                 )
-            if "(agent:witness)." in user:
+            if "Твоё служебное обозначение в документах: agent:witness." in user:
                 self.prompts.append((tick, "agent:witness"))
                 return StructuredLLMResponse(
                     data={"actions": [{"type": "noop", "justification": "idle"}]},
                     model="mock",
                 )
-            if "(agent:observer)." in user:
+            if "Твоё служебное обозначение в документах: agent:observer." in user:
                 self.prompts.append((tick, "agent:observer"))
                 return StructuredLLMResponse(
                     data={"actions": [{"type": "noop", "justification": "idle"}]},
@@ -203,7 +226,7 @@ class _EnvironmentUpdateProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             return StructuredLLMResponse(
                 data={"actions": [{"type": "noop", "justification": "idle"}]},
                 model="mock",
@@ -235,15 +258,6 @@ class _EnvironmentUpdateProvider(MockLLMProvider):
                                 "pressure": "Подрядчики требуют срочного решения.",
                             }
                         ],
-                        "operational_queues": [
-                            {
-                                "queue_id": "queue:permits",
-                                "backlog": 7,
-                                "avg_delay_ticks": 3,
-                                "status": "overloaded",
-                                "pressure": "Заявки копятся быстрее, чем их успевают разбирать.",
-                            }
-                        ],
                         "information_climate": {
                             "public_mood": "Раздражение усиливается.",
                             "media_pressure": "Журналисты готовят материал.",
@@ -264,7 +278,7 @@ class _ArtifactWorldgenProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             return StructuredLLMResponse(
                 data={"actions": [{"type": "noop", "justification": "idle"}]},
                 model="mock",
@@ -308,7 +322,7 @@ class _ArtifactPrefixWorldgenProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             return StructuredLLMResponse(
                 data={"actions": [{"type": "noop", "justification": "idle"}]},
                 model="mock",
@@ -343,7 +357,7 @@ class _ArtifactTypedPrefixWorldgenProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             return StructuredLLMResponse(
                 data={"actions": [{"type": "noop", "justification": "idle"}]},
                 model="mock",
@@ -379,42 +393,6 @@ class _ArtifactTypedPrefixWorldgenProvider(MockLLMProvider):
         return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
 
 
-class _QueueCreateWorldgenProvider(MockLLMProvider):
-    def generate_structured(
-        self,
-        system: str,
-        user: str,
-        schema: dict,
-        temperature: float = 0.0,
-    ):
-        if "Сгенерируй действия на этот тик." in user:
-            return StructuredLLMResponse(
-                data={"actions": [{"type": "noop", "justification": "idle"}]},
-                model="mock",
-            )
-        if '"phase": "post"' in user:
-            return StructuredLLMResponse(
-                data={
-                    "events": [],
-                    "spawns": [],
-                    "environment_updates": {
-                        "operational_queues": [
-                            {
-                                "queue_id": "queue:audit_procurement",
-                                "backlog": 5,
-                                "capacity_per_tick": 2,
-                                "avg_delay_ticks": 2,
-                                "status": "active",
-                                "pressure": "повышено",
-                            }
-                        ]
-                    },
-                },
-                model="mock",
-            )
-        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
-
-
 class _BoundSpawnProvider(MockLLMProvider):
     def generate_structured(
         self,
@@ -423,7 +401,7 @@ class _BoundSpawnProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             return StructuredLLMResponse(
                 data={"actions": [{"type": "noop", "justification": "idle"}]},
                 model="mock",
@@ -533,14 +511,14 @@ class _DeferredPendingReplyProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." not in user:
+        if "Сделай следующий ход в этой ситуации." not in user:
             return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
 
         tick = 0
-        marker = "Раунд (tick): "
+        marker = "Сегодняшний рабочий день: "
         if marker in user:
-            tick = int(user.split(marker, 1)[1].split("\n", 1)[0])
-        if "(agent:core_1)." in user and tick == 0:
+            tick = int(user.split(marker, 1)[1].split(".", 1)[0].strip())
+        if "Твоё служебное обозначение в документах: agent:core_1." in user and tick == 0:
             self.prompts.append((tick, "agent:core_1"))
             return StructuredLLMResponse(
                 data={
@@ -556,9 +534,9 @@ class _DeferredPendingReplyProvider(MockLLMProvider):
                 },
                 model="mock",
             )
-        if "(agent:peripheral)." in user:
+        if "Твоё служебное обозначение в документах: agent:peripheral." in user:
             self.prompts.append((tick, "agent:peripheral"))
-            if tick == 2 and "Ожидающие локальные обязательства и follow-up:" in user:
+            if tick == 2 and "Незакрытые хвосты и ожидания:" in user:
                 return StructuredLLMResponse(
                     data={
                         "actions": [
@@ -591,14 +569,14 @@ class _SameTickPendingFollowupProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." not in user:
+        if "Сделай следующий ход в этой ситуации." not in user:
             return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
 
         tick = 0
-        marker = "Раунд (tick): "
+        marker = "Сегодняшний рабочий день: "
         if marker in user:
-            tick = int(user.split(marker, 1)[1].split("\n", 1)[0])
-        if "(agent:core_1)." in user and tick == 0:
+            tick = int(user.split(marker, 1)[1].split(".", 1)[0].strip())
+        if "Твоё служебное обозначение в документах: agent:core_1." in user and tick == 0:
             return StructuredLLMResponse(
                 data={
                     "actions": [
@@ -613,8 +591,8 @@ class _SameTickPendingFollowupProvider(MockLLMProvider):
                 },
                 model="mock",
             )
-        if "(agent:peripheral)." in user and tick == 0:
-            if "Ожидающие локальные обязательства и follow-up:" in user:
+        if "Твоё служебное обозначение в документах: agent:peripheral." in user and tick == 0:
+            if "Незакрытые хвосты и ожидания:" in user:
                 return StructuredLLMResponse(
                     data={
                         "actions": [
@@ -633,206 +611,6 @@ class _SameTickPendingFollowupProvider(MockLLMProvider):
                 data={"actions": [{"type": "noop", "justification": "ждёт follow-up"}]},
                 model="mock",
             )
-        return StructuredLLMResponse(
-            data={"actions": [{"type": "noop", "justification": "idle"}]},
-            model="mock",
-        )
-
-
-class _QueueRecoveryProvider(MockLLMProvider):
-    def generate_structured(
-        self,
-        system: str,
-        user: str,
-        schema: dict,
-        temperature: float = 0.0,
-    ):
-        if "Сгенерируй действия на этот тик." not in user:
-            return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
-        tick = 0
-        marker = "Раунд (tick): "
-        if marker in user:
-            tick = int(user.split(marker, 1)[1].split("\n", 1)[0])
-        if "(agent:service_1)." not in user:
-            return StructuredLLMResponse(data={"actions": [{"type": "noop", "justification": "idle"}]}, model="mock")
-        if tick == 0:
-            return StructuredLLMResponse(
-                data={
-                    "actions": [
-                        {
-                            "type": "create_work_item",
-                            "work_type": "queue_recovery",
-                            "title": "Разбор накопившихся заявок",
-                            "description": "Внутренняя работа по сокращению backlog.",
-                            "participants": ["agent:service_1"],
-                            "justification": "Нужно вручную разгрузить очередь.",
-                        }
-                    ]
-                },
-                model="mock",
-            )
-        if tick == 1:
-            return StructuredLLMResponse(
-                data={
-                    "actions": [
-                        {
-                            "type": "create_work_item",
-                            "work_type": "queue_triage_followup",
-                            "title": "Сверка истории обращений и перенос зависших кейсов",
-                            "description": "Отдельный шаг по расчистке зависших обращений.",
-                            "participants": ["agent:service_1"],
-                            "justification": "Продолжает разгрузку очереди.",
-                        }
-                    ]
-                },
-                model="mock",
-            )
-        return StructuredLLMResponse(
-            data={"actions": [{"type": "noop", "justification": "idle"}]},
-            model="mock",
-        )
-
-
-class _QueueActorsActionProvider(MockLLMProvider):
-    def generate_structured(
-        self,
-        system: str,
-        user: str,
-        schema: dict,
-        temperature: float = 0.0,
-    ):
-        if "Сгенерируй действия на этот тик." not in user:
-            return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
-        if "Текущая локальная роль: queue_complainant" in user:
-            return StructuredLLMResponse(
-                data={
-                    "actions": [
-                        {
-                            "type": "send_message",
-                            "to_id": "org:city_hall",
-                            "text": "Прошу срочно объяснить, почему очередь не движется.",
-                            "private": False,
-                            "justification": "Повторно поднимает жалобу в адрес организации.",
-                        }
-                    ]
-                },
-                model="mock",
-            )
-        if "Текущая локальная роль: queue_reporter" in user:
-            matches = re.findall(r"agent:[a-z0-9_]+", user)
-            complainant_id = next((item for item in matches if item.endswith("_complainant")), "")
-            actions = []
-            if complainant_id:
-                actions.append(
-                    {
-                        "type": "send_message",
-                        "to_id": complainant_id,
-                        "text": "Можешь коротко описать, как именно тянется очередь?",
-                        "private": True,
-                        "justification": "Собирает фактуру у complainant.",
-                    }
-                )
-            actions.append(
-                {
-                    "type": "send_message",
-                    "to_id": "chan:public",
-                    "text": "В городской очереди разрешений снова растут задержки.",
-                    "private": False,
-                    "justification": "Выносит тему в публичный канал.",
-                }
-            )
-            return StructuredLLMResponse(data={"actions": actions}, model="mock")
-        return StructuredLLMResponse(
-            data={"actions": [{"type": "noop", "justification": "idle"}]},
-            model="mock",
-        )
-
-
-class _QueueGovernanceResponseProvider(MockLLMProvider):
-    def generate_structured(
-        self,
-        system: str,
-        user: str,
-        schema: dict,
-        temperature: float = 0.0,
-    ):
-        if "Сгенерируй действия на этот тик." not in user:
-            return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
-        tick = 0
-        marker = "Раунд (tick): "
-        if marker in user:
-            tick = int(user.split(marker, 1)[1].split("\n", 1)[0])
-
-        if "Текущая локальная роль: queue_complainant" in user and tick == 1:
-            return StructuredLLMResponse(
-                data={
-                    "actions": [
-                        {
-                            "type": "send_message",
-                            "to_id": "org:city_hall",
-                            "text": "Прошу официальный ответ по срокам и причинам задержки.",
-                            "private": False,
-                            "justification": "Формализует внешнюю жалобу.",
-                        }
-                    ]
-                },
-                model="mock",
-            )
-        if "Текущая локальная роль: queue_reporter" in user and tick == 1:
-            matches = re.findall(r"agent:[a-z0-9_]+", user)
-            complainant_id = next((item for item in matches if item.endswith("_complainant")), "")
-            actions = []
-            if complainant_id:
-                actions.append(
-                    {
-                        "type": "send_message",
-                        "to_id": complainant_id,
-                        "text": "Нужны два коротких факта для публикации.",
-                        "private": True,
-                        "justification": "Собирает фактуру у complainant.",
-                    }
-                )
-            actions.append(
-                {
-                    "type": "send_message",
-                    "to_id": "chan:public",
-                    "text": "В очереди разрешений снова накапливаются задержки.",
-                    "private": False,
-                    "justification": "Выносит проблему в публичный канал.",
-                }
-            )
-            return StructuredLLMResponse(data={"actions": actions}, model="mock")
-
-        if "(agent:core_1)." in user and tick >= 2:
-            matches = re.findall(r"agent:[a-z0-9_]+", user)
-            complainant_id = next((item for item in matches if item.endswith("_complainant")), "")
-            reporter_id = next((item for item in matches if item.endswith("_reporter")), "")
-            actions = []
-            if "external_queue_complaint_response" in user and complainant_id:
-                actions.append(
-                    {
-                        "type": "send_message",
-                        "to_id": complainant_id,
-                        "text": "Мы приняли жалобу и готовим разбор ситуации.",
-                        "private": True,
-                        "justification": "Отвечает на внешнюю жалобу.",
-                    }
-                )
-            if "media_response" in user:
-                target_id = reporter_id or "chan:public"
-                actions.append(
-                    {
-                        "type": "send_message",
-                        "to_id": target_id,
-                        "text": "Подготовили комментарий: очередь разбирается в приоритетном порядке.",
-                        "private": True if reporter_id else False,
-                        "justification": "Даёт реакцию на публичное давление.",
-                    }
-                )
-            if not actions:
-                actions = [{"type": "noop", "justification": "no pending response"}]
-            return StructuredLLMResponse(data={"actions": actions}, model="mock")
-
         return StructuredLLMResponse(
             data={"actions": [{"type": "noop", "justification": "idle"}]},
             model="mock",
@@ -889,13 +667,13 @@ def test_agent_prompt_includes_story_state_daily_context_and_soft_perform(tmp_pa
         ],
     )
 
-    assert "Твоя ситуация прямо сейчас:" in prompt
-    assert "Контекст начала дня:" in prompt
+    assert "Что для тебя сейчас действительно поставлено на карту:" in prompt
+    assert "Утро складывается так:" in prompt
     assert "Личная линия (story state):" not in prompt  # story_state идёт через память/мотивацию, не как отдельный дубль
-    assert "Лёгкие контакты не имеют typed-id" in prompt
-    assert "Верни одно поле `proposal` со свободным описанием своего хода на этот тик." in prompt
-    assert "Не используй menu/action-type, не пиши `perform`, `noop`, enum-значения" in prompt
-    assert "Примеры materializable proposal:" in prompt
+    assert "не обращайся к ним напрямую" in prompt
+    assert "Верни только JSON с одним полем `reply`." in prompt
+    assert "Не отвечай списком команд, не называй внутренние ярлыки" in prompt
+    assert "Примеры хода, который звучит по-человечески и реально сдвигает дело:" in prompt
     assert "Плохо: \"Инициирую процесс, соберу мнения, проработаю вопрос, укреплю позиции.\"" in prompt
     assert "ПРЕДПОЧИТАЙ структурированные действия" not in prompt
 
@@ -913,7 +691,7 @@ def test_agent_runner_wraps_freeform_proposal_into_single_perform(tmp_path: Path
         llm=LLMCaller(
             provider=MockLLMProvider(
                 structured_responses={
-                    "Раунд (tick): 0\nТы: Off 1": {
+                    "Сегодняшний рабочий день: 0.\nТы — Off 1.": {
                         "proposal": "Сначала коротко созвонюсь с коллегой, затем попрошу вынести вопрос на формальное рассмотрение."
                     }
                 }
@@ -974,17 +752,6 @@ def test_agent_prompt_includes_relevant_environment_brief(tmp_path: Path) -> Non
         status="depleted",
         pressure="Подрядчики требуют срочного решения.",
     )
-    state.environment.operational_queues["queue:permits"] = OperationalQueueState(
-        queue_id="queue:permits",
-        title="Очередь разрешений",
-        owner_org_id="org:city_hall",
-        zone_id="zone:city_hall",
-        backlog=5,
-        capacity_per_tick=2,
-        avg_delay_ticks=2,
-        status="strained",
-        pressure="Сроки выдачи уже плывут.",
-    )
     state.environment.information_climate.public_mood = "Раздражение усиливается."
     state.environment.information_climate.media_pressure = "Журналисты готовят материал."
     state.environment.information_climate.active_signals = ["новая волна жалоб", "утечка сметы"]
@@ -1001,11 +768,10 @@ def test_agent_prompt_includes_relevant_environment_brief(tmp_path: Path) -> Non
         mem_text="(пусто)",
     )
 
-    assert "Релевантная среда:" in prompt
+    assert "Вокруг тебя сейчас вот что:" in prompt
     assert "Организация org:city_hall" in prompt
     assert "Зона zone:city_hall" in prompt
     assert "Ресурс res:roads_budget" in prompt
-    assert "Очередь queue:permits" in prompt
     assert "Активные сигналы среды: новая волна жалоб, утечка сметы" in prompt
 
 
@@ -1045,7 +811,7 @@ def test_agent_prompt_examples_respect_missing_work_capability(tmp_path: Path) -
     )
 
     assert "сам добавлять заметку в work я не буду" in prompt
-    assert "Для тебя плохо: обещать самому добавить заметку" in prompt
+    assert "Для тебя плохо: обещать самому править дело" in prompt
     assert "сам добавлю туда короткую заметку" not in prompt
 
 
@@ -1144,7 +910,7 @@ def test_agent_prompt_includes_relevant_artifacts(tmp_path: Path) -> None:
         mem_text="(пусто)",
     )
 
-    assert "Релевантные документы и артефакты:" in prompt
+    assert "На столе, в почте и в папках у тебя сейчас:" in prompt
     assert "art:oversight_memo" in prompt
     assert "art:repair_report" in prompt
     assert "work=work:repair" in prompt
@@ -1193,7 +959,7 @@ def test_agent_prompt_includes_informal_links(tmp_path: Path) -> None:
         mem_text="(пусто)",
     )
 
-    assert "Неформальные связи и зависимости:" in prompt
+    assert "Невидимые связи, о которых ты помнишь:" in prompt
     assert "agent:off_2: private_contact" in prompt
     assert "давление=Есть взаимные ожидания." in prompt
 
@@ -1235,18 +1001,23 @@ def test_agent_prompt_includes_pending_interactions(tmp_path: Path) -> None:
         mem_text="(пусто)",
     )
 
-    assert "Ожидающие локальные обязательства и follow-up:" in prompt
+    assert "Незакрытые хвосты и ожидания:" in prompt
     assert "reply от agent:off_2" in prompt
     assert "окно=t1..t3" in prompt
 
 
-def test_engine_emits_scripted_events_before_agent_turn(tmp_path: Path) -> None:
-    provider = _CaptureAgentPromptProvider()
+def test_pre_tick_worldgen_events_are_visible_before_agent_turn(tmp_path: Path) -> None:
+    provider = _PreTickRiskEventProvider()
     cfg = ScenarioConfig.model_validate(
         {
             "version": 1,
-            "title": "scripted-event-pre-turn",
+            "title": "worldgen-pre-turn",
             "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_pre_tick": True,
+                "worldgen_every_ticks": 1,
+            },
             "agents": [
                 {
                     "agent_id": "agent:off_1",
@@ -1254,14 +1025,6 @@ def test_engine_emits_scripted_events_before_agent_turn(tmp_path: Path) -> None:
                     "internal": True,
                     "persona": "Чиновник, который избегает публичного шума.",
                     "capabilities": ["message"],
-                }
-            ],
-            "scripted_events": [
-                {
-                    "event_id": "fork_1",
-                    "tick": 0,
-                    "audience": "internal",
-                    "description": "Министерство внезапно требует ускорить подготовку документов.",
                 }
             ],
             "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
@@ -1276,12 +1039,15 @@ def test_engine_emits_scripted_events_before_agent_turn(tmp_path: Path) -> None:
     asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
 
     assert provider.agent_prompts
-    assert "Министерство внезапно требует ускорить подготовку документов." in provider.agent_prompts[0]
+    assert "Обнаружено подозрительное совпадение формулировок и риск санкций за конфликт интересов." in provider.agent_prompts[0]
 
     events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    scripted = [event for event in events if event.get("event_type") == "world_event"]
-    assert scripted
-    assert scripted[0]["payload"]["source"] == "scripted"
+    world_events = [event for event in events if event.get("event_type") == "world_event"]
+    assert world_events
+    assert any(
+        "подозрительное совпадение формулировок" in str(event.get("payload", {}).get("description") or "")
+        for event in world_events
+    )
 
 
 def test_environment_layer_is_initialized_and_exposed_to_worldgen_snapshot(tmp_path: Path) -> None:
@@ -1335,19 +1101,6 @@ def test_environment_layer_is_initialized_and_exposed_to_worldgen_snapshot(tmp_p
                             "pressure": "Сроки поджимают, подрядчики нервничают.",
                         }
                     ],
-                    "operational_queues": [
-                        {
-                            "queue_id": "queue:permits",
-                            "title": "Очередь разрешений",
-                            "owner_org_id": "org:city_hall",
-                            "zone_id": "zone:city_hall",
-                            "backlog": 3,
-                            "capacity_per_tick": 2,
-                            "avg_delay_ticks": 1,
-                            "status": "strained",
-                            "pressure": "Заявки копятся.",
-                        }
-                    ],
                     "information_climate": {
                         "public_mood": "Недоверие к обещаниям администрации.",
                         "oversight_attention": "Высокое внимание контрольного управления.",
@@ -1376,18 +1129,15 @@ def test_environment_layer_is_initialized_and_exposed_to_worldgen_snapshot(tmp_p
         "institutions": 1,
         "zones": 1,
         "resource_pools": 1,
-        "operational_queues": 1,
         "informal_links": 0,
     }
     assert snapshot["environment"]["resource_pools"][0]["resource_id"] == "res:roads_budget"
-    assert snapshot["environment"]["operational_queues"][0]["queue_id"] == "queue:permits"
     assert snapshot["environment"]["information_climate"]["public_mood"] == "Недоверие к обещаниям администрации."
 
     journal = WorldJournal.from_state(state=state)
     journal_dict = journal.to_dict()
     assert journal_dict["entities"]["zones"] == 1
     assert journal_dict["entities"]["resource_pools"] == 1
-    assert journal_dict["entities"]["operational_queues"] == 1
     assert journal_dict["environment"]["institutions"][0]["org_id"] == "org:city_hall"
 
 
@@ -1438,18 +1188,6 @@ def test_post_worldgen_can_update_environment_layer(tmp_path: Path) -> None:
                             "status": "stable",
                         }
                     ],
-                    "operational_queues": [
-                        {
-                            "queue_id": "queue:permits",
-                            "title": "Очередь разрешений",
-                            "owner_org_id": "org:city_hall",
-                            "zone_id": "zone:city_hall",
-                            "backlog": 4,
-                            "capacity_per_tick": 2,
-                            "avg_delay_ticks": 1,
-                            "status": "strained",
-                        }
-                    ],
                 },
             },
         }
@@ -1467,37 +1205,20 @@ def test_post_worldgen_can_update_environment_layer(tmp_path: Path) -> None:
     assert state.environment.zones["zone:city_hall"].access_mode == "restricted"
     assert state.environment.resource_pools["res:roads_budget"].quantity == 900
     assert state.environment.resource_pools["res:roads_budget"].status == "depleted"
-    assert state.environment.operational_queues["queue:permits"].backlog == 9
-    assert state.environment.operational_queues["queue:permits"].avg_delay_ticks == 4
-    assert state.environment.operational_queues["queue:permits"].status == "overloaded"
     assert state.environment.information_climate.media_pressure == "Журналисты готовят материал."
-    assert state.environment.information_climate.active_signals == [
-        "новая волна жалоб",
-        "утечка сметы",
-        "очередь queue:permits перегружена",
-    ]
+    assert state.environment.information_climate.active_signals == ["новая волна жалоб", "утечка сметы"]
     assert "art:resource_alert_roads_budget" in state.artifacts
     assert state.artifacts["art:resource_alert_roads_budget"].artifact_type == "resource_alert"
     assert state.artifacts["art:resource_alert_roads_budget"].status == "active"
-    assert "art:queue_alert_queue_permits" in state.artifacts
-    assert state.artifacts["art:queue_alert_queue_permits"].artifact_type == "queue_alert"
-    assert state.artifacts["art:queue_alert_queue_permits"].status == "active"
-    assert "art:complaint_wave_queue_permits" in state.artifacts
-    assert state.artifacts["art:complaint_wave_queue_permits"].artifact_type == "complaint_wave"
-    assert "art:queue_publication_queue_permits" in state.artifacts
-    assert state.artifacts["art:queue_publication_queue_permits"].artifact_type == "publication"
 
     events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     event_types = {event["event_type"] for event in events}
     assert "environment_institution_updated" in event_types
     assert "environment_zone_updated" in event_types
     assert "environment_resource_updated" in event_types
-    assert "environment_operational_queue_updated" in event_types
     assert "environment_information_climate_updated" in event_types
     assert "artifact_created" in event_types
     assert "world_event" in event_types
-    assert any(event["payload"].get("source") == "queue_process" for event in events if event["event_type"] == "world_event")
-    assert any(event["payload"].get("source") == "queue_publication" for event in events if event["event_type"] == "world_event")
 
 
 def test_post_worldgen_can_create_and_update_artifacts(tmp_path: Path) -> None:
@@ -1639,58 +1360,6 @@ def test_post_worldgen_normalizes_non_artifact_typed_prefixes(tmp_path: Path) ->
     assert not any(
         event["event_type"] == "arbiter_op_failed"
         and event["payload"].get("origin") == "worldgen_artifact"
-        for event in events
-    )
-
-
-def test_post_worldgen_can_create_new_operational_queue(tmp_path: Path) -> None:
-    provider = _QueueCreateWorldgenProvider()
-    cfg = ScenarioConfig.model_validate(
-        {
-            "version": 1,
-            "title": "queue-create-worldgen",
-            "ticks": 1,
-            "runtime": {
-                "enable_worldgen": True,
-                "worldgen_every_ticks": 1,
-            },
-            "agents": [
-                {
-                    "agent_id": "agent:off_1",
-                    "name": "Off 1",
-                    "internal": True,
-                    "persona": "Чиновник",
-                    "capabilities": ["message"],
-                }
-            ],
-            "world": {
-                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
-            },
-        }
-    )
-    artifacts = RunArtifacts(
-        out_dir=tmp_path,
-        events_path=tmp_path / "events.jsonl",
-        trace_path=tmp_path / "trace.jsonl",
-    )
-
-    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
-
-    assert "queue:audit_procurement" in state.environment.operational_queues
-    queue = state.environment.operational_queues["queue:audit_procurement"]
-    assert queue.backlog == 5
-    assert queue.capacity_per_tick == 2
-    assert queue.avg_delay_ticks == 2
-
-    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert any(
-        event["event_type"] == "environment_operational_queue_updated"
-        and event["payload"].get("queue_id") == "queue:audit_procurement"
-        for event in events
-    )
-    assert not any(
-        event["event_type"] == "arbiter_op_failed"
-        and event["payload"].get("origin") == "worldgen_environment"
         for event in events
     )
 
@@ -1988,359 +1657,6 @@ def test_same_tick_pending_followup_can_close_without_waiting_next_tick(tmp_path
     assert any(item.status == "completed" for item in state.pending_interactions.values())
 
 
-def test_operational_queue_process_can_degrade_service_without_response(tmp_path: Path) -> None:
-    cfg = ScenarioConfig.model_validate(
-        {
-            "version": 1,
-            "title": "queue-degradation",
-            "ticks": 2,
-            "agents": [
-                {
-                    "agent_id": "agent:observer",
-                    "name": "Observer",
-                    "internal": True,
-                    "persona": "Ничего не предпринимает.",
-                    "capabilities": ["message"],
-                    "org_id": "org:city_hall",
-                }
-            ],
-            "world": {
-                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
-                "environment": {
-                    "information_climate": {
-                        "media_pressure": "Локальная пресса уже следит за темой задержек.",
-                    },
-                    "operational_queues": [
-                        {
-                            "queue_id": "queue:permits",
-                            "title": "Очередь разрешений",
-                            "owner_org_id": "org:city_hall",
-                            "backlog": 4,
-                            "capacity_per_tick": 2,
-                            "avg_delay_ticks": 1,
-                            "status": "overloaded",
-                            "pressure": "Обращения копятся без ответа.",
-                        }
-                    ]
-                },
-            },
-        }
-    )
-    artifacts = RunArtifacts(
-        out_dir=tmp_path,
-        events_path=tmp_path / "events.jsonl",
-        trace_path=tmp_path / "trace.jsonl",
-    )
-
-    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider()).run())
-
-    queue = state.environment.operational_queues["queue:permits"]
-    assert queue.backlog > 4
-    assert queue.avg_delay_ticks >= 2
-    assert queue.status == "overloaded"
-    assert "art:complaint_wave_queue_permits" in state.artifacts
-    assert "art:queue_publication_queue_permits" in state.artifacts
-
-    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert any(event["event_type"] == "world_event" and event["payload"].get("source") == "queue_process" for event in events)
-    assert any(event["event_type"] == "world_event" and event["payload"].get("source") == "queue_publication" for event in events)
-
-
-def test_operational_queue_process_can_recover_with_service_work(tmp_path: Path) -> None:
-    provider = _QueueRecoveryProvider()
-    cfg = ScenarioConfig.model_validate(
-        {
-            "version": 1,
-            "title": "queue-recovery",
-            "ticks": 2,
-            "agents": [
-                {
-                    "agent_id": "agent:service_1",
-                    "name": "Service 1",
-                    "internal": True,
-                    "persona": "Разбирает накопившиеся обращения.",
-                    "capabilities": ["work"],
-                    "org_id": "org:city_hall",
-                }
-            ],
-            "world": {
-                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
-                "environment": {
-                    "information_climate": {
-                        "media_pressure": "Локальная пресса уже следит за темой задержек.",
-                    },
-                    "operational_queues": [
-                        {
-                            "queue_id": "queue:permits",
-                            "title": "Очередь разрешений",
-                            "owner_org_id": "org:city_hall",
-                            "backlog": 4,
-                            "capacity_per_tick": 2,
-                            "avg_delay_ticks": 2,
-                            "status": "overloaded",
-                            "pressure": "Обращения копятся без ответа.",
-                        }
-                    ]
-                },
-            },
-        }
-    )
-    artifacts = RunArtifacts(
-        out_dir=tmp_path,
-        events_path=tmp_path / "events.jsonl",
-        trace_path=tmp_path / "trace.jsonl",
-    )
-
-    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
-
-    queue = state.environment.operational_queues["queue:permits"]
-    assert queue.backlog <= 2
-    assert queue.avg_delay_ticks == 0
-    assert queue.status == "recovering"
-    assert state.artifacts["art:complaint_wave_queue_permits"].status == "resolved"
-    assert state.artifacts["art:queue_publication_queue_permits"].status == "resolved"
-
-    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert any(event["event_type"] == "world_event" and event["payload"].get("source") == "queue_recovery" for event in events)
-
-
-def test_queue_process_can_spawn_external_actors(tmp_path: Path) -> None:
-    cfg = ScenarioConfig.model_validate(
-        {
-            "version": 1,
-            "title": "queue-runtime-spawn",
-            "ticks": 1,
-            "runtime": {
-                "allow_runtime_spawn": True,
-                "max_agents": 6,
-            },
-            "agents": [
-                {
-                    "agent_id": "agent:observer",
-                    "name": "Observer",
-                    "internal": True,
-                    "persona": "Наблюдает со стороны и не вмешивается.",
-                    "capabilities": ["message"],
-                    "org_id": "org:city_hall",
-                }
-            ],
-            "world": {
-                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
-                "environment": {
-                    "information_climate": {
-                        "media_pressure": "Редакции уже смотрят на тему.",
-                    },
-                    "operational_queues": [
-                        {
-                            "queue_id": "queue:permits",
-                            "title": "Очередь разрешений",
-                            "owner_org_id": "org:city_hall",
-                            "backlog": 5,
-                            "capacity_per_tick": 2,
-                            "avg_delay_ticks": 2,
-                            "status": "overloaded",
-                            "pressure": "Заявители неделями не получают ответа.",
-                        }
-                    ],
-                },
-            },
-        }
-    )
-    artifacts = RunArtifacts(
-        out_dir=tmp_path,
-        events_path=tmp_path / "events.jsonl",
-        trace_path=tmp_path / "trace.jsonl",
-    )
-
-    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider()).run())
-
-    spawned = [agent for agent in state.agents.values() if agent.spawn_source == "queue_process"]
-    assert len(spawned) == 2
-    assert {agent.population_role for agent in spawned} == {"queue_complainant", "queue_reporter"}
-    assert all(not agent.internal for agent in spawned)
-    assert all(agent.org_id == "org:city_hall" for agent in spawned)
-    assert all(agent.capabilities == ["message"] for agent in spawned)
-
-
-def test_spawned_queue_actors_can_launch_action_chain(tmp_path: Path) -> None:
-    provider = _QueueActorsActionProvider()
-    cfg = ScenarioConfig.model_validate(
-        {
-            "version": 1,
-            "title": "queue-actor-action-chain",
-            "ticks": 2,
-            "runtime": {
-                "allow_runtime_spawn": True,
-                "max_agents": 6,
-            },
-            "agents": [
-                {
-                    "agent_id": "agent:observer",
-                    "name": "Observer",
-                    "internal": True,
-                    "persona": "Не вмешивается, только наблюдает.",
-                    "capabilities": ["message"],
-                    "org_id": "org:city_hall",
-                }
-            ],
-            "world": {
-                "channels": [{"channel_id": "chan:public", "title": "Публичный канал"}],
-                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
-                "environment": {
-                    "information_climate": {
-                        "media_pressure": "Редакции уже смотрят на тему.",
-                    },
-                    "operational_queues": [
-                        {
-                            "queue_id": "queue:permits",
-                            "title": "Очередь разрешений",
-                            "owner_org_id": "org:city_hall",
-                            "backlog": 5,
-                            "capacity_per_tick": 2,
-                            "avg_delay_ticks": 2,
-                            "status": "overloaded",
-                            "pressure": "Заявители неделями не получают ответа.",
-                        }
-                    ],
-                },
-            },
-        }
-    )
-    artifacts = RunArtifacts(
-        out_dir=tmp_path,
-        events_path=tmp_path / "events.jsonl",
-        trace_path=tmp_path / "trace.jsonl",
-    )
-
-    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
-
-    complainant = next(agent for agent in state.agents.values() if agent.population_role == "queue_complainant")
-    reporter = next(agent for agent in state.agents.values() if agent.population_role == "queue_reporter")
-    shared_issue_links = [
-        link for link in state.environment.informal_links.values() if link.link_type == "shared_issue"
-    ]
-    assert shared_issue_links
-    assert any({link.agent_a_id, link.agent_b_id} == {complainant.agent_id, reporter.agent_id} for link in shared_issue_links)
-
-    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert any(
-        event["event_type"] == "message_sent"
-        and event["actor_id"] == complainant.agent_id
-        and event["payload"].get("to_id") == "org:city_hall"
-        and event["payload"].get("private") is False
-        for event in events
-    )
-    assert any(
-        event["event_type"] == "message_sent"
-        and event["actor_id"] == reporter.agent_id
-        and event["payload"].get("to_id") == complainant.agent_id
-        and event["payload"].get("private") is True
-        for event in events
-    )
-    assert any(
-        event["event_type"] == "message_sent"
-        and event["actor_id"] == reporter.agent_id
-        and event["payload"].get("to_id") == "chan:public"
-        and event["payload"].get("private") is False
-        for event in events
-    )
-    assert any(
-        item.category == "queue_escalation" and item.status == "completed"
-        for item in state.pending_interactions.values()
-    )
-    assert any(
-        item.category == "queue_publication_push" and item.status == "completed"
-        for item in state.pending_interactions.values()
-    )
-
-
-def test_internal_agents_receive_and_close_queue_response_obligations(tmp_path: Path) -> None:
-    provider = _QueueGovernanceResponseProvider()
-    cfg = ScenarioConfig.model_validate(
-        {
-            "version": 1,
-            "title": "queue-governance-response",
-            "ticks": 3,
-            "runtime": {
-                "allow_runtime_spawn": True,
-                "max_agents": 8,
-            },
-            "agents": [
-                {
-                    "agent_id": "agent:core_1",
-                    "name": "Core 1",
-                    "internal": True,
-                    "persona": "Отвечает за коммуникацию по проблемным кейсам.",
-                    "capabilities": ["message"],
-                    "org_id": "org:city_hall",
-                }
-            ],
-            "world": {
-                "channels": [{"channel_id": "chan:public", "title": "Публичный канал"}],
-                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
-                "environment": {
-                    "information_climate": {
-                        "media_pressure": "Редакции уже ждут комментарий.",
-                    },
-                    "operational_queues": [
-                        {
-                            "queue_id": "queue:permits",
-                            "title": "Очередь разрешений",
-                            "owner_org_id": "org:city_hall",
-                            "backlog": 5,
-                            "capacity_per_tick": 2,
-                            "avg_delay_ticks": 2,
-                            "status": "overloaded",
-                            "pressure": "Заявители неделями не получают ответа.",
-                        }
-                    ],
-                },
-            },
-        }
-    )
-    artifacts = RunArtifacts(
-        out_dir=tmp_path,
-        events_path=tmp_path / "events.jsonl",
-        trace_path=tmp_path / "trace.jsonl",
-    )
-
-    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
-
-    assert "art:queue_external_complaint_queue_permits" in state.artifacts
-    assert state.artifacts["art:queue_external_complaint_queue_permits"].artifact_type == "external_complaint"
-    assert "art:queue_press_inquiry_queue_permits" in state.artifacts
-    assert state.artifacts["art:queue_press_inquiry_queue_permits"].artifact_type == "press_inquiry"
-    assert "внешняя жалоба по queue:permits" in state.environment.information_climate.active_signals
-    assert "публичное давление по queue:permits" in state.environment.information_climate.active_signals
-    assert any(
-        item.category == "external_queue_complaint_response" and item.status == "completed"
-        for item in state.pending_interactions.values()
-    )
-    assert any(
-        item.category == "media_response" and item.status == "completed"
-        for item in state.pending_interactions.values()
-    )
-
-    spawned_ids = {
-        agent.population_role: agent.agent_id
-        for agent in state.agents.values()
-        if agent.spawn_source == "queue_process"
-    }
-    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert any(
-        event["event_type"] == "message_sent"
-        and event["actor_id"] == "agent:core_1"
-        and event["payload"].get("to_id") == spawned_ids["queue_complainant"]
-        for event in events
-    )
-    assert any(
-        event["event_type"] == "message_sent"
-        and event["actor_id"] == "agent:core_1"
-        and event["payload"].get("to_id") == spawned_ids["queue_reporter"]
-        for event in events
-    )
-
-
 def test_worldgen_spawn_can_bind_agent_to_org_and_zone(tmp_path: Path) -> None:
     provider = _BoundSpawnProvider()
     cfg = ScenarioConfig.model_validate(
@@ -2586,15 +1902,15 @@ def test_engine_pre_tick_worldgen_injects_daily_context(tmp_path: Path) -> None:
 
     assert provider.agent_prompts
     prompt = provider.agent_prompts[0]
-    assert "Контекст начала дня:" in prompt
+    assert "Утро складывается так:" in prompt
     assert "Можно жёстко формализовать процесс или решить вопрос тихо." in prompt
     assert "Сценовые поводы:" in prompt
     assert "С утра пришёл внешний сигнал о внеплановой проверке." in prompt
     assert state.agents["agent:off_1"].story_state.strip()
 
 
-def test_engine_injects_fallback_risky_contexts_for_scripted_tick(tmp_path: Path) -> None:
-    provider = _CaptureAgentPromptProvider()
+def test_engine_injects_fallback_risky_contexts_for_pre_tick_world_event(tmp_path: Path) -> None:
+    provider = _PreTickRiskEventProvider()
     cfg = ScenarioConfig.model_validate(
         {
             "version": 1,
@@ -2621,13 +1937,6 @@ def test_engine_injects_fallback_risky_contexts_for_scripted_tick(tmp_path: Path
                     "capabilities": ["message"],
                 },
             ],
-            "scripted_events": [
-                {
-                    "tick": 0,
-                    "audience": "internal",
-                    "description": "Обнаружено подозрительное совпадение формулировок и риск санкций за конфликт интересов.",
-                }
-            ],
             "world": {"channels": [{"channel_id": "chan:public", "title": "public"}]},
         }
     )
@@ -2641,7 +1950,7 @@ def test_engine_injects_fallback_risky_contexts_for_scripted_tick(tmp_path: Path
 
     assert provider.agent_prompts
     prompt = provider.agent_prompts[0]
-    assert "Контекст начала дня:" in prompt
+    assert "Утро складывается так:" in prompt
     assert "Частное давление:" in prompt
     assert "Возможность/выгода:" in prompt
     assert "Риск раскрытия:" in prompt
@@ -2852,3 +2161,4 @@ def test_ecology_activation_skips_dormant_spawned_actor(tmp_path: Path) -> None:
 
     witness_ticks = [tick for tick, actor in provider.prompts if actor == "agent:witness"]
     assert witness_ticks == [1]
+

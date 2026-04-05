@@ -39,13 +39,13 @@ SPHERE/
 ├── src/sphere_lc/            # Движок симуляции (LangChain/LangGraph)
 │   ├── __init__.py             # Пакет
 │   ├── cli.py                  # CLI `sphere-lc`
-│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + declarative agent-prompt blocks + world.environment (incl. operational_queues/informal_links/population_blueprints) + world.artifacts + temporal pending-follow-up knobs
+│   ├── config.py               # ScenarioConfig + Runtime/Governance/LLM/Memory + declarative agent-prompt blocks + world.environment (institution_modes/zones/resource_pools/informal_links/population_blueprints) + world.artifacts + temporal pending-follow-up knobs
 │   ├── governance_modes.py     # Canonical built-in mapping G0–G3 для runtime/web/launcher
 │   ├── scenario.py             # Load/save YAML/JSON сценариев
 │   ├── ids.py                  # Типизированные ID и аудитории (aud:*)
 │   ├── entities.py             # EntityRegistry + EntityRecord (антифантомы)
 │   ├── id_alloc.py             # Детерминированное выделение новых ID
-│   ├── state.py                # WorldState (agents/work_items/artifacts/pending_interactions/votes + environment-layer incl. operational_queues) + AgentState.story_state + org/zone binding
+│   ├── state.py                # WorldState (agents/work_items/artifacts/pending_interactions/votes + environment-layer) + AgentState.story_state + org/zone binding
 │   ├── persona.py              # PersonaArtifact/Library/Generator + SocialGraphExtractor
 │   ├── memory.py               # Память агента (buffer + hybrid retrieval)
 │   ├── actions.py              # Внутренний Action-vocabulary + freeform `proposal` schema для агента
@@ -54,7 +54,7 @@ SPHERE/
 │   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM materialization of freeform proposal)
 │   ├── auditor.py              # RuntimeAuditor (LLM-first detection + deterministic audit actuator + collegial review)
 │   ├── dao.py                  # DAO vote closure + position policy
-│   ├── engine.py               # WorldEngine (environment/artifact/operational-queue init, scripted events, pending follow-up queues, micro-reactions, pre/post worldgen, deterministic apply)
+│   ├── engine.py               # WorldEngine (environment/artifact init, pending follow-up queues, micro-reactions, pre/post worldgen, deterministic apply)
 │   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, scene hooks, spawns, environment updates, artifact creations/updates)
 │   ├── composer.py             # WorldComposer (LLM -> ScenarioConfig + persona enrichment)
 │   ├── oracle.py               # ViolationOracle + FreeformTruthRecorder (LLM post-hoc analysis)
@@ -103,7 +103,7 @@ SPHERE/
 │   │       ├── runs.py         # Чтение прогонов и артефактов
 │   │       ├── run_control.py  # Запуск, остановка и удаление прогонов
 │   │       ├── scenarios.py    # CRUD пользовательских сценариев
-│   │       ├── templates.py    # Seed-сценарии и governance templates
+│   │       ├── templates.py    # Built-in template scenarios и governance templates
 │   │       ├── agent_types.py  # CRUD библиотек типов агентов
 │   │       ├── personalities.py # CRUD личностей и интервью
 │   │       ├── governance.py   # CRUD пользовательских governance modes
@@ -124,7 +124,7 @@ SPHERE/
 │           │   └── LoginPage.tsx # Экран логина
 │           ├── components/     # SimGraph, RunsView, ScenarioPanel, ActivityFeed, EnvironmentPanel и др.
 │           │   ├── Icons.tsx   # Локальный набор SVG-иконок для monitor/runs/scenarios
-│           │   └── EnvironmentPanel.tsx # HUD-панель среды: очереди и активные сигналы
+│           │   └── EnvironmentPanel.tsx # HUD-панель среды: информационный климат, сигналы и неформальные связи
 │           ├── hooks/          # useAuth, useSimulation
 │           ├── utils/          # apiClient, payload, time
 │           └── styles/
@@ -150,7 +150,7 @@ SPHERE/
 │   ├── personalities/          # Архетипы личности (JSON)
 │   ├── interviews/             # Данные интервью (JSON)
 │   └── governance_modes/       # Конфигурации пользовательских режимов управления
-├── scenarios/                  # YAML/JSON-конфигурации сценариев и seed-шаблоны
+├── scenarios/                  # YAML/JSON-конфигурации сценариев и built-in template-шаблоны
 ├── results/                    # Результаты прогонов (JSONL, sidecars, логи)
 ├── docs/
 │   ├── architecture_guide.md   # Карта модулей и путь данных
@@ -167,6 +167,7 @@ SPHERE/
 │   └── 2411.10109v1.pdf        # Ключевая научная статья
 ├── scripts/
 │   ├── collect_for_chatgpt.py  # Сборка контекста репозитория в один файл
+│   ├── Import-DotEnv.ps1       # Загрузка переменных из .env в текущий PowerShell process
 │   └── run_chapter2_baseline.py # Серия baseline-прогонов одного сценария в режимах G0–G3
 ├── .dockerignore              # Исключения для Docker build context
 ├── Dockerfile.web             # Мультистейдж-образ web UI: сборка React + запуск FastAPI
@@ -221,9 +222,9 @@ pytest tests/test_persona_enrichment.py -k worldgen
 pytest tests/test_worldgen_personal_ecology.py
 
 # SPHERE-LC
-sphere-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
-sphere-lc run --scenario scenarios/procurement_tender_full_ecology.yaml --out results/procurement_tender_full_run --enrich-personas --persona-enrich-mode full
-sphere-lc compose --description "Короткое описание" --out scenarios/lc_composed.yaml
+sphere-lc run --scenario scenarios/lc_minimal.json --out results/lc_minimal_run
+sphere-lc run --scenario scenarios/procurement_tender_full_ecology.json --out results/procurement_tender_full_run --enrich-personas --persona-enrich-mode full
+sphere-lc compose --description "Короткое описание" --out scenarios/lc_composed.json
 sphere-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
 
 # Веб-интерфейс
@@ -289,7 +290,7 @@ cd web/frontend && npm run test:e2e
 | Изменить социальный граф / динамический спавн | `persona.py`, `engine.py`, `actions.py`, `ops.py`, `worldgen.py` |
 | Добавить LLM-провайдера | `llm/providers.py`, `llm/__init__.py`, `llm/caller.py` |
 | Изменить генерацию мира | `worldgen.py`, `engine.py`, `config.py`, `composer.py` |
-| Запустить или изменить baseline-серию G0–G3 | `scripts/run_chapter2_baseline.py`, `scenarios/procurement_tender_core_governance.yaml`, `governance_modes.py`, `README.md` |
+| Запустить или изменить baseline-серию G0–G3 | `scripts/run_chapter2_baseline.py`, `scenarios/procurement_tender_core_governance.json`, `governance_modes.py`, `README.md` |
 | Изменить web-launcher / артефакты прогонов | `web/backend/runner.py`, `web/backend/run_artifacts.py`, `web/backend/routes/run_control.py`, `tests/test_web_runner.py` |
 | Изменить live WebSocket / visibility | `web/backend/websocket.py`, `web/backend/visibility.py`, `web/backend/graph_state.py`, `web/frontend/src/hooks/useSimulation.ts`, `web/frontend/src/components/SimGraph.tsx` |
 | Изменить auth / роли / пользователей | `web/backend/auth.py`, `web/backend/database.py`, `web/backend/manage_users.py`, `web/frontend/src/hooks/useAuth.ts`, `web/frontend/src/pages/LoginPage.tsx` |
@@ -314,24 +315,23 @@ cd web/frontend && npm run test:e2e
 - **Run metadata и время мира в web UI**: directory-based launcher теперь пишет sidecar `run.json` с display-метаданными прогона (`display_name`, `scenario_title`, `governance_label`, runtime time-model, симуляционный диапазон дат). REST `/api/runs`, `/api/run/{name}`, `/api/run/{name}/snapshot` и WebSocket `meta` предпочитают этот sidecar regex-разбору имени прогона. При выдаче событий backend дополнительно материализует `simulated_date` / `simulated_time` / `simulated_timestamp`, чтобы monitor и timeline опирались на каноническое время мира, а не только на wall-clock `timestamp` записи в JSONL.
 - **Динамический спавн**: вторичные и runtime-спавненные агенты получают только безопасный capability-набор (`message`/`work`), без `audit` и без права порождать следующих агентов.
 - **Ecology activation**: при `runtime.ecology_activation_window_ticks > 0` не-core акторы ходят не каждый тик, а только когда недавно были затронуты событиями, hook-ами или собственным созданием. Это сохраняет богатую ecology без захвата сюжета внешними акторами.
-- **Имена новых агентов**: secondary-spawn, runtime-spawn и worldgen-spawn принимают только человеко-читаемые имена; role-alias и machine-like display-name отклоняются или маппятся на уже существующего актора.
-- **Scripted events + pre-tick worldgen**: сценарий может задавать `scripted_events`, а `runtime.worldgen_pre_tick=true` включает personal-ecology слой до хода агентов: `agent_daily_context`, `scene_hooks`, глобальные сигналы и `story_state` агента. Эти prompt-layer данные не подменяют детерминированный apply.
+- **Имена новых агентов**: secondary-spawn, runtime-spawn и worldgen-spawn принимают только человеко-читаемые имена; жёсткий lexical gate по role-alias удалён. Блокируются только явно машинные/machine-like display-name, а “похоже на должность” остаётся сигналом правдоподобия, но не онтологическим запретом.
 - **Stateful environment layer**: `WorldState` теперь содержит отдельный `environment`-слой (`world.environment` в сценарии): режимы организаций, зоны, ресурсные пулы и информационный климат. Он инициализируется из конфига, отражается в YAML-журнале и safe `state_snapshot` для worldgen; post-worldgen теперь также может детерминированно менять его через `environment_updates` и события `environment_*_updated`.
-- **Operational queues**: `environment.operational_queues` хранит материальные очереди и backlog’и (`backlog`, `capacity_per_tick`, `avg_delay_ticks`, `status`, `pressure`). Ресурсное давление теперь может не только создавать `resource_alert`, но и детерминированно перегружать такие очереди, эмитить `environment_operational_queue_updated`, материализовать `queue_alert`-артефакты и поверх этого запускать локальный complaint/publication цикл с публичными `world_event`. Отдельно появился per-tick queue process: без реакции backlog и delay сами деградируют, а при реальной work-активности релевантных агентов очередь может восстановиться до `recovering` / `stable`. При тяжёлой service-degradation этот же контур теперь умеет deterministic runtime-spawn внешних акторов (`queue_complainant`, `queue_reporter`) с безопасными capabilities, seeded pending-follow-up и связью `shared_issue`, так что они могут запускать собственные message/publication chains вокруг проблемной очереди. Их действия, в свою очередь, детерминированно создают internal response obligations (`external_queue_complaint_response`, `media_response`), артефакты `external_complaint` / `press_inquiry` и дополнительное давление в `information_climate`.
 - **Документарный слой мира**: сценарий и runtime теперь поддерживают `art:*`-артефакты как first-class сущности (`world.artifacts`, `artifact_created`, `artifact_updated`). Они попадают в `WorldState`, журнал мира, worldgen snapshot и релевантный prompt агента.
-- **Legacy worldgen compatibility**: post-worldgen теперь нормализует legacy `artifact:*` в канонический `art:*`, а `environment_updates.operational_queues` может не только менять существующую очередь, но и materialize новую queue по `queue_id`, если та не была объявлена в стартовом `world.environment`.
+- **Worldgen без scripted events**: детерминированные `scripted_events` удалены из authoring-модели; внешний фон теперь приходит только через `worldgen`, документы, сигналы среды и реальные действия агентов.
+- **Legacy worldgen compatibility**: post-worldgen нормализует legacy `artifact:*` в канонический `art:*`; legacy scenario-format больше не поддерживается и не должен использоваться в новых сценариях.
 - **Неформальные связи**: `environment.informal_links` теперь хранит латентные связи между агентами и может обновляться как из конфига/worldgen, так и детерминированно по самому ходу симуляции (например, через private contact и coordination).
 - **Population blueprints**: `world.environment.population_blueprints` позволяет систематически наращивать периферийную агентность вокруг `org:*` / `zone:*`. На текущем этапе поддерживаются bootstrap-заполнение среды и elastic-доращивание после `environment_change`.
 - **Local reaction windows**: поверх основного батча действий движок теперь может запускать локальные reaction windows внутри того же тика (`runtime.micro_reaction_rounds`). Они дают ограниченному набору агентов быстрый follow-up на события текущего тика и делают runtime менее жёстко синхронным даже без полной замены tick-engine.
 - **Pending follow-up queue**: `WorldState.pending_interactions` хранит короткие локальные обязательства и ожидающие ответы, переживающие один или несколько тиков. Движок умеет детерминированно создавать их из приватных сообщений, документарных и ресурсных сдвигов, эмитить `pending_interaction_due`, показывать их агенту в prompt и реактивировать периферию даже после выпадения исходного события из обычного activation-window. При включённых `micro_reaction_rounds` часть локальных категорий теперь может срабатывать и закрываться уже в том же тике через same-tick follow-up sweep.
 - **Risky personal contexts**: `agent_daily_context` теперь может нести не только общий фон, но и richer pressure-поля (`private_pressure`, `opportunity`, `exposure_risk`). Это считается допустимым средовым давлением, а не прямой директивой агенту.
 - **`request_entity` по умолчанию внутренний**: при `runtime.request_entity_internal_only=true` внешние/ecology-акторы не могут бесконтрольно разворачивать публичную инфраструктуру (`chan:*`/`org:*`) через `request_entity`.
-- **Runtime-аудитор**: `RuntimeAuditor` существует только как отдельный runtime governance-layer, а не как narrative-agent. Он сочетает deterministic baseline rules с LLM-findings, нормализует `violation_type`, детерминированно привязывает `evidence_refs`, агрегирует повторяющиеся finding’и в стабильные `audit_case:*`, умеет ставить response-deadline на объяснения/документы и эскалировать просроченные кейсы в monitoring / collegial review. Queue-driven external complaints и media-response obligations теперь тоже входят в baseline-аудит как `service_degradation_response_ignored`, так что service-degradation влияет уже и на governance/escalation path.
+- **Runtime-аудитор**: `RuntimeAuditor` существует только как отдельный runtime governance-layer, а не как narrative-agent. Он сочетает deterministic baseline rules с LLM-findings, нормализует `violation_type`, детерминированно привязывает `evidence_refs`, агрегирует повторяющиеся finding’и в стабильные `audit_case:*`, умеет ставить response-deadline на объяснения/документы и эскалировать просроченные кейсы в monitoring / collegial review. Queue-specific baseline obligations удалены вместе с queue-моделью среды.
 - **Сюжетные аудиторы удалены**: narrative-агенты с capability `audit` больше не поддерживаются. Аудит существует только как отдельный runtime governance-layer, а не как персонаж симуляции.
 - **Collegial review**: спорные audit-case могут маршрутизироваться в отдельный collegial review через `audit_review` vote-path с детерминированным составом жюри и закрытием кейса по итогам review.
 - **Deterministic truth + freeform truth**: `truth.jsonl` остаётся strict baseline для exact evaluation, а `truth_freeform.jsonl` — отдельным LLM-sidecar для richer post-hoc записи нарушений в свободной форме по схеме. При наличии `truth_freeform.jsonl` semantic/case evaluation опирается именно на него, а strict metrics продолжают считаться по deterministic truth.
 - **Unified findings**: runtime audit, deterministic truth и freeform truth постепенно приводятся к общей finding-структуре (`summary`, `mechanism`, `beneficiary`, `risk_tags`, `evidence_refs`). Exact `violation_type` больше не считается единственным носителем смысла.
-- **Structural truth only**: deterministic truth-layer больше не должен делать text-based / keyword-based semantic выводы о коррупции, координации или сокрытии. Его зона ответственности — только структурно наблюдаемые паттерны мира (например, self-nomination, positive reputation after private contact, support vote after private contact, queue-driven missed response).
+- **Structural truth only**: deterministic truth-layer больше не должен делать text-based / keyword-based semantic выводы о коррупции, координации или сокрытии. Его зона ответственности — только структурно наблюдаемые паттерны мира (например, self-nomination, positive reputation after private contact, support vote after private contact).
 - **Semantic + case-level evaluation**: `evaluation.json` теперь содержит не только strict метрики exact-match, но и semantic matching (`semantic_true_positive`, `semantic_precision`, `semantic_recall`, `semantic_f1`) через finding matcher, а также case-level слой (`case_true_positive`, `case_precision`, `case_recall`, `case_f1`), который схлопывает повторяющиеся эпизоды по `subject + violation_type + counterparty`.
 - **Status/truth/evaluation/fidelity sidecars**: каждый прогон может писать `status.json` (heartbeat и финальный статус `running`/`finished`/`failed`), `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина), `summary.json` (разделённая сводка), `perf_summary.json` (LLM-phase/tick performance profile), а также `environment_summary.json` и `environment_timeline.jsonl` для отдельной телеметрии усиленной среды.
 - **Memory summarization runtime**: `AgentMemory.maybe_summarize_working` теперь вызывается параллельно для нескольких агентов с bounded-parallel contract, чтобы memory-sidecar не тянул весь tick последовательно.
@@ -342,7 +342,7 @@ cd web/frontend && npm run test:e2e
 - **DAO по умолчанию**: self-nomination и self-vote цели отключены; нормальный путь для кандидата — `respond_nomination`, а `vote_closed` пишет детерминированную причину результата. `governance.position_policy` в v1 поддерживает только `dao`; `auto` отклоняется при валидации.
 - **Веб-launcher на `sphere_lc`**: `POST /api/scenarios/{id}/run` и `POST /api/runs/launch` запускают `sphere_lc` как subprocess, пишут артефакты в `results/{run_name}/` и показываются в `/api/runs/active` как обычные API-запуски.
 - **Предпочтительный способ запуска среды**: в этой рабочей среде по умолчанию считать Docker основным способом подъёма backend/frontend и сопутствующих сервисов. Если контейнерный путь доступен, сначала использовать его; прямой локальный запуск через `start.sh`, `uvicorn`, `npm` и аналогичные команды рассматривать как запасной вариант для случаев, когда Docker-конфигурации или образов ещё нет.
-- **Built-in seed-сценарии**: `seed_s*_g*.json` используются только как backing-файлы для `/api/templates/scenarios/*` и уже хранятся как полноценный `ScenarioConfig`; backend не показывает их в CRUD-списке `/api/scenarios` и не позволяет менять/удалять через сценарные маршруты.
+- **Built-in template-сценарии**: `template_s*_g*.json` используются только как backing-файлы для `/api/templates/scenarios/*` и уже хранятся как полноценный `ScenarioConfig`; backend не показывает их в CRUD-списке `/api/scenarios` и не позволяет менять/удалять через сценарные маршруты.
 - **Отказ от legacy web-сценариев**: старый формат JSON-карточек (`name/scenario/governance/agents` без полного `ScenarioConfig`) больше не поддерживается. Web backend сохраняет пользовательские сценарии только как полный `ScenarioConfig`; если `sim_config` пуст, при сохранении сначала материализуется выбранный шаблон `S/G`, а затем поверх него накладываются overrides из UI.
 - **Custom governance modes**: пользовательские `G*`-режимы должны содержать валидный `GovernanceConfig` (в поле `config` или в корне JSON); backend применяет их при подстановке шаблона и round-trip сценария, а не игнорирует как неизвестный `G4+`.
 - **AI-маршруты web API**: все основные AI-эндпоинты web backend теперь живые: генерация personality, agent-type, interview и secondary agents работает через текущий `sphere_lc.llm` без зависимости от удалённого прежнего монолитного движка.
