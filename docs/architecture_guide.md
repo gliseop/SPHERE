@@ -37,6 +37,7 @@ graph TB
         WORLDGEN[worldgen.py<br/>WorldGenerator]
         COMPOSER[composer.py<br/>WorldComposer]
         ORACLE[oracle.py<br/>ViolationOracle + FreeformTruthRecorder]
+        HISTORYMD[history_markdown.py<br/>world_history.md exporter]
         TRUTH[truth.py<br/>TruthDetector + TruthLog]
         EVAL[evaluation.py<br/>EvaluationSummary]
         FID[fidelity.py<br/>FidelitySummary]
@@ -98,6 +99,7 @@ graph TB
     COMPOSER --> PROMPTS
     ORACLE --> CALLER
     ORACLE --> PROMPTS
+    ENGINE --> HISTORYMD
     ENGINE --> TRUTH
     ENGINE --> EVAL
     ENGINE --> FID
@@ -128,7 +130,7 @@ graph TB
 | Как арбитр проверяет и материализует ход | `arbiter.py` → антифантомы + пространственные ограничения + LLM-materialization of proposal |
 | Где зафиксирована canonical семантика `G0–G3` | `governance_modes.py` → built-in mapping для runtime/web/launcher |
 | Как runtime-аудитор выявляет сигналы риска | `auditor.py` → LLM-first detection + deterministic actuator + collegial review |
-| Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра, включая environment-layer, `art:*`-артефакты и informal links |
+| Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра, включая environment-layer, `art:*`-артефакты, informal links и текущие `org_id/zone_id` агентов |
 | Как устроено DAO-голосование | `dao.py` → кворум, порог, закрытие голосования |
 | Типизированные ID и антифантомы | `ids.py` + `entities.py` → `EntityRegistry` |
 | Детерминированный apply | `ops.py` → `StateOp` преобразуется в `Event` |
@@ -141,6 +143,7 @@ graph TB
 | Как считается post-hoc evaluation | `evaluation.py` → precision/recall runtime-аудита vs truth |
 | Как считаются fidelity-метрики | `fidelity.py` → temporal/identity/phantom/bureaucratic sidecar |
 | Как собирается средовая телеметрия и perf-профиль | `engine.py` → `environment_summary.json` / `environment_timeline.jsonl` / `perf_summary.json`, `web/backend/routes/runs.py` → REST/export, `web/frontend/src/components/EnvironmentPanel.tsx` → HUD-визуализация |
+| Где появляется читаемая история мира | `history_markdown.py` → `world_history.md` sidecar с полной хронологией событий и LLM trace |
 | Как оракул и freeform truth анализируют нарушения | `oracle.py` → `ViolationOracle` + `FreeformTruthRecorder` |
 | Как устроена память агента | `memory.py` → working buffer + long-term hybrid index |
 | Как работает гибридный поиск | `memory.py` (retrieval) + `bm25.py` (лексический) + `embeddings.py` (векторный) |

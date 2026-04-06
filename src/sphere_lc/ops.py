@@ -240,10 +240,34 @@ class RecordNarrativeActionOp:
     def apply(self, state: WorldState) -> list[Event]:
         if self.zone_id is not None:
             ensure_kind(self.zone_id, EntityKind.ZONE)
+            if not state.registry.exists(self.zone_id):
+                raise ValueError(f"Unknown zone_id: {self.zone_id!r}")
         valid_witnesses: list[str] = []
         for w in (self.witnesses or []):
             if w in state.agents and w != self.actor_id:
                 valid_witnesses.append(w)
+        previous_zone_id: str | None = None
+        relocated = False
+        actor = state.agents.get(self.actor_id)
+        if actor is not None and self.zone_id is not None:
+            previous_zone_id = actor.zone_id
+            if previous_zone_id != self.zone_id:
+                actor.zone_id = self.zone_id
+                relocated = True
+                record = state.registry.get(self.actor_id)
+                if record is not None:
+                    meta = dict(record.meta)
+                    meta["zone_id"] = self.zone_id
+                    state.registry.register(
+                        EntityRecord(
+                            entity_id=record.entity_id,
+                            kind=record.kind,
+                            created_by=record.created_by,
+                            created_tick=record.created_tick,
+                            meta=meta,
+                        ),
+                        overwrite=True,
+                    )
         if valid_witnesses:
             audience = list({self.actor_id} | set(valid_witnesses))
         else:
@@ -257,6 +281,8 @@ class RecordNarrativeActionOp:
                     "description": self.description,
                     "action_kind": self.action_kind or "general",
                     "zone_id": self.zone_id,
+                    "previous_zone_id": previous_zone_id,
+                    "relocated": relocated,
                     "witnesses": valid_witnesses,
                 },
                 audience=audience,

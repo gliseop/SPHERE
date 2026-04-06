@@ -33,6 +33,8 @@ def test_sphere_lc_runs_one_tick(tmp_path: Path) -> None:
     assert state.tick == 0
     assert artifacts.events_path.exists()
     assert artifacts.trace_path.exists()
+    assert artifacts.world_history_path is not None
+    assert artifacts.world_history_path.exists()
 
     events = [
         json.loads(line)
@@ -44,6 +46,12 @@ def test_sphere_lc_runs_one_tick(tmp_path: Path) -> None:
     assert snapshots[0]["agent_id"] == "agent:off_1"
     assert snapshots[0]["payload"]["target_agent_id"] == "agent:off_1"
     assert snapshots[0]["payload"]["score"] == 0.0
+    history_text = artifacts.world_history_path.read_text(encoding="utf-8")
+    assert "## Хронология мира" in history_text
+    assert "#### Входы агентов на этом тике" in history_text
+    assert "##### User" in history_text
+    assert "## LLM Trace" in history_text
+    assert "reputation_snapshot" in history_text
 
 
 def test_sphere_lc_rejects_phantom_message(tmp_path: Path) -> None:

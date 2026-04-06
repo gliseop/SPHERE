@@ -28,7 +28,7 @@ from sphere_lc.actions import (
     SendMessageAction,
     SpawnAgentAction,
 )
-from sphere_lc.arbiter import Arbiter
+from sphere_lc.arbiter import Arbiter, _PerformArbiterOutput, _normalize_perform_op_type
 from sphere_lc.config import (
     DEFAULT_LLM_MODEL,
     AuditRuntimeConfig,
@@ -50,7 +50,7 @@ from sphere_lc.llm import LLMCaller
 from sphere_lc.llm.caller import create_llm_provider
 from sphere_lc.llm.providers import OpenAICompatibleProvider, create_provider
 from sphere_lc.memory import AgentMemory, WorkingEntry
-from sphere_lc.ops import CreateAgentOp
+from sphere_lc.ops import CreateAgentOp, RecordNarrativeActionOp
 from sphere_lc.ops import CloseAuditCaseOp, OpenAuditCaseOp, OpenVoteOp, UpdateAuditCaseOp
 from sphere_lc.state import AgentState, Vote, WorkItem, WorldState
 from sphere_lc.tracing import TraceLog
@@ -255,6 +255,89 @@ def test_arbiter_rejects_private_message_across_known_zones(tmp_path: Path) -> N
     res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
     assert res[0].approved is False
     assert "private_contact_requires_shared_zone" in res[0].reason
+
+
+def test_narrative_action_with_zone_updates_actor_location() -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state.agents["agent:off_1"].zone_id = "zone:left"
+    state.registry.register(
+        EntityRecord(entity_id="zone:left", kind=EntityKind.ZONE, created_by=None, created_tick=0)
+    )
+    state.registry.register(
+        EntityRecord(entity_id="zone:right", kind=EntityKind.ZONE, created_by=None, created_tick=0)
+    )
+
+    op = RecordNarrativeActionOp(
+        actor_id="agent:off_1",
+        description="Перешёл в соседний кабинет.",
+        action_kind="move",
+        zone_id="zone:right",
+    )
+    events = op.apply(state)
+
+    assert state.agents["agent:off_1"].zone_id == "zone:right"
+    assert events[0].event_type == "narrative_action"
+    assert events[0].payload["previous_zone_id"] == "zone:left"
+    assert events[0].payload["relocated"] is True
+
+
+def test_arbiter_allows_private_contact_after_same_turn_relocation(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state.agents["agent:off_1"].zone_id = "zone:left"
+    state.agents["agent:off_2"].zone_id = "zone:right"
+    state.registry.register(
+        EntityRecord(entity_id="zone:left", kind=EntityKind.ZONE, created_by=None, created_tick=0)
+    )
+    state.registry.register(
+        EntityRecord(entity_id="zone:right", kind=EntityKind.ZONE, created_by=None, created_tick=0)
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+    decision = _PerformArbiterOutput.model_validate(
+        {
+            "approved": True,
+            "reason": "approved",
+            "ops": [
+                {
+                    "op_type": "narrative_action",
+                    "args": {
+                        "description": "Сначала зайду в кабинет Off 2.",
+                        "action_kind": "move",
+                        "zone_id": "zone:right",
+                    },
+                },
+                {
+                    "op_type": "send_message",
+                    "args": {
+                        "to_id": "agent:off_2",
+                        "private": True,
+                        "text": "Нужно обсудить вопрос лично.",
+                    },
+                },
+            ],
+        }
+    )
+    res = arbiter._convert_perform_decision(
+        state=state,
+        agent_id="agent:off_1",
+        agent_caps={"message"},
+        action_index=0,
+        decision=decision,
+    )
+
+    assert res.approved is True
+    assert len(res.ops) == 2
+    scratch_state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    scratch_state.agents["agent:off_1"].zone_id = "zone:left"
+    scratch_state.agents["agent:off_2"].zone_id = "zone:right"
+    scratch_state.registry.register(
+        EntityRecord(entity_id="zone:left", kind=EntityKind.ZONE, created_by=None, created_tick=0)
+    )
+    scratch_state.registry.register(
+        EntityRecord(entity_id="zone:right", kind=EntityKind.ZONE, created_by=None, created_tick=0)
+    )
+    for op in res.ops:
+        op.apply(scratch_state)
+    assert scratch_state.agents["agent:off_1"].zone_id == "zone:right"
 
 
 def test_arbiter_rejects_public_message_to_non_channel_target(tmp_path: Path) -> None:
@@ -847,6 +930,13 @@ def test_arbiter_normalizes_legacy_perform_payload_shape(tmp_path: Path) -> None
     op_names = [op.__class__.__name__ for op in res[0].ops]
     assert "SendMessageOp" in op_names
     assert "AddInformationSignalOp" in op_names
+
+
+def test_arbiter_normalizes_real_model_alias_op_types() -> None:
+    assert _normalize_perform_op_type("record_narrative_action") == "narrative_action"
+    assert _normalize_perform_op_type("add_narrative_action") == "narrative_action"
+    assert _normalize_perform_op_type("create_pending_interaction") == "upsert_pending_interaction"
+    assert _normalize_perform_op_type("record_narrative_action_op") == "narrative_action"
 
 
 def test_arbiter_rejects_substantive_proposal_when_retry_still_empty(tmp_path: Path) -> None:
@@ -1863,6 +1953,10 @@ def test_cli_run_defaults_to_results_directory(monkeypatch: pytest.MonkeyPatch, 
 
 def test_world_journal_tracks_history_and_caps() -> None:
     state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state.agents["agent:off_1"].org_id = "org:city"
+    state.agents["agent:off_1"].zone_id = "zone:left"
+    state.registry.register(EntityRecord(entity_id="org:city", kind=EntityKind.ORG, created_by=None, created_tick=0))
+    state.registry.register(EntityRecord(entity_id="zone:left", kind=EntityKind.ZONE, created_by=None, created_tick=0))
     journal = WorldJournal.from_state(
         state=state,
         store_max_work_items=3,
@@ -1890,6 +1984,9 @@ def test_world_journal_tracks_history_and_caps() -> None:
     assert len(d["history"]) == 2
     assert d["history"][0]["type"] == "arbiter_approved"
     assert d["history"][1]["type"] == "message_sent"
+    agent_entry = next(item for item in d["agents"] if item["id"] == "agent:off_1")
+    assert agent_entry["zone_id"] == "zone:left"
+    assert agent_entry["org_id"] == "org:city"
 
     for i in range(5):
         wid = f"work:w{i}"

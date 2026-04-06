@@ -610,11 +610,15 @@ class WorldJournal:
     @staticmethod
     def _agent_entry(state: WorldState, agent_id: str) -> dict[str, Any]:
         a = state.agents[agent_id]
+        zone = state.environment.zones.get(str(a.zone_id or ""))
         return {
             "id": a.agent_id,
             "name": a.name,
             "internal": a.internal,
             "title": a.title if a.internal else "",
+            "org_id": a.org_id,
+            "zone_id": a.zone_id,
+            "zone_title": zone.title if zone is not None else None,
             "reputation": round(float(a.reputation), 3) if a.internal else None,
             "reputation_frozen": bool(a.reputation_frozen) if a.internal else None,
             "reputation_frozen_until_tick": a.reputation_frozen_until_tick if a.internal else None,

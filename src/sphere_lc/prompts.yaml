@@ -30,7 +30,7 @@ agent:
     Во что ты уже упирался и чего лучше не повторять дословно:
     {{rejection_hints_text}}
 
-    {{daily_context_text}}{{environment_brief}}{{artifacts_brief}}{{informal_links_brief}}{{pending_interactions_brief}}{{spawn_context_brief}}{{prompt_policy_text}}{{proposal_examples_text}}Что всплывает в памяти:
+    {{daily_context_text}}{{environment_brief}}{{spatial_brief}}{{artifacts_brief}}{{informal_links_brief}}{{pending_interactions_brief}}{{spawn_context_brief}}{{prompt_policy_text}}{{proposal_examples_text}}Что всплывает в памяти:
     {{mem_text}}
 
     Как оформить ответ:
@@ -87,6 +87,11 @@ agent:
       zone_line: "- Зона {{zone_id}} ({{title}}): доступ={{access_mode}}, прозрачность={{transparency_mode}}, безопасность={{security_level}}"
       climate_line: "- Общий фон: public_mood={{public_mood}}, oversight={{oversight_attention}}, media={{media_pressure}}, narrative={{narrative_temperature}}"
       active_signals_line: "- Активные сигналы среды: {{signals}}"
+    spatial:
+      header: "Кого и где обычно можно сейчас найти:"
+      agent_line: "- {{agent_id}} ({{name}}{{title_suffix}}): {{zone_id}} [{{zone_title}}]"
+      zones_header: "Какие площадки у тебя вообще есть перед глазами:"
+      zone_line: "- {{zone_id}}: {{title}} | org={{org_id}}{{access_suffix}}{{security_suffix}}"
     artifacts:
       header: "На столе, в почте и в папках у тебя сейчас:"
       line: "- {{artifact_id}}: {{title}} [{{artifact_type}}, {{status}}, {{visibility}}]{{relation_text}}{{tags_text}}{{summary_text}}"
@@ -153,6 +158,7 @@ agent:
       extra_bad: "- Плохо: \"{{text}}\""
       bad_no_work: "- Для тебя плохо: обещать самому править дело, создавать новый рабочий трек или менять документы, если у тебя нет на это прямого служебного доступа."
       bad_no_dao: "- Для тебя плохо: обещать самому открывать голосование или участвовать в нём, если по твоему положению это не твоя процедура."
+      move_before_private: "- Если для личного разговора вы в разных зонах, можно сначала уточнить, где человек находится, прийти в нужную зону и уже там говорить лично."
       observable_step: "- Если хочешь что-то подготовить или сдвинуть обсуждение, переведи это в наблюдаемый шаг: кому напишешь, что вынесешь в канал, куда положишь заметку, на какую процедуру ответишь."
     event_facts:
       world_event: "- {{description}}"
@@ -438,6 +444,7 @@ arbiter:
       - «Подготовлю докладную о несоответствиях» → create_artifact(type=report, title=...) + если public, add_information_signal
       - «Намекну подрядчику agent:Y, что контракт можно ускорить» → send_message(private, текст намёка) + upsert_informal_link(corruption, +0.15, visibility=latent)
       - «Пройду к директору и положу отчёт на стол» → narrative_action(физическая передача, zone_id=...) + send_message(текст сопроводительного слова)
+      - Если proposal включает приход в другую зону, сначала materialize narrative_action с zone_id этой зоны; последующие ops в этом же ходе можно строить уже из новой локации актёра.
       - «Добавлю в work:Y заметку» → add_work_note
       - «Вынесу вопрос о повышении agent:Z» → open_vote, а не прямую смену должности.
       - Не отклоняй send_message только из-за отсутствия capability `message`.

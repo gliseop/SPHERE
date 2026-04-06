@@ -49,7 +49,7 @@ SPHERE/
 │   ├── persona.py              # PersonaArtifact/Library/Generator + SocialGraphExtractor
 │   ├── memory.py               # Память агента (buffer + hybrid retrieval)
 │   ├── actions.py              # Внутренний Action-vocabulary + freeform `proposal` schema для агента
-│   ├── agent.py                # AgentRunner (1 LLM-вызов на ход, freeform turn proposal, motivation block, daily context)
+│   ├── agent.py                # AgentRunner (1 LLM-вызов на ход, freeform turn proposal, motivation block, daily context + spatial brief)
 │   ├── prompts.py              # Loader/renderer централизованного YAML-реестра LLM-промптов
 │   ├── prompts.yaml            # Единое хранилище prompt templates для core и web AI routes
 │   ├── ops.py                  # Детерминированные StateOp -> Event, включая CreateAgentOp
@@ -60,6 +60,7 @@ SPHERE/
 │   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, scene hooks, spawns, environment updates, artifact creations/updates)
 │   ├── composer.py             # WorldComposer (LLM -> ScenarioConfig + persona enrichment)
 │   ├── oracle.py               # ViolationOracle + FreeformTruthRecorder (LLM post-hoc analysis)
+│   ├── history_markdown.py     # Экспорт читабельной markdown-истории мира: события по тикам + встроенные agent inputs + полный LLM trace
 │   ├── truth.py                # TruthDetector + TruthLog (deterministic truth-layer sidecar)
 │   ├── evaluation.py           # Post-hoc evaluation against truth.jsonl
 │   ├── fidelity.py             # Post-hoc fidelity metrics + summary separation
@@ -76,7 +77,7 @@ SPHERE/
 │   │   └── _debug_logger.py    # Отладочное логирование LLM-вызовов
 │   ├── bm25.py                 # Собственная реализация BM25 (гибридный поиск)
 │   ├── embeddings.py           # Async batch embeddings + cache
-│   ├── journal.py              # Инкрементальный YAML-журнал мира для арбитра
+│   ├── journal.py              # Инкрементальный YAML-журнал мира для арбитра, включая org/zone привязку агентов
 │   ├── utils.py                # Мелкие утилиты (например, redact_numbers)
 │   └── graphs.py               # LangGraph (tick graph + SqliteSaver checkpoints)
 ├── web/
@@ -153,7 +154,7 @@ SPHERE/
 │   ├── interviews/             # Данные интервью (JSON)
 │   └── governance_modes/       # Конфигурации пользовательских режимов управления
 ├── scenarios/                  # YAML/JSON-конфигурации сценариев и built-in template-шаблоны
-├── results/                    # Результаты прогонов (JSONL, sidecars, логи)
+├── results/                    # Результаты прогонов (JSONL, sidecars, world_history.md, логи)
 ├── docs/
 │   ├── architecture_guide.md   # Карта модулей и путь данных
 │   ├── simulation_engine.md    # Подробности движка симуляции

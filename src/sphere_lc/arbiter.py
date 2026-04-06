@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import re
 from datetime import date, timedelta
 from dataclasses import dataclass, field
@@ -110,14 +111,21 @@ def _normalize_perform_op_type(op_type: str) -> str:
         "CreateArtifactOp": "create_artifact",
         "UpdateArtifactOp": "update_artifact",
         "RecordNarrativeActionOp": "narrative_action",
+        "record_narrative_action": "narrative_action",
+        "add_narrative_action": "narrative_action",
         "UpsertInformalLinkOp": "upsert_informal_link",
         "AddInformationSignalOp": "add_information_signal",
         "UpsertPendingInteractionOp": "upsert_pending_interaction",
+        "create_pending_interaction": "upsert_pending_interaction",
         "ResolvePendingInteractionOp": "resolve_pending_interaction",
         "NoopOp": "noop",
     }
     if raw in explicit:
         return explicit[raw]
+    if raw.endswith("_op"):
+        raw = raw[:-3]
+        if raw in explicit:
+            return explicit[raw]
     if raw.endswith("Op"):
         raw = raw[:-2]
     if raw.islower():
@@ -1085,12 +1093,13 @@ class Arbiter:
             return ActionResult(action_index, False, decision.reason or "rejected", [])
 
         scratch_alloc = IdAllocator(counters=dict(self.id_alloc.counters or {}))
+        scratch_state = copy.deepcopy(state)
         ops: list[StateOp] = []
         for item in decision.ops:
             try:
                 parsed_ops = self._op_from_llm(
                     agent_id=agent_id,
-                    state=state,
+                    state=scratch_state,
                     op_type=item.op_type,
                     args=item.args,
                     id_alloc=scratch_alloc,
@@ -1106,6 +1115,15 @@ class Arbiter:
                 missing = self._missing_capability_for_op(op, agent_caps)
                 if missing:
                     return ActionResult(action_index, False, f"missing_capability:{missing}", [])
+                try:
+                    op.apply(scratch_state)
+                except Exception as exc:
+                    return ActionResult(
+                        action_index,
+                        False,
+                        f"perform_op_invalid:{item.op_type}:{exc.__class__.__name__}:{exc}",
+                        [],
+                    )
                 ops.append(op)
 
         self.id_alloc.counters = dict(scratch_alloc.counters or {})

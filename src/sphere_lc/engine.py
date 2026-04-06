@@ -25,6 +25,8 @@ from .entities import EntityRecord, EntityRegistry
 from .evaluation import evaluate_run, save_evaluation
 from .events import Event, EventLog
 from .fidelity import evaluate_fidelity, save_fidelity
+from .governance_modes import infer_builtin_governance_mode
+from .history_markdown import write_world_history_markdown
 from .id_alloc import IdAllocator
 from .ids import (
     EntityKind,
@@ -125,6 +127,7 @@ class RunArtifacts:
     environment_summary_path: Path | None = None
     environment_timeline_path: Path | None = None
     perf_summary_path: Path | None = None
+    world_history_path: Path | None = None
 
 
 @dataclass(slots=True)
@@ -160,6 +163,8 @@ class WorldEngine:
             self.artifacts.environment_timeline_path = self.artifacts.out_dir / "environment_timeline.jsonl"
         if self.artifacts.perf_summary_path is None:
             self.artifacts.perf_summary_path = self.artifacts.out_dir / "perf_summary.json"
+        if self.artifacts.world_history_path is None:
+            self.artifacts.world_history_path = self.artifacts.out_dir / "world_history.md"
 
     async def run(self) -> WorldState:
         """Запустить симуляцию и вернуть финальный WorldState."""
@@ -759,6 +764,7 @@ class WorldEngine:
         self._write_environment_summary(state=state)
         self._write_perf_summary()
         self._write_names_sidecar(state=state)
+        self._write_world_history_markdown()
         self._write_status_sidecar(state="finished", tick=state.tick)
         return state
 
@@ -843,6 +849,22 @@ class WorldEngine:
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    def _write_world_history_markdown(self) -> None:
+        if self.artifacts.world_history_path is None:
+            return
+        try:
+            write_world_history_markdown(
+                path=self.artifacts.world_history_path,
+                run_name=self.artifacts.out_dir.name,
+                scenario_title=self.cfg.title,
+                governance_label=infer_builtin_governance_mode(self.cfg),
+                runtime=self.cfg.runtime,
+                events_path=self.artifacts.events_path,
+                trace_path=self.artifacts.trace_path,
+            )
+        except Exception as exc:
+            logger.warning("World history markdown export failed: %s", exc)
 
     def _record_local_perf_call(
         self,
@@ -3974,6 +3996,7 @@ def default_artifacts(out_dir: str | Path) -> RunArtifacts:
         truth_freeform_path=d / "truth_freeform.jsonl",
         evaluation_path=d / "evaluation.json",
         perf_summary_path=d / "perf_summary.json",
+        world_history_path=d / "world_history.md",
     )
 
 

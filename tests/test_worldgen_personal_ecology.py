@@ -775,6 +775,59 @@ def test_agent_prompt_includes_relevant_environment_brief(tmp_path: Path) -> Non
     assert "Активные сигналы среды: новая волна жалоб, утечка сметы" in prompt
 
 
+def test_agent_prompt_includes_spatial_brief_for_other_agents(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Хочет найти начальника."),
+        capabilities=["message"],
+        org_id="org:city_hall",
+        zone_id="zone:city_hall",
+        title="специалист",
+    )
+    head = AgentState(
+        agent_id="agent:head",
+        name="Head",
+        internal=True,
+        persona=PersonaArtifact(summary="Сидит в соседнем кабинете."),
+        capabilities=["message", "work"],
+        org_id="org:city_hall",
+        zone_id="zone:boardroom",
+        title="начальник отдела",
+    )
+    state = WorldState(tick=0, registry=EntityRegistry(), agents={agent.agent_id: agent, head.agent_id: head})
+    state.environment.zones["zone:city_hall"] = ZoneState(
+        zone_id="zone:city_hall",
+        title="Здание мэрии",
+        primary_org_id="org:city_hall",
+    )
+    state.environment.zones["zone:boardroom"] = ZoneState(
+        zone_id="zone:boardroom",
+        title="Кабинет начальника",
+        primary_org_id="org:city_hall",
+        access_mode="restricted",
+        security_level="heightened",
+    )
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    prompt = runner._build_user(
+        agent=agent,
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    assert "Кого и где обычно можно сейчас найти:" in prompt
+    assert "agent:head (Head, начальник отдела): zone:boardroom [Кабинет начальника]" in prompt
+    assert "Какие площадки у тебя вообще есть перед глазами:" in prompt
+    assert "zone:boardroom: Кабинет начальника | org=org:city_hall" in prompt
+
+
 def test_agent_prompt_examples_respect_missing_work_capability(tmp_path: Path) -> None:
     agent = AgentState(
         agent_id="agent:cand_1",

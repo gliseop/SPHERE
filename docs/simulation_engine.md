@@ -47,7 +47,7 @@ flowchart TD
     EVAL --> RESULT[Финал: WorldState + events.jsonl + truth.jsonl + trace.jsonl + status.json + evaluation.json + fidelity.json + summary.json + perf_summary.json + environment_summary.json + environment_timeline.jsonl]
 ```
 
-Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы, стартовый `environment`-слой и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry`, материализует `world.environment` как отдельный слой состояния среды и запускает цикл тиков.
+Симуляция начинается с конфигурации сценария (`ScenarioConfig`), определяющей агентов, полномочия, каналы, организации, рабочие элементы, стартовый `environment`-слой и параметры управления. `WorldEngine` инициализирует `WorldState`, регистрирует все сущности в `EntityRegistry`, материализует `world.environment` как отдельный слой состояния среды и запускает цикл тиков. По завершении прогона он пишет не только JSON/JSONL sidecars, но и `world_history.md` — человекочитаемую историю мира с полной хроникой событий и всем LLM trace.
 
 ## Агент (AgentRunner)
 
@@ -63,6 +63,8 @@ flowchart TD
 - режим зоны;
 - связанные ресурсные пулы организации;
 - текущий информационный климат.
+
+Отдельно агент получает spatial-brief: каких участников обычно можно найти в каких зонах прямо сейчас, и какие площадки вообще существуют в мире. Это нужно, чтобы агент мог строить правдоподобные многошаговые ходы вида «сначала уточню, где сидит начальник, потом приду в нужный кабинет и уже там поговорю лично», а не только слепо пытаться отправить private contact через несовпадающие зоны.
 
 Если в мире есть релевантные `art:*`-артефакты (по `org_id`, `zone_id` или связанному `work item`), агент дополнительно видит краткий список документов и следов, относящихся к его локальной среде.
 
@@ -199,6 +201,7 @@ Baseline-эвристики аудитора теперь сфокусирова
 - `evaluation.json` — governance-eval: сравнение runtime-аудита и deterministic truth-layer;
 - `fidelity.json` — метрики правдоподобия (`temporal consistency`, `identity drift`, `phantom drift`, `bureaucratic loop`, `narrating leakage`, `perform`).
 - `perf_summary.json` — агрегированные runtime/performance-метрики: токены, LLM-duration, overlap, `p50/p95/max`, slowest calls, timeout/error counters, разрез по фазам (`agent`, `memory`, `auditor`, `worldgen` и т.д.), по тикам и по локальным embedding-фазам.
+- `world_history.md` — читабельный markdown-sidecar: полная хронология событий мира по тикам, встроенные в соответствующие tick-блоки входы агентов (`system`, `user`, `response`) и отдельный полный trace для всех LLM-вызовов.
 - `environment_summary.json` — финальный компактный снимок усиленной среды;
 - `environment_timeline.jsonl` — покадровая средовая телеметрия для observability/export.
 
@@ -232,6 +235,8 @@ Baseline-эвристики аудитора теперь сфокусирова
 `ops.py` определяет детерминированные операции: `SendMessageOp`, `CreateEntityOp`, `CreateAgentOp`, `CreateWorkItemOp`, `AddWorkNoteOp`, `SubmitWorkProposalOp`, `CastVoteOp`, `OpenVoteOp`, `ModifyReputationOp`, `SetVoteConsentOp`, `SetReputationFreezeOp`, `CreateArtifactOp`, `UpdateArtifactOp`, `RecordNarrativeActionOp`, а также runtime-ops для richer среды: `UpsertInformalLinkOp`, `AddInformationSignalOp`, `UpsertPendingInteractionOp`, `ResolvePendingInteractionOp`. Каждая операция применяется к `WorldState` и порождает `Event`, записываемый в `EventLog` (JSONL). Последовательное применение гарантирует детерминизм при фиксированном зерне.
 
 `RecordNarrativeActionOp` фиксирует физические и пространственные действия агента (перемещение, осмотр, передача документа, ожидание). Это не catch-all для произвольного текста, а структурированная запись с `action_kind`, опциональным `zone_id` и списком `witnesses`. Если указаны свидетели, событие `narrative_action` адресуется только актору и свидетелям; иначе — всем внутренним агентам.
+
+Если у `narrative_action` указан `zone_id`, операция трактует это как фактическую текущую локацию актора и обновляет `agent.zone_id` в состоянии мира. Благодаря этому арбитр может в одном и том же `perform` сначала материализовать приход в нужную зону, а затем уже допустить private contact из новой локации.
 
 `CreateAgentOp` создаёт `AgentState` и `entity_created`, а полноценный `AgentRunner` и bootstrap памяти для нового агента регистрируются отдельным шагом после применения ops. Новый участник начинает ходить со следующего тика.
 

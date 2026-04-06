@@ -216,6 +216,52 @@ def _format_environment_brief(*, agent: AgentState, state: WorldState) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+def _format_spatial_brief(*, agent: AgentState, state: WorldState) -> str:
+    zone_entries = sorted(state.environment.zones.items())
+    located_agents = [
+        other
+        for _, other in sorted(state.agents.items())
+        if other.zone_id and other.agent_id != agent.agent_id
+    ]
+    if not zone_entries and not located_agents:
+        return ""
+
+    def _agent_rank(other: AgentState) -> tuple[int, int, str]:
+        same_zone = int(bool(agent.zone_id and other.zone_id == agent.zone_id))
+        same_org = int(bool(agent.org_id and other.org_id == agent.org_id))
+        return (-same_zone, -same_org, other.agent_id)
+
+    lines = [render_prompt("agent.blocks.spatial.header")]
+    for other in sorted(located_agents, key=_agent_rank)[:8]:
+        zone = state.environment.zones.get(str(other.zone_id or ""))
+        lines.append(
+            render_prompt(
+                "agent.blocks.spatial.agent_line",
+                agent_id=other.agent_id,
+                name=other.name,
+                title_suffix=f", {other.title}" if other.internal and other.title else "",
+                zone_id=other.zone_id or "(не задано)",
+                zone_title=zone.title if zone is not None else "(без названия)",
+            )
+        )
+    if zone_entries:
+        lines.append(render_prompt("agent.blocks.spatial.zones_header"))
+        for zone_id, zone in zone_entries[:6]:
+            lines.append(
+                render_prompt(
+                    "agent.blocks.spatial.zone_line",
+                    zone_id=zone_id,
+                    title=zone.title,
+                    org_id=zone.primary_org_id or "(нет)",
+                    access_suffix=f", доступ={zone.access_mode}" if zone.access_mode else "",
+                    security_suffix=f", безопасность={zone.security_level}" if zone.security_level else "",
+                )
+            )
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines) + "\n\n"
+
+
 def _format_relevant_artifacts(*, agent: AgentState, state: WorldState) -> str:
     relevant: list[str] = []
     for artifact_id, artifact in sorted(state.artifacts.items()):
@@ -401,6 +447,7 @@ def _format_proposal_examples(
         lines.append(render_prompt("agent.blocks.proposal_examples.bad_no_work"))
     if "dao" not in caps and not targeted_vote_id:
         lines.append(render_prompt("agent.blocks.proposal_examples.bad_no_dao"))
+    lines.append(render_prompt("agent.blocks.proposal_examples.move_before_private"))
     lines.append(render_prompt("agent.blocks.proposal_examples.observable_step"))
     return "\n".join(lines) + "\n\n"
 
@@ -632,6 +679,7 @@ class AgentRunner:
         rejection_hints_text = "\n".join(f"- {item}" for item in rejection_hints) if rejection_hints else "- (нет)"
         daily_context_text = _format_daily_context(daily_context, scene_hooks or [])
         environment_brief = _format_environment_brief(agent=agent, state=state)
+        spatial_brief = _format_spatial_brief(agent=agent, state=state)
         artifacts_brief = _format_relevant_artifacts(agent=agent, state=state)
         informal_links_brief = _format_informal_links(agent=agent, state=state)
         pending_interactions_brief = _format_pending_interactions(agent=agent, state=state)
@@ -666,6 +714,7 @@ class AgentRunner:
             rejection_hints_text=rejection_hints_text,
             daily_context_text=daily_context_text,
             environment_brief=environment_brief,
+            spatial_brief=spatial_brief,
             artifacts_brief=artifacts_brief,
             informal_links_brief=informal_links_brief,
             pending_interactions_brief=pending_interactions_brief,
