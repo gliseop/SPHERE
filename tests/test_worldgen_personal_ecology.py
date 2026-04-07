@@ -17,7 +17,7 @@ from sphere_lc.ids import EntityKind
 from sphere_lc.ids import INTERNAL_AUDIENCE
 from sphere_lc.journal import WorldJournal
 from sphere_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
-from sphere_lc.persona import PersonaArtifact
+from sphere_lc.persona import MotivationDigest, PersonaArtifact
 from sphere_lc.state import (
     AgentState,
     ArtifactState,
@@ -306,6 +306,59 @@ class _ArtifactWorldgenProvider(MockLLMProvider):
                             "summary": "В отчёте появился новый спорный абзац о перерасходе.",
                             "status": "revised",
                             "tags": ["repair", "risk"],
+                        }
+                    ],
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
+class _ExternalEntityWorldgenProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сделай следующий ход в этой ситуации." in user:
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "idle"}]},
+                model="mock",
+            )
+        if '"phase": "post"' in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [],
+                    "spawns": [],
+                    "entity_creations": [
+                        {
+                            "entity_id": "org:media",
+                            "kind": "org",
+                            "title": "Редакция районной газеты",
+                            "description": "Внешний наблюдатель за тендером.",
+                        },
+                        {
+                            "entity_id": "zone:public_sphere",
+                            "kind": "zone",
+                            "title": "Публичная медиасфера",
+                            "description": "Площадка внешнего наблюдения и публикаций.",
+                            "zone_type": "public_square",
+                            "primary_org_id": "org:media",
+                        },
+                    ],
+                    "artifact_creations": [
+                        {
+                            "artifact_id": "art:news_article_001",
+                            "artifact_type": "news_article",
+                            "title": "Статья о подозрениях в конфликте интересов",
+                            "summary": "Внешняя публикация о связи начальника закупок и подрядчика.",
+                            "owner_org_id": "org:media",
+                            "zone_id": "zone:public_sphere",
+                            "visibility": "public",
+                            "status": "published",
+                            "tags": ["media", "conflict"],
                         }
                     ],
                 },
@@ -633,7 +686,17 @@ def test_agent_prompt_includes_story_state_daily_context_and_soft_perform(tmp_pa
         agent_id="agent:off_1",
         name="Off 1",
         internal=True,
-        persona=PersonaArtifact(summary="Хочет удержать процесс под контролем."),
+        persona=PersonaArtifact(
+            summary="Хочет удержать процесс под контролем.",
+            motivation=MotivationDigest(
+                goal="Сохранить управляемость тендера и не допустить распада процесса.",
+                fear="Боится, что внешний шум сорвёт привычный контроль над ситуацией.",
+                obligation="Связан обязательствами перед отделом и людьми, от которых зависит его положение.",
+                gain="Выгодно удержать репутацию человека, который доводит процессы до конца.",
+                pressure="Не отпускает ощущение, что любое колебание быстро превратится в скандал.",
+                threat="Удар может прийти из внешней проверки, утечки или чужой инициативы.",
+            ),
+        ),
         capabilities=["message", "work"],
         story_state="Последние сдвиги: боится внешнего шума и давления со стороны знакомых.",
         title="начальник отдела",
@@ -668,6 +731,8 @@ def test_agent_prompt_includes_story_state_daily_context_and_soft_perform(tmp_pa
     )
 
     assert "Что для тебя сейчас действительно поставлено на карту:" in prompt
+    assert "Сохранить управляемость тендера и не допустить распада процесса." in prompt
+    assert "Не отпускает ощущение, что любое колебание быстро превратится в скандал." in prompt
     assert "Утро складывается так:" in prompt
     assert "Личная линия (story state):" not in prompt  # story_state идёт через память/мотивацию, не как отдельный дубль
     assert "не обращайся к ним напрямую" in prompt
@@ -1328,6 +1393,60 @@ def test_post_worldgen_can_create_and_update_artifacts(tmp_path: Path) -> None:
     event_types = {event["event_type"] for event in events}
     assert "artifact_created" in event_types
     assert "artifact_updated" in event_types
+
+
+def test_post_worldgen_can_materialize_external_entities_before_artifacts(tmp_path: Path) -> None:
+    provider = _ExternalEntityWorldgenProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "external-entity-materialization",
+            "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_every_ticks": 1,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "Чиновник",
+                    "capabilities": ["message"],
+                    "org_id": "org:city_hall",
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    assert "org:media" in state.registry.list_ids(EntityKind.ORG)
+    assert "zone:public_sphere" in state.registry.list_ids(EntityKind.ZONE)
+    assert "art:news_article_001" in state.artifacts
+    assert state.artifacts["art:news_article_001"].owner_org_id == "org:media"
+    assert state.artifacts["art:news_article_001"].zone_id == "zone:public_sphere"
+
+    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert not any(
+        event["event_type"] == "arbiter_op_failed"
+        and event["payload"].get("origin") == "worldgen_artifact"
+        for event in events
+    )
+    created_ids = {
+        event["payload"].get("entity_id")
+        for event in events
+        if event["event_type"] == "entity_created"
+    }
+    assert {"org:media", "zone:public_sphere"} <= created_ids
 
 
 def test_post_worldgen_normalizes_legacy_artifact_prefix(tmp_path: Path) -> None:
@@ -2059,7 +2178,7 @@ def test_fidelity_detects_narrating_leakage(tmp_path: Path) -> None:
         temporal_future_horizon_days=30,
     )
 
-    assert summary.narrating_leakage_total == 1
+    assert summary.narrating_leakage_total == 0
 
 
 def test_fidelity_counts_perform_from_approved_payload(tmp_path: Path) -> None:

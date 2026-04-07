@@ -14,7 +14,7 @@ import asyncio
 import copy
 import re
 from datetime import date, timedelta
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -157,6 +157,20 @@ class _PerformArbiterOutput(BaseModel):
     approved: bool
     reason: str = ""
     ops: list[_PerformOpModel] = []
+
+
+class _PerformPlanOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    steps: list[str] = []
+
+
+class _DocumentGroundingOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    supported_level: str = "supported"
+    rewritten_text: str = ""
+    rationale: str = ""
 
 
 def _normalize_perform_op_args(op_type: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -433,6 +447,34 @@ def _perform_output_schema() -> dict[str, Any]:
     }
 
 
+def _perform_plan_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "steps": {
+                "type": "array",
+                "maxItems": 4,
+                "items": {"type": "string"},
+            }
+        },
+        "required": ["steps"],
+    }
+
+
+def _document_grounding_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "supported_level": {"type": "string"},
+            "rewritten_text": {"type": "string"},
+            "rationale": {"type": "string"},
+        },
+        "required": ["supported_level", "rewritten_text", "rationale"],
+    }
+
+
 @dataclass(slots=True)
 class Arbiter:
     """Гибридный арбитр: deterministic для structured + LLM для perform."""
@@ -564,40 +606,24 @@ class Arbiter:
                     if isinstance(act, SpawnAgentAction) and reserved_res.approved:
                         spawn_used = True
 
-        async def _decide(m: tuple[str, int, PerformAction, set[str]]) -> _PerformArbiterOutput:
-            aid, idx, act, caps = m
-            return await self._decide_perform_llm(
-                state=state,
-                agent_id=aid,
-                agent_caps=caps,
-                action=act,
-                journal_yaml=journal_yaml,
-            )
-
-        raw_decisions = await asyncio.gather(*[_decide(m) for m in perform_meta], return_exceptions=True)
-        decisions: list[_PerformArbiterOutput] = []
-        for item in raw_decisions:
-            if isinstance(item, Exception):
-                decisions.append(
-                    _PerformArbiterOutput(
-                        approved=False,
-                        reason=f"arbiter_llm_error:{item.__class__.__name__}:{item}",
-                        ops=[],
-                    )
+        # Perform-actions проходят через единый pipeline decomposition/materialization/grounding.
+        for aid, idx, act, caps in perform_meta:
+            try:
+                res = await self._arbitrate_perform(
+                    state=state,
+                    agent_id=aid,
+                    agent_caps=caps,
+                    action_index=idx,
+                    action=act,
+                    journal_yaml=journal_yaml,
                 )
-            else:
-                decisions.append(item)
-
-        # Конвертация perform-решений → StateOp делается строго детерминированно.
-        for meta, decision in zip(perform_meta, decisions, strict=True):
-            aid, idx, act, caps = meta
-            res = self._convert_perform_decision(
-                state=state,
-                agent_id=aid,
-                agent_caps=caps,
-                action_index=idx,
-                decision=decision,
-            )
+            except Exception as exc:
+                res = ActionResult(
+                    idx,
+                    False,
+                    f"arbiter_llm_error:{exc.__class__.__name__}:{exc}",
+                    [],
+                )
             arbitration[aid][idx] = _reserve_result(res)
 
         # Убираем None (на всякий случай) и приводим тип.
@@ -1045,6 +1071,127 @@ class Arbiter:
             ops_count=len(previous_decision.ops),
         )
 
+    async def _plan_perform_steps(
+        self,
+        *,
+        state: WorldState,
+        agent_id: str,
+        proposal: str,
+        journal_yaml: str,
+    ) -> list[str]:
+        """Разбить составной proposal на упорядоченные шаги через отдельный LLM-pass."""
+
+        raw_proposal = str(proposal or "").strip()
+        if not raw_proposal:
+            return []
+        try:
+            resp = await self.llm.generate_structured(
+                role="arbiter",
+                name="perform_plan",
+                tick=state.tick,
+                system=render_prompt("arbiter.perform.plan.system"),
+                user=render_prompt(
+                    "arbiter.perform.plan.user",
+                    journal_yaml=journal_yaml,
+                    agent_id=agent_id,
+                    proposal=raw_proposal,
+                ),
+                schema=_perform_plan_schema(),
+                temperature=self.temperature,
+            )
+            parsed = _PerformPlanOutput.model_validate(resp.data)
+        except Exception:
+            return [raw_proposal]
+
+        steps: list[str] = []
+        seen: set[str] = set()
+        for item in parsed.steps:
+            step = str(item or "").strip()
+            if not step:
+                continue
+            key = step.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            steps.append(step)
+        return steps or [raw_proposal]
+
+    @staticmethod
+    def _ops_summary_for_prompt(ops: list[StateOp]) -> str:
+        """Коротко описать уже materialized ops для verifier/judge промптов."""
+
+        if not ops:
+            return "(нет materialized ops до этого места)"
+        lines: list[str] = []
+        for op in ops[-8:]:
+            if isinstance(op, SendMessageOp):
+                lines.append(f"- send_message -> {op.to_id} (private={op.private})")
+            elif isinstance(op, RecordNarrativeActionOp):
+                lines.append(f"- narrative_action -> {op.description}")
+            elif isinstance(op, AddWorkNoteOp):
+                lines.append(f"- add_work_note -> {op.work_id}")
+            elif isinstance(op, SubmitWorkProposalOp):
+                lines.append(f"- submit_work_proposal -> {op.work_id}")
+            elif isinstance(op, CreateArtifactOp):
+                lines.append(f"- create_artifact -> {op.artifact_id}")
+            else:
+                lines.append(f"- {op.__class__.__name__}")
+        return "\n".join(lines)
+
+    async def _ground_documentary_op(
+        self,
+        *,
+        state: WorldState,
+        agent_id: str,
+        proposal: str,
+        op: StateOp,
+        prior_ops: list[StateOp],
+    ) -> StateOp:
+        """Проверить, не перепрыгивает ли документарный op через фактически случившиеся события."""
+
+        if isinstance(op, AddWorkNoteOp):
+            op_kind = "work_note"
+            anchor = op.work_id
+            candidate_text = op.text
+        elif isinstance(op, SubmitWorkProposalOp):
+            op_kind = "work_proposal"
+            anchor = op.work_id
+            candidate_text = op.text
+        else:
+            return op
+
+        if not str(candidate_text or "").strip():
+            return op
+
+        try:
+            resp = await self.llm.generate_structured(
+                role="arbiter",
+                name="document_grounding",
+                tick=state.tick,
+                system=render_prompt("arbiter.document_grounding.system"),
+                user=render_prompt(
+                    "arbiter.document_grounding.user",
+                    journal_yaml=state.journal_yaml(),
+                    agent_id=agent_id,
+                    proposal=proposal,
+                    op_kind=op_kind,
+                    anchor_id=anchor,
+                    candidate_text=candidate_text,
+                    prior_ops_summary=self._ops_summary_for_prompt(prior_ops),
+                ),
+                schema=_document_grounding_schema(),
+                temperature=self.temperature,
+            )
+            verdict = _DocumentGroundingOutput.model_validate(resp.data)
+        except Exception:
+            return op
+
+        level = str(verdict.supported_level or "").strip().casefold()
+        rewritten_text = str(verdict.rewritten_text or "").strip()
+        if level not in {"partially_supported", "unsupported"} or not rewritten_text:
+            return op
+        return replace(op, text=rewritten_text)
+
     async def _call_perform_llm_once(
         self,
         *,
@@ -1080,29 +1227,33 @@ class Arbiter:
             return False
         return True
 
-    def _convert_perform_decision(
+    async def _convert_perform_decision(
         self,
         *,
         state: WorldState,
         agent_id: str,
-        agent_caps: set[str],
         action_index: int,
+        proposal: str,
+        agent_caps: set[str],
         decision: _PerformArbiterOutput,
-    ) -> ActionResult:
+        scratch_state: WorldState | None = None,
+        scratch_alloc: IdAllocator | None = None,
+        commit_ids: bool = True,
+    ) -> tuple[ActionResult, WorldState, IdAllocator]:
+        work_state = scratch_state or copy.deepcopy(state)
+        allocator = scratch_alloc or IdAllocator(counters=dict(self.id_alloc.counters or {}))
         if not decision.approved:
-            return ActionResult(action_index, False, decision.reason or "rejected", [])
+            return ActionResult(action_index, False, decision.reason or "rejected", []), work_state, allocator
 
-        scratch_alloc = IdAllocator(counters=dict(self.id_alloc.counters or {}))
-        scratch_state = copy.deepcopy(state)
         ops: list[StateOp] = []
         for item in decision.ops:
             try:
                 parsed_ops = self._op_from_llm(
                     agent_id=agent_id,
-                    state=scratch_state,
+                    state=work_state,
                     op_type=item.op_type,
                     args=item.args,
-                    id_alloc=scratch_alloc,
+                    id_alloc=allocator,
                 )
             except Exception as exc:
                 return ActionResult(
@@ -1110,24 +1261,32 @@ class Arbiter:
                     False,
                     f"perform_op_invalid:{item.op_type}:{exc.__class__.__name__}:{exc}",
                     [],
-                )
+                ), work_state, allocator
             for op in parsed_ops:
                 missing = self._missing_capability_for_op(op, agent_caps)
                 if missing:
-                    return ActionResult(action_index, False, f"missing_capability:{missing}", [])
+                    return ActionResult(action_index, False, f"missing_capability:{missing}", []), work_state, allocator
+                op = await self._ground_documentary_op(
+                    state=work_state,
+                    agent_id=agent_id,
+                    proposal=proposal,
+                    op=op,
+                    prior_ops=ops,
+                )
                 try:
-                    op.apply(scratch_state)
+                    op.apply(work_state)
                 except Exception as exc:
                     return ActionResult(
                         action_index,
                         False,
                         f"perform_op_invalid:{item.op_type}:{exc.__class__.__name__}:{exc}",
                         [],
-                    )
+                    ), work_state, allocator
                 ops.append(op)
 
-        self.id_alloc.counters = dict(scratch_alloc.counters or {})
-        return ActionResult(action_index, True, decision.reason or "approved", ops)
+        if commit_ids:
+            self.id_alloc.counters = dict(allocator.counters or {})
+        return ActionResult(action_index, True, decision.reason or "approved", ops), work_state, allocator
 
     async def _arbitrate_perform(
         self,
@@ -1139,19 +1298,57 @@ class Arbiter:
         action: PerformAction,
         journal_yaml: str,
     ) -> ActionResult:
-        decision = await self._decide_perform_llm(
+        steps = await self._plan_perform_steps(
             state=state,
             agent_id=agent_id,
-            agent_caps=agent_caps,
-            action=action,
+            proposal=action.description,
             journal_yaml=journal_yaml,
         )
-        return self._convert_perform_decision(
-            state=state,
-            agent_id=agent_id,
-            agent_caps=agent_caps,
-            action_index=action_index,
-            decision=decision,
+        if not steps:
+            steps = [action.description]
+
+        scratch_state = copy.deepcopy(state)
+        scratch_alloc = IdAllocator(counters=dict(self.id_alloc.counters or {}))
+        aggregated_ops: list[StateOp] = []
+        reasons: list[str] = []
+
+        for step in steps:
+            step_action = PerformAction(
+                type=action.type,
+                description=step,
+                target_id=action.target_id,
+                justification=action.justification,
+            )
+            decision = await self._decide_perform_llm(
+                state=scratch_state,
+                agent_id=agent_id,
+                agent_caps=agent_caps,
+                action=step_action,
+                journal_yaml=scratch_state.journal_yaml(),
+            )
+            step_result, scratch_state, scratch_alloc = await self._convert_perform_decision(
+                state=state,
+                agent_id=agent_id,
+                agent_caps=agent_caps,
+                action_index=action_index,
+                proposal=step,
+                decision=decision,
+                scratch_state=scratch_state,
+                scratch_alloc=scratch_alloc,
+                commit_ids=False,
+            )
+            if not step_result.approved:
+                return step_result
+            aggregated_ops.extend(step_result.ops)
+            if step_result.reason and step_result.reason != "approved":
+                reasons.append(step_result.reason)
+
+        self.id_alloc.counters = dict(scratch_alloc.counters or {})
+        return ActionResult(
+            action_index,
+            True,
+            " | ".join(reasons) if reasons else "approved",
+            aggregated_ops,
         )
 
     @staticmethod

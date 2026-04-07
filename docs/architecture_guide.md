@@ -21,26 +21,26 @@ graph TB
         AGENT[agent.py<br/>AgentRunner]
         MEMORY[memory.py<br/>AgentMemory]
         ACTIONS[actions.py<br/>internal Action vocabulary + freeform proposal schema]
-        PERSONA[persona.py<br/>PersonaArtifact + SocialGraphExtractor]
+        PERSONA[persona.py<br/>PersonaArtifact + motivation digest + SocialGraphExtractor]
         PROMPTS[prompts.py + prompts.yaml<br/>Central prompt registry]
         BM25[bm25.py<br/>BM25]
     end
 
     subgraph Управление["Управление и арбитраж"]
-        ARBITER[arbiter.py<br/>HybridArbiter]
+        ARBITER[arbiter.py<br/>HybridArbiter + step decomposition + grounding]
         AUDITOR[auditor.py<br/>RuntimeAuditor]
         JOURNAL[journal.py<br/>YAMLJournal]
         DAO[dao.py<br/>DAO vote + policy]
     end
 
     subgraph Генерация["Генерация мира"]
-        WORLDGEN[worldgen.py<br/>WorldGenerator]
+        WORLDGEN[worldgen.py<br/>WorldGenerator + entity bundle materialization]
         COMPOSER[composer.py<br/>WorldComposer]
         ORACLE[oracle.py<br/>ViolationOracle + FreeformTruthRecorder]
         HISTORYMD[history_markdown.py<br/>world_history.md exporter]
         TRUTH[truth.py<br/>TruthDetector + TruthLog]
         EVAL[evaluation.py<br/>EvaluationSummary]
-        FID[fidelity.py<br/>FidelitySummary]
+        FID[fidelity.py<br/>FidelitySummary + semantic judge]
     end
 
     subgraph LLM["LLM-подсистема (llm/)"]
@@ -127,7 +127,7 @@ graph TB
 | Как устроен тик симуляции | `engine.py` → `WorldEngine.run()`; обрати внимание на environment init/snapshot + pending follow-up + pre/post worldgen |
 | Как агент принимает решение | `agent.py` → `AgentRunner`, `memory.py` → гибридный retrieval |
 | Какой контракт у когнитивного агента | `agent.py` → freeform `proposal`, `actions.py` → `agent_turn_json_schema()` |
-| Как арбитр проверяет и материализует ход | `arbiter.py` → антифантомы + пространственные ограничения + LLM-materialization of proposal |
+| Как арбитр проверяет и материализует ход | `arbiter.py` → антифантомы + пространственные ограничения + stepwise LLM-materialization of proposal + document grounding |
 | Где зафиксирована canonical семантика `G0–G3` | `governance_modes.py` → built-in mapping для runtime/web/launcher |
 | Как runtime-аудитор выявляет сигналы риска | `auditor.py` → LLM-first detection + deterministic actuator + collegial review |
 | Как работает YAML-журнал | `journal.py` → инкрементальная сводка мира для арбитра, включая environment-layer, `art:*`-артефакты, informal links и текущие `org_id/zone_id` агентов |
@@ -135,13 +135,13 @@ graph TB
 | Типизированные ID и антифантомы | `ids.py` + `entities.py` → `EntityRegistry` |
 | Детерминированный apply | `ops.py` → `StateOp` преобразуется в `Event` |
 | Как генерируется сценарий через LLM | `composer.py` → `WorldComposer.compose()` |
-| Как работает генератор мира | `worldgen.py` → pre/post tick worldgen, external events, `agent_daily_context`, `scene_hooks`, spawn suggestions, `environment_updates`, `artifact_creations` / `artifact_updates` и safe snapshot без приватных утечек |
+| Как работает генератор мира | `worldgen.py` → pre/post tick worldgen, external events, `agent_daily_context`, `scene_hooks`, spawn suggestions, `environment_updates`, `entity_creations`, `artifact_creations` / `artifact_updates` и safe snapshot без приватных утечек |
 | Где лежат все LLM-промпты | `prompts.yaml` → единый YAML-реестр, `prompts.py` → loader/render, `web/backend/routes/ai.py` → выдача template-defaults для admin UI |
 | Как мир систематически наращивает периферию | `config.py` → `PopulationBlueprintConfig`, `engine.py` → bootstrap / environment_change materialization |
 | Как работают локальные очереди follow-up | `state.py` → `pending_interactions`, `ops.py` → `UpsertPendingInteractionOp` / `ResolvePendingInteractionOp`, `engine.py` → due/expire/reactivation |
 | Как пишется truth-layer | `truth.py` → deterministic truth records в `truth.jsonl` |
-| Как считается post-hoc evaluation | `evaluation.py` → precision/recall runtime-аудита vs truth |
-| Как считаются fidelity-метрики | `fidelity.py` → temporal/identity/phantom/bureaucratic sidecar |
+| Как считается post-hoc evaluation | `evaluation.py` → strict baseline + отдельный semantic/case judge поверх truth/runtime findings |
+| Как считаются fidelity-метрики | `fidelity.py` → temporal/identity/phantom/bureaucratic sidecar + semantic realism judge |
 | Как собирается средовая телеметрия и perf-профиль | `engine.py` → `environment_summary.json` / `environment_timeline.jsonl` / `perf_summary.json`, `web/backend/routes/runs.py` → REST/export, `web/frontend/src/components/EnvironmentPanel.tsx` → HUD-визуализация |
 | Где появляется читаемая история мира | `history_markdown.py` → `world_history.md` sidecar с полной хронологией событий и LLM trace |
 | Как оракул и freeform truth анализируют нарушения | `oracle.py` → `ViolationOracle` + `FreeformTruthRecorder` |
@@ -150,7 +150,7 @@ graph TB
 | Как устроены LLM-провайдеры | `llm/providers.py` → `OpenAICompatibleProvider`, `MockLLMProvider` |
 | Как устроен конфиг сценария | `config.py` → `ScenarioConfig` (Pydantic), включая `world.environment` |
 | Как загружается/сохраняется сценарий | `scenario.py` → YAML/JSON |
-| Как устроена личность агента и социальный граф | `persona.py` → `PersonaArtifact`, `PersonaGenerator`, `SocialGraphExtractor` (родня/друзья/зависимости в приоритете), expert reflection |
+| Как устроена личность агента и социальный граф | `persona.py` → `PersonaArtifact`, `PersonaGenerator`, interview-grounded `motivation`-digest, `SocialGraphExtractor` (родня/друзья/зависимости в приоритете), expert reflection |
 | Как работает LangGraph-интеграция | `graphs.py` → tick graph + SqliteSaver checkpoints |
 | Как работает CLI | `cli.py` → `run`, `compose`, `oracle` |
 
@@ -168,7 +168,7 @@ sequenceDiagram
     participant S as WorldState
     participant EL as EventLog
 
-    E->>E: scripted events + pre-tick worldgen (опционально)
+    E->>E: pre-tick worldgen + pending follow-up sweep (опционально)
     E->>A: decide(agent, state, tick, context-layer)
     A->>M: retrieve(situation)
     M-->>A: релевантные воспоминания
@@ -178,6 +178,7 @@ sequenceDiagram
         E->>Arb: evaluate(action, state)
         Arb->>Ent: validate_targets(action)
         Ent-->>Arb: ✓ / reject (антифантом)
+        Arb->>Arb: step decomposition + document grounding (для perform)
         Arb-->>E: verdict (approved / rejected)
 
         alt Одобрено

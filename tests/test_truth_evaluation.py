@@ -7,11 +7,13 @@ from pathlib import Path
 from sphere_lc.config import ScenarioConfig
 from sphere_lc.engine import RunArtifacts, WorldEngine
 from sphere_lc.entities import EntityRecord, EntityRegistry
-from sphere_lc.evaluation import evaluate_run
+from sphere_lc.evaluation import augment_evaluation_with_semantic_judge, evaluate_run
 from sphere_lc.events import Event
+from sphere_lc.fidelity import FidelitySummary, augment_fidelity_with_semantic_judge
 from sphere_lc.ids import EntityKind
-from sphere_lc.llm import MockLLMProvider
+from sphere_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
 from sphere_lc.state import AgentState, WorldState
+from sphere_lc.tracing import TraceLog
 from sphere_lc.truth import TruthDetector, TruthLog, TruthRecord
 
 
@@ -38,6 +40,25 @@ def _mk_state() -> WorldState:
             capabilities=list(caps),
         )
     return state
+
+
+class _EvaluationSemanticJudgeProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "post-hoc judge соответствия runtime-аудита и truth-layer" in system:
+            return StructuredLLMResponse(
+                data={
+                    "semantic_matches": [{"truth_index": 0, "signal_index": 0}],
+                    "case_matches": [{"truth_case_index": 0, "signal_case_index": 0}],
+                },
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
 
 
 def test_truth_detector_records_self_reputation_award() -> None:
@@ -506,6 +527,16 @@ def test_evaluate_run_normalizes_equivalent_violation_labels(tmp_path: Path) -> 
     )
 
     summary = evaluate_run(events_path=tmp_path / "events.jsonl", truth_path=tmp_path / "truth.jsonl")
+    summary = asyncio.run(
+        augment_evaluation_with_semantic_judge(
+            summary=summary,
+            llm=LLMCaller(provider=_EvaluationSemanticJudgeProvider(), trace=TraceLog(tmp_path / "trace_semantic.jsonl")),
+            events_path=tmp_path / "events.jsonl",
+            truth_path=tmp_path / "truth.jsonl",
+            truth_freeform_path=None,
+            scenario_description="equivalent semantic label test",
+        )
+    )
 
     assert summary.true_positive == 0
     assert summary.semantic_true_positive == 1
@@ -613,6 +644,16 @@ def test_evaluate_run_uses_freeform_truth_for_semantic_and_case_metrics(tmp_path
         events_path=tmp_path / "events.jsonl",
         truth_path=tmp_path / "truth.jsonl",
         truth_freeform_path=tmp_path / "truth_freeform.jsonl",
+    )
+    summary = asyncio.run(
+        augment_evaluation_with_semantic_judge(
+            summary=summary,
+            llm=LLMCaller(provider=_EvaluationSemanticJudgeProvider(), trace=TraceLog(tmp_path / "trace_case.jsonl")),
+            events_path=tmp_path / "events.jsonl",
+            truth_path=tmp_path / "truth.jsonl",
+            truth_freeform_path=tmp_path / "truth_freeform.jsonl",
+            scenario_description="freeform truth semantic/case evaluation test",
+        )
     )
 
     assert summary.truth_total == 0
@@ -747,4 +788,65 @@ def test_engine_writes_truth_and_evaluation_sidecars(tmp_path: Path) -> None:
     assert scenario["title"] == "lc-truth-evaluation"
     assert names == {"agent:off_1": "Off 1", "agent:off_2": "Off 2"}
     assert status["state"] == "finished"
+
+
+def test_fidelity_semantic_judge_augments_summary(tmp_path: Path) -> None:
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "tick": 0,
+                        "event_type": "work_note_added",
+                        "actor_id": "agent:off_1",
+                        "payload": {"work_id": "work:1", "text": "Замечаний не выявлено."},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "tick": 0,
+                        "event_type": "message_sent",
+                        "actor_id": "agent:off_1",
+                        "payload": {"to_id": "chan:oversight", "private": False, "text": "Проверка завершена."},
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary = FidelitySummary(by_metric={})
+    llm = LLMCaller(
+        provider=MockLLMProvider(
+            structured_responses={
+                '"scenario_description": "test semantic realism"': {
+                    "findings": [
+                        {
+                            "category": "document_grounding",
+                            "severity": "high",
+                            "summary": "Документ утверждает финальный результат без достаточного мирового следа.",
+                            "evidence_refs": [{"tick": 0, "event_type": "work_note_added", "actor_id": "agent:off_1"}],
+                        }
+                    ]
+                }
+            }
+        ),
+        trace=TraceLog(tmp_path / "trace.jsonl"),
+    )
+
+    augmented = asyncio.run(
+        augment_fidelity_with_semantic_judge(
+            summary=summary,
+            llm=llm,
+            events_path=events_path,
+            scenario_description="test semantic realism",
+        )
+    )
+
+    assert augmented.semantic_realism_findings_total == 1
+    assert augmented.semantic_realism_by_category["document_grounding"] == 1
+    assert augmented.semantic_realism_findings[0]["category"] == "document_grounding"
 

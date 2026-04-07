@@ -110,6 +110,19 @@ class _InformalLinkUpdateModel(BaseModel):
     source: str | None = None
 
 
+class _EntityCreationModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entity_id: str
+    kind: str
+    title: str
+    description: str = ""
+    zone_type: str | None = None
+    primary_org_id: str | None = None
+    owner_org_id: str | None = None
+    unit: str | None = None
+
+
 class _ArtifactCreationModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -243,6 +256,20 @@ class EnvironmentUpdates:
 
 
 @dataclass(slots=True)
+class EntityCreation:
+    """Предложение worldgen создать новую сущность мира."""
+
+    entity_id: str
+    kind: str
+    title: str
+    description: str = ""
+    zone_type: str | None = None
+    primary_org_id: str | None = None
+    owner_org_id: str | None = None
+    unit: str | None = None
+
+
+@dataclass(slots=True)
 class ArtifactCreation:
     """Предложение создать новый документ/артефакт."""
 
@@ -279,6 +306,7 @@ class WorldgenOutput:
     agent_contexts: dict[str, AgentDailyContext] = field(default_factory=dict)
     scene_hooks: list[SceneHook] = field(default_factory=list)
     environment_updates: EnvironmentUpdates = field(default_factory=EnvironmentUpdates)
+    entity_creations: list[EntityCreation] = field(default_factory=list)
     artifact_creations: list[ArtifactCreation] = field(default_factory=list)
     artifact_updates: list[ArtifactUpdate] = field(default_factory=list)
 
@@ -409,6 +437,24 @@ def _worldgen_schema(
                             "required": ["agent_a_id", "agent_b_id", "link_type"],
                         },
                     },
+                },
+            },
+            "entity_creations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "entity_id": {"type": "string"},
+                        "kind": {"type": "string", "enum": ["org", "chan", "zone", "res"]},
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "zone_type": {"type": ["string", "null"]},
+                        "primary_org_id": {"type": ["string", "null"]},
+                        "owner_org_id": {"type": ["string", "null"]},
+                        "unit": {"type": ["string", "null"]},
+                    },
+                    "required": ["entity_id", "kind", "title"],
                 },
             },
             "artifact_creations": {
@@ -602,6 +648,7 @@ class WorldGenerator:
             agent_contexts_raw: list[dict[str, Any]] | dict[str, Any] = []
             scene_hooks_raw: list[dict[str, Any]] = []
             environment_updates_raw: dict[str, Any] = {}
+            entity_creations_raw: list[dict[str, Any]] = []
             artifact_creations_raw: list[dict[str, Any]] = []
             artifact_updates_raw: list[dict[str, Any]] = []
         elif isinstance(resp.data, dict):
@@ -610,6 +657,7 @@ class WorldGenerator:
             agent_contexts_raw = resp.data.get("agent_contexts") or []
             scene_hooks_raw = resp.data.get("scene_hooks") or []
             environment_updates_raw = resp.data.get("environment_updates") or {}
+            entity_creations_raw = resp.data.get("entity_creations") or []
             artifact_creations_raw = resp.data.get("artifact_creations") or []
             artifact_updates_raw = resp.data.get("artifact_updates") or []
         else:
@@ -818,6 +866,30 @@ class WorldGenerator:
                     )
 
         artifact_creations: list[ArtifactCreation] = []
+        entity_creations: list[EntityCreation] = []
+        if isinstance(entity_creations_raw, list):
+            for item in entity_creations_raw:
+                try:
+                    raw = _EntityCreationModel.model_validate(item)
+                except Exception:
+                    continue
+                entity_id = raw.entity_id.strip()
+                kind = raw.kind.strip()
+                title = raw.title.strip()
+                if not entity_id or not kind or not title:
+                    continue
+                entity_creations.append(
+                    EntityCreation(
+                        entity_id=entity_id,
+                        kind=kind,
+                        title=title,
+                        description=(raw.description or "").strip(),
+                        zone_type=(raw.zone_type or "").strip() or None,
+                        primary_org_id=(raw.primary_org_id or "").strip() or None,
+                        owner_org_id=(raw.owner_org_id or "").strip() or None,
+                        unit=(raw.unit or "").strip() or None,
+                    )
+                )
         if isinstance(artifact_creations_raw, list):
             for item in artifact_creations_raw:
                 try:
@@ -871,6 +943,7 @@ class WorldGenerator:
             agent_contexts=agent_contexts,
             scene_hooks=scene_hooks,
             environment_updates=environment_updates,
+            entity_creations=entity_creations,
             artifact_creations=artifact_creations,
             artifact_updates=artifact_updates,
         )

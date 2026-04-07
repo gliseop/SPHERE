@@ -57,6 +57,8 @@ flowchart TD
 - системный промпт с diegetic framing: он живёт внутри обычного рабочего дня, не видит мета-фрейм «ты в симуляции» и не должен говорить как внешний аналитик;
 - пользовательский промпт с текущей ситуацией: сегодняшняя дата/время (если заданы через `runtime.start_date`), мотивационный блок (`цели/страхи/обязательства/выгоды/угрозы`), личность, должность, служебные обозначения людей/дел/каналов/организаций, открытые процедуры, релевантные воспоминания и последние события.
 
+Если у агента есть полноценная `PersonaArtifact`, краткий мотивационный блок теперь собирается не из случайной смеси summary/биографии/story-state, а из отдельного interview-grounded `motivation`-digest (`goal`, `fear`, `obligation`, `gain`, `pressure`, `threat`). Этот digest строится runtime-enrichment'ом из интервью и expert reflections и служит только компактным prompt-layer представлением уже извлечённой личности, а не её заменой.
+
 Если у агента заданы `org_id` и/или `zone_id`, движок дополнительно подаёт краткий релевантный environment-brief:
 
 - режим организации;
@@ -106,7 +108,7 @@ flowchart TD
 
 Если `runtime.ecology_activation_window_ticks > 0`, не-core акторы (secondary/worldgen/runtime-spawned) не ходят автоматически каждый тик. Движок активирует их только если они недавно были затронуты событиями, hook-ами, созданием, прямым взаимодействием или открытым `pending_interaction`. Это уменьшает public-process capture со стороны ecology без отключения самой среды.
 
-Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью + expert reflection). Результат сохраняется в `{out_dir}/personas.json` и дополнительно пишется в persistent fingerprint-cache рядом с директориями прогонов. За счёт этого одинаковые repeated runs могут переиспользовать enrichment между разными `out_dir` при совпадении fingerprint входов (язык, модель, режим, описание сценария и базовые данные агентов).
+Перед первым тиком, если `runtime.enrich_personas=true`, движок выполняет runtime-обогащение персон (`summary + biography`, а в режиме `full` ещё и интервью + expert reflection + interview-grounded motivation digest). Результат сохраняется в `{out_dir}/personas.json` и дополнительно пишется в persistent fingerprint-cache рядом с директориями прогонов. За счёт этого одинаковые repeated runs могут переиспользовать enrichment между разными `out_dir` при совпадении fingerprint входов (язык, модель, режим, описание сценария и базовые данные агентов).
 
 Если `runtime.spawn_secondary=true`, после enrichment запускается `SocialGraphExtractor`: он извлекает из биографий и интервью значимых людей, создаёт вторичных агентов до первого тика, обогащает их персоны в том же режиме, что и основной сценарий (`core` или `full`), и связывает первичные/вторичные пары через память. Role-only ссылки и alias-дубли существующих должностей не материализуются в новых агентов.
 
@@ -130,14 +132,18 @@ Prompt-layer агента теперь частично декларативен
 Для legacy/runtime typed actions (которые ещё могут приходить из старых тестов или системных контуров) арбитр делает детерминированную проверку:
 1. Проверка существования целей через `EntityRegistry` (антифантомная защита).
 2. Проверка полномочий агента там, где они действительно предметно значимы (`work`, `dao`, legacy `spawn`).
-3. Проверка на явные бюрократические дубли для `create_work_item` (по сильному сходству заголовка с уже открытым делом).
-4. Преобразование `Action` в набор `StateOp[]` — детерминированных операций над состоянием мира.
+3. Преобразование `Action` в набор `StateOp[]` — детерминированных операций над состоянием мира.
+
+Lexical duplicate-suppression для `create_work_item` как semantic shortcut в актуальной архитектуре намеренно выключен: проверка смысловых дублей не должна проектироваться как substring/keyword-эвристика в primary path.
 
 Базовый когнитивный путь: агентский `proposal` оборачивается во внутренний freeform-`perform`, после чего арбитр обращается к LLM:
 1. Формируется промпт с YAML-журналом мира (`WorldJournal`) и полным текстом `proposal`.
-2. LLM определяет допустимость, формирует набор прямых `StateOp[]` и дополняет их побочными эффектами.
-3. Намерения, адресованные несуществующим сущностям, отклоняются до обращения к LLM.
-4. Если в `proposal` нет содержательного действия, арбитр может вернуть `approved=true` и пустой `ops`.
+2. Перед основной materialization арбитр может попросить LLM разложить сложный ход на ordered steps (`сначала прийти`, `потом поговорить`, `затем зафиксировать`).
+3. Каждый шаг materialize-ится отдельно поверх локального scratch-state, так что следующие шаги уже видят обновлённую физику мира внутри того же `perform`.
+4. LLM определяет допустимость, формирует набор прямых `StateOp[]` и дополняет их побочными эффектами.
+5. Документарные ops (`AddWorkNoteOp`, `SubmitWorkProposalOp`) дополнительно проходят отдельный grounding-pass: verifier получает текст candidate-документа, `proposal`, уже materialized ops и текущий world journal, после чего может переписать note/proposal в более эпистемически скромную и фактически поддержанную форму.
+6. Намерения, адресованные несуществующим сущностям, отклоняются до обращения к LLM.
+7. Если в `proposal` нет содержательного действия, арбитр может вернуть `approved=true` и пустой `ops`.
 
 Арбитру доступен расширенный словарь операций для materialization:
 - **Коммуникация**: `send_message` (приватные и публичные сообщения).
@@ -163,7 +169,7 @@ Prompt-layer агента теперь частично декларативен
 Текущая архитектура:
 
 1. **Deterministic baseline + freeform LLM findings**: аудитор всегда строит baseline-findings только по структурным паттернам мира (self-reputation award, nomination/support vote after private contact, overdue response on open case / queue obligation), а в режимах `llm`/`hybrid` дополняет их LLM-сигналами в свободной форме. Для LLM главным когнитивным интерфейсом считаются `violation_type_freeform`, `summary` и `mechanism`, а не жёсткий выбор из фиксированного меню нарушений.
-2. **Finding normalization + policy resolution**: перед actuator-слоем аудитор канонизирует freeform-сигнал в внутренний `violation_type`, снижает уверенность для внешних субъектов, детерминированно добирает `evidence_refs`, старается заполнить фактический `target_agent_id`/counterparty и только затем выбирает `recommended_action`. Иными словами, LLM описывает риск, а policy-layer решает, открывать ли кейс, запрашивать ли объяснение, включать monitoring, freeze или collegial review.
+2. **Verifier pass + policy resolution**: перед actuator-слоем LLM finding проходит отдельный verifier-pass. Он получает draft finding, candidate evidence и недавние события мира, оценивает `runtime_support_level`, при необходимости предлагает канонический `violation_type`, может уточнить `target_agent_id` и даёт мягкую рекомендацию для policy-layer. Иными словами, LLM сначала описывает риск, затем отдельный verifier проверяет его runtime-groundedness, и только после этого policy-layer решает, открывать ли кейс, запрашивать ли объяснение, включать monitoring, freeze или collegial review.
 3. **Case aggregation**: repeated findings не открывают бесконечную россыпь `audit_case:{finding_id}`, а схлопываются в стабильный `audit_case:*` по subject/type/target/beneficiary. В кейсе накапливаются `episode_count`, `updated_tick`, `response_due_tick`, `review_vote_id`, `monitoring`.
 4. **Deterministic actuator**: findings и case-policy детерминированно преобразуются в:
    - `audit_flagged`;
@@ -194,12 +200,17 @@ Baseline-эвристики аудитора теперь сфокусирова
 
 Если `truth_freeform.jsonl` присутствует, `evaluation.py` использует его как truth-source для semantic/case matching; strict exact-match по-прежнему считается только против deterministic `truth.jsonl`.
 
+Post-hoc evaluation теперь разделён на два слоя:
+
+- strict baseline в `evaluate_run(...)`, который остаётся полностью детерминированным и сравнивает exact `tick + subject + violation_type + target + evidence-signature`;
+- отдельный semantic/case judge pass, который получает truth/runtime findings целиком и матчит их по смыслу через БЯМ, а не через hand-written label heuristics.
+
 В ходе исполнения движок также поддерживает `status.json`: sidecar с heartbeat-обновлением на каждом тике и финальным состоянием `finished` или `failed`. Web backend использует его для более надёжного обнаружения живых CLI-прогонов.
 
 По завершении прогона движок пишет два независимых sidecar-контура:
 
 - `evaluation.json` — governance-eval: сравнение runtime-аудита и deterministic truth-layer;
-- `fidelity.json` — метрики правдоподобия (`temporal consistency`, `identity drift`, `phantom drift`, `bureaucratic loop`, `narrating leakage`, `perform`).
+- `fidelity.json` — метрики правдоподобия (`temporal consistency`, `identity drift`, `phantom drift`, `bureaucratic loop`, `narrating leakage`, `perform`) и опциональный semantic realism layer поверх последних событий.
 - `perf_summary.json` — агрегированные runtime/performance-метрики: токены, LLM-duration, overlap, `p50/p95/max`, slowest calls, timeout/error counters, разрез по фазам (`agent`, `memory`, `auditor`, `worldgen` и т.д.), по тикам и по локальным embedding-фазам.
 - `world_history.md` — читабельный markdown-sidecar: полная хронология событий мира по тикам, встроенные в соответствующие tick-блоки входы агентов (`system`, `user`, `response`) и отдельный полный trace для всех LLM-вызовов.
 - `environment_summary.json` — финальный компактный снимок усиленной среды;
@@ -228,7 +239,7 @@ Baseline-эвристики аудитора теперь сфокусирова
 - `case_precision` / `case_recall` / `case_f1`;
 - сводку `by_violation_type`.
 
-Строгая часть (`true_positive`, `precision`, `recall`) по-прежнему опирается на exact-match baseline, но exact-match теперь сравнивает уже нормализованный `violation_type`, counterparty-поля и core-signature evidence, а не полный сырой JSON `evidence_refs`. Semantic-часть использует finding matcher: subject/target/evidence overlap + `risk_tags` + similarity `summary/mechanism`. Поверх этого case-level слой схлопывает повторяющиеся эпизоды в кейс по `subject + violation_type + counterparty`, чтобы governance-eval был устойчивее к серии близких runtime/truth-эпизодов.
+Строгая часть (`true_positive`, `precision`, `recall`) по-прежнему опирается на exact-match baseline, но exact-match теперь сравнивает уже нормализованный `violation_type`, counterparty-поля и core-signature evidence, а не полный сырой JSON `evidence_refs`. Semantic- и case-часть больше не выводятся из hand-written score function по exact labels; их считает отдельный judge pass поверх truth/runtime findings и case-level представлений.
 
 ## Операции состояния (StateOp → Event)
 
@@ -284,7 +295,7 @@ Agent prompt использует не один общий retrieval-блок, �
 
 При включении (`enable_worldgen`) генератор мира работает в одном или двух режимах:
 
-- **post-tick worldgen** — обратносуместимый режим по умолчанию: создаёт внешние `world_event`, `spawns`, при необходимости `environment_updates`, а также `artifact_creations` / `artifact_updates` по итогам уже совершённых действий;
+- **post-tick worldgen** — обратносуместимый режим по умолчанию: создаёт внешние `world_event`, `spawns`, при необходимости `environment_updates`, `entity_creations`, а также `artifact_creations` / `artifact_updates` по итогам уже совершённых действий;
 - **pre-tick worldgen** (`runtime.worldgen_pre_tick=true`) — запускается до `propose_actions`, создаёт:
   - `events` как глобальные/организационные сигналы текущего тика;
   - `agent_contexts` как персональные opening contexts;
@@ -302,6 +313,8 @@ Agent prompt использует не один общий retrieval-блок, �
 Если задана каноническая временная ось (`runtime.start_date`, `runtime.tick_granularity`, `runtime.tick_duration_days`), движок дополнительно передаёт worldgen текущие дату и время симуляции. Для `hour`/`half_day` это даёт worldgen и агенту не только календарную дату, но и внутридневное положение тика.
 
 Движок принимает `spawns` только если `runtime.allow_runtime_spawn=true`. Для совместимости worldgen по-прежнему понимает legacy-формат `list[world_event]` без блока `spawns`. Дополнительно движок требует человеко-читаемый display-name, отсекает role-only ярлыки и не принимает внутренних акторов от worldgen, если `runtime.worldgen_allow_internal_spawns=false`.
+
+Если worldgen возвращает `entity_creations`, движок сначала детерминированно materialize-ит новые `org:*`, `chan:*`, `zone:*`, `res:*` сущности через `CreateEntityOp`, а затем сразу засеивает ими environment-layer (`institutions`, `zones`, `resource_pools`) там, где это применимо. Это позволяет worldgen сначала ввести внешнюю физику мира, а уже потом создавать связанные документы, каналы наблюдения и сигналы.
 
 Если worldgen возвращает `environment_updates`, движок применяет их детерминированно к организациям, зонам, ресурсным пулам и информационному климату через отдельные события `environment_institution_updated`, `environment_zone_updated`, `environment_resource_updated`, `environment_information_climate_updated`.
 

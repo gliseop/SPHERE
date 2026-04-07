@@ -10,7 +10,7 @@ from sphere_lc.config import MemoryConfig, RuntimeConfig, ScenarioConfig
 from sphere_lc.engine import RunArtifacts, WorldEngine
 from sphere_lc.entities import EntityRegistry
 from sphere_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
-from sphere_lc.persona import ExpertReflection, PersonaArtifact
+from sphere_lc.persona import ExpertReflection, INTERVIEW_QUESTIONS_V2, PersonaArtifact, PersonaGenerator
 from sphere_lc.state import AgentState, WorkItem, WorldState
 from sphere_lc.tracing import TraceLog
 from sphere_lc.worldgen import WorldGenerator
@@ -535,6 +535,56 @@ class _CaptureWorldgenPromptProvider(MockLLMProvider):
     ):
         self.last_user = user
         return StructuredLLMResponse(data={"events": []}, model="mock")
+
+
+class _MotivationDigestProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Построй короткий мотивационный digest" in user:
+            return StructuredLLMResponse(
+                data={
+                    "goal": "Сохранить управляемость тендера и не отдать инициативу наружу.",
+                    "fear": "Боится публичного скандала и потери контроля над трактовкой событий.",
+                    "obligation": "Считает, что должен удержать подразделение от открытого срыва процесса.",
+                    "gain": "Видит выгоду в тихом урегулировании без формальной эскалации.",
+                    "pressure": "Испытывает давление сроков, статуса и ожиданий руководства.",
+                    "threat": "Опасается внешнего шума и проверки, если ситуация выйдет из-под контроля.",
+                },
+                model="mock",
+            )
+        if "Подсказка/черновик персоны" in user:
+            return StructuredLLMResponse(
+                data={
+                    "summary": "Опытный муниципальный руководитель, избегающий открытого конфликта.",
+                    "biography": "Долго работал в районной администрации, привык сначала стабилизировать процесс, а уже потом выносить проблему наружу.",
+                    "interview": [
+                        {
+                            "question": question,
+                            "answer": "Сначала стараюсь удержать процесс под контролем и не допускать публичной эскалации.",
+                        }
+                        for question in INTERVIEW_QUESTIONS_V2
+                    ],
+                    "reflections": [
+                        {
+                            "expert": "psychologist",
+                            "summary": "Под давлением предпочитает непрямое снижение риска вместо открытого столкновения.",
+                            "evidence_indices": [0, 1],
+                        },
+                        {
+                            "expert": "economist",
+                            "summary": "Сильно реагирует на угрозу внешнего контроля и потерю управляемости процесса.",
+                            "evidence_indices": [2, 3],
+                        },
+                    ],
+                },
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
 
 
 def test_engine_spawns_secondary_agents_before_first_tick(tmp_path: Path) -> None:
@@ -1099,6 +1149,29 @@ def test_engine_full_persona_bootstraps_interview_and_reflection_memory(tmp_path
     assert persona.reflections
     assert any(doc.kind == "interview" for doc in state.agents["agent:off_1"].memory.docs)
     assert any(doc.kind == "reflection" for doc in state.agents["agent:off_1"].memory.docs)
+
+
+def test_persona_generator_builds_interview_grounded_motivation_digest(tmp_path: Path) -> None:
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    llm = LLMCaller(provider=_MotivationDigestProvider(), trace=trace)
+    generator = PersonaGenerator(llm=llm, temperature=0.0)
+
+    persona = asyncio.run(
+        generator.generate(
+            agent_id="agent:off_1",
+            name="Новикова Е.В.",
+            internal=True,
+            persona_hint="Руководитель закупок, старается не выносить напряжение наружу раньше времени.",
+            scenario_description="Муниципальный тендер с подозрением на конфликт интересов.",
+            language="ru",
+        )
+    )
+
+    assert persona.interview
+    assert persona.reflections
+    assert persona.motivation is not None
+    assert persona.motivation.goal == "Сохранить управляемость тендера и не отдать инициативу наружу."
+    assert "внешнего шума" in persona.motivation.threat
 
 
 def test_worldgen_accepts_legacy_list_response(tmp_path: Path) -> None:

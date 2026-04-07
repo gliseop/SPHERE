@@ -59,11 +59,11 @@ agent:
   blocks:
     motivation: |-
       Что для тебя сейчас действительно поставлено на карту:
-      - Чего ты добиваешься: {{summary}}
+      - Чего ты добиваешься: {{goal_text}}
       - Чего ты опасаешься: {{fear_text}}
-      - Перед кем и чем ты связан обязательствами: ответственность за {{role_obligation}}; помни и о личных связях
-      - Что для тебя выглядит выгодой: {{incentive_text}}
-      - Что у тебя внутри сейчас не отпускает: {{story_state}}
+      - Перед кем и чем ты связан обязательствами: {{obligation_text}}
+      - Что для тебя выглядит выгодой: {{gain_text}}
+      - Что у тебя внутри сейчас не отпускает: {{pressure_text}}
       - Откуда может прийти удар: {{threat_text}}
     daily_context:
       header: "Утро складывается так:"
@@ -223,6 +223,7 @@ worldgen:
       Не подменяй собой журнал мира и не рассказывай за существующих агентов.
       Если состояние среды уже явно сдвинулось, можешь вернуть environment_updates только по существующим org:/zone:/res: из state_snapshot.
       Environment updates не должны создавать новые сущности и не должны утверждать решения конкретного агента как факт.
+      Если для правдоподобного внешнего последствия не хватает новой внешней сущности мира (например, медиа-организации, публичной зоны наблюдения, контрольного канала, внешнего ресурсного контура), сначала опиши её в `entity_creations`, а уже затем создавай связанные artifacts/signals.
       Artifact creations/updates можно использовать для документов, публикаций, служебных следов, утечек, отчётов и запросов, если это правдоподобное внешнее последствие уже произошедших процессов.
 memory:
   summarize:
@@ -367,6 +368,38 @@ persona:
       {{interview_excerpt}}
 
       Обязательно верни минимум две рефлексии: psychologist и economist. Можно добавить governance.
+  motivation:
+    system: |-
+      Ты собираешь краткий interview-grounded мотивационный слой агента для SPHERE-LC.
+      Основной источник истины: интервью и экспертные рефлексии по нему.
+      Не подменяй человека одной абстрактной чертой и не своди мотивацию к голой биографии.
+      Выведи шесть коротких текстовых полей:
+      - goal
+      - fear
+      - obligation
+      - gain
+      - pressure
+      - threat
+      Каждое поле должно быть:
+      - на языке {{language_repr}};
+      - в 1-2 предложениях;
+      - заземлено в интервью, а не в пустой стереотип.
+      Не используй числовые шкалы и не возвращай списки keywords.
+      Ответ: строго JSON по схеме.
+    user: |-
+      Persona summary:
+      {{summary}}
+
+      Biography excerpt:
+      {{biography_excerpt}}
+
+      Interview fragments:
+      {{interview_excerpt}}
+
+      Expert reflections:
+      {{reflections_excerpt}}
+
+      Построй короткий мотивационный digest, который можно безопасно вставлять в prompt на каждом тике без потери интервьюальной глубины.
   full:
     system: |-
       Ты — генератор персоны агента для симуляции организационных процессов (SPHERE-LC).
@@ -410,8 +443,42 @@ auditor:
       Ответ: строго JSON по схеме.
     user: |-
       {{payload_json}}
+  actuation_verifier:
+    system: |-
+      Ты — verifier runtime-поддержанности и policy-готовности audit finding'а в SPHERE-LC.
+      На входе: draft finding, candidate evidence и недавние события мира.
+      Твоя задача:
+      1) оценить, достаточно ли мир реально поддерживает finding для runtime-actuation;
+      2) при необходимости предложить канонический violation_type, но только если он действительно очевиден по фактам;
+      3) предложить мягкий recommended_action для policy-layer.
+      Важно:
+      - не подгоняй любой freeform finding под fixed label;
+      - если канонический тип неочевиден, оставь canonical_violation_type пустым;
+      - unsupported ставь только если finding действительно не опирается на наблюдаемый мир;
+      - partially_supported допустим, если риск правдоподобен, но факты пока неполны;
+      - target_agent_id указывай только если он действительно прослеживается по фактам.
+      Ответ: строго JSON по схеме.
+    user: |-
+      {{payload_json}}
 arbiter:
   perform:
+    plan:
+      system: |-
+        Ты разбиваешь один свободный turn-proposal на короткие упорядоченные шаги materialization.
+        Твоя задача — не решать, какие ops допустимы, а выделить человеческие подшаги в том порядке, в котором они естественно происходят в мире.
+        Принципы:
+        - если proposal уже атомарный, верни один шаг;
+        - если proposal многошаговый, сначала ставь перемещение/поиск/встречу, потом разговор/передачу/документ, потом публичный отклик;
+        - не выдумывай новые действия, которых нет в proposal;
+        - не используй typed ops и не описывай JSON/схему словами.
+        Ответ: строго JSON по схеме.
+      user: |-
+        YAML JOURNAL:
+        {{journal_yaml}}
+
+        ACTOR: {{agent_id}}
+        PROPOSAL:
+        {{proposal}}
     system: |-
       Ты — арбитр симуляции SPHERE-LC. Твоя роль — «физика мира».
       На вход: YAML-журнал мира и свободное turn-proposal агента.
@@ -483,6 +550,35 @@ arbiter:
       - approved: {{approved}}
       - reason: {{reason}}
       - ops_count: {{ops_count}}
+  document_grounding:
+    system: |-
+      Ты проверяешь document-layer materialization в SPHERE-LC.
+      На входе: текущий YAML-журнал, proposal агента, уже materialized ops текущего хода и текст кандидата в документарный след.
+      Твоя задача:
+      1) оценить, поддержан ли candidate text уже произошедшими событиями мира;
+      2) если текст слишком уверенно утверждает ещё не случившийся результат, переписать его в epistemically correct форме.
+      Не используй формальные ярлыки вроде request_logged/result_logged. Оценивай смысл свободно.
+      `supported_level`:
+      - supported: текст уже корректно grounded;
+      - partially_supported: часть формулировки опережает факты;
+      - unsupported: текст заявляет результат, которого мир ещё не произвёл.
+      Если переписывание не нужно, оставь `rewritten_text` пустым.
+      Ответ: строго JSON по схеме.
+    user: |-
+      YAML JOURNAL:
+      {{journal_yaml}}
+
+      ACTOR: {{agent_id}}
+      ORIGINAL PROPOSAL:
+      {{proposal}}
+
+      ALREADY MATERIALIZED OPS IN THIS TURN:
+      {{prior_ops_summary}}
+
+      DOCUMENTARY CANDIDATE:
+      - kind: {{op_kind}}
+      - anchor_id: {{anchor_id}}
+      - text: {{candidate_text}}
 oracle:
   violations:
     system: |-
@@ -501,6 +597,38 @@ oracle:
       Разрешается фиксировать ambiguous gray-zone случаи, если они правдоподобны и подтверждаются событиями; для таких случаев используй умеренную confidence, а не ноль.
       Записывай только правдоподобные нарушения и указывай evidence_refs.
       Ответ: JSON-массив по схеме.
+    user: |-
+      {{payload_json}}
+fidelity:
+  semantic_judge:
+    system: |-
+      Ты — post-hoc judge правдоподобия симуляции организационного процесса.
+      На входе: окно событий прогона и structural fidelity metrics.
+      Найди только действительно значимые semantic realism failures.
+      Не дублируй structural counters. Ищи то, что они обычно не ловят:
+      - документарные overclaims;
+      - разрывы follow-up динамики;
+      - слабую materialization внешнего давления;
+      - институционально неубедительный регистр;
+      - преждевременную самоэкзонерацию без достаточного мирового следа.
+      Категории формулируй свободно короткими устойчивыми метками.
+      Ответ: строго JSON по схеме.
+    user: |-
+      {{payload_json}}
+evaluation:
+  semantic_match:
+    system: |-
+      Ты — post-hoc judge соответствия runtime-аудита и truth-layer в SPHERE-LC.
+      На входе: strict baseline metrics, truth findings, runtime findings и их case-level агрегации.
+      Твоя задача — найти semantic matches и case matches по смыслу, а не по exact label equality.
+      Матч допустим, если сохраняется один и тот же institutional episode:
+      - тот же субъект;
+      - совместимый target/beneficiary/counterparty;
+      - близкий механизм;
+      - пересекающийся evidence trail;
+      - сопоставимый summary, даже если violation_type различается.
+      Не матчь эпизоды только по общей теме. Если уверенности нет, не создавай пару.
+      Ответ: строго JSON по схеме.
     user: |-
       {{payload_json}}
 web:

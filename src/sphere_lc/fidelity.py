@@ -10,44 +10,13 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .llm import LLMCaller
+from .prompts import render_prompt
 from .utils import looks_like_machine_name, looks_like_role_label, normalize_agent_display_name
 
 
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _DOTTED_DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
-_BUREAUCRATIC_TYPES = {"follow_up", "reminder", "control", "verification"}
-_LEAK_ACTION_HINTS = (
-    "отправил",
-    "отправила",
-    "передал",
-    "передала",
-    "сообщил",
-    "сообщила",
-    "подписал",
-    "подписала",
-    "загрузил",
-    "загрузила",
-    "предоставил",
-    "предоставила",
-    "подтвердил",
-    "подтвердила",
-    "напомнил",
-    "напомнила",
-    "одобрил",
-    "одобрила",
-    "завершил",
-    "завершила",
-    "закрыл",
-    "закрыла",
-)
-_STRONG_STATE_LEAK_HINTS = (
-    "дело закрыто",
-    "завершив работу",
-    "завершил работу",
-    "итоговый отчёт подписан",
-    "подписал итоговый отчёт",
-    "подписала итоговый отчёт",
-)
 
 
 class FidelitySummary(BaseModel):
@@ -64,6 +33,9 @@ class FidelitySummary(BaseModel):
     narrating_leakage_total: int = 0
     perform_approved_total: int = 0
     reputation_event_total: int = 0
+    semantic_realism_findings_total: int = 0
+    semantic_realism_by_category: dict[str, int] = Field(default_factory=dict)
+    semantic_realism_findings: list[dict[str, Any]] = Field(default_factory=list)
     by_metric: dict[str, int] = Field(default_factory=dict)
 
 
@@ -89,29 +61,6 @@ def evaluate_fidelity(
         "reputation_event_total": 0,
     }
 
-    agent_terms: set[str] = set()
-    work_terms: set[str] = set()
-    for item in items:
-        event_type = str(item.get("event_type") or "")
-        payload = item.get("payload") or {}
-        if not isinstance(payload, dict):
-            continue
-        if event_type == "entity_created" and str(payload.get("kind") or "") == "agent":
-            meta = payload.get("meta") or {}
-            if isinstance(meta, dict):
-                raw_name = normalize_agent_display_name(str(meta.get("name") or ""))
-                if raw_name:
-                    agent_terms.add(raw_name.casefold())
-                    for part in re.split(r"[\s.()\"«»,-]+", raw_name.casefold()):
-                        if len(part) >= 4:
-                            agent_terms.add(part)
-        if event_type == "work_item_created":
-            work_id = str(payload.get("work_id") or "").strip()
-            if work_id:
-                work_terms.add(work_id.casefold())
-                if ":" in work_id:
-                    work_terms.add(work_id.split(":", 1)[1].casefold())
-
     for item in items:
         event_type = str(item.get("event_type") or "")
         payload = item.get("payload") or {}
@@ -120,12 +69,6 @@ def evaluate_fidelity(
 
         if event_type == "world_event":
             metrics["world_event_total"] += 1
-            if _world_event_has_narrating_leakage(
-                description=str(payload.get("description") or ""),
-                agent_terms=agent_terms,
-                work_terms=work_terms,
-            ):
-                metrics["narrating_leakage_total"] += 1
 
         if event_type == "arbiter_approved" and _approved_action_is_perform(payload):
             metrics["perform_approved_total"] += 1
@@ -138,11 +81,6 @@ def evaluate_fidelity(
             if reason.startswith("unknown ") or reason.startswith("unknown_"):
                 metrics["phantom_rejection_total"] += 1
             if reason.startswith("duplicate_open_work_item:"):
-                metrics["bureaucratic_loop_total"] += 1
-
-        if event_type == "work_item_created":
-            work_type = str(payload.get("work_type") or "").strip().casefold()
-            if work_type in _BUREAUCRATIC_TYPES:
                 metrics["bureaucratic_loop_total"] += 1
 
         if event_type == "entity_created" and str(payload.get("kind") or "") == "agent":
@@ -165,6 +103,124 @@ def evaluate_fidelity(
             metrics["temporal_violations_total"] += 1
 
     return FidelitySummary(**metrics, by_metric=dict(metrics))
+
+
+def _semantic_realism_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "category": {"type": "string"},
+                        "severity": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "evidence_refs": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "tick": {"type": "integer"},
+                                    "event_type": {"type": "string"},
+                                    "actor_id": {"type": "string"},
+                                },
+                                "required": ["tick", "event_type"],
+                            },
+                        },
+                    },
+                    "required": ["category", "severity", "summary"],
+                },
+            }
+        },
+        "required": ["findings"],
+    }
+
+
+async def augment_fidelity_with_semantic_judge(
+    *,
+    summary: FidelitySummary,
+    llm: LLMCaller,
+    events_path: Path,
+    scenario_description: str,
+    temperature: float = 0.0,
+) -> FidelitySummary:
+    """Дополнить structural fidelity LLM-based finding'ами правдоподобия."""
+
+    events = _iter_jsonl(events_path)
+    if not events:
+        return summary
+    payload = {
+        "scenario_description": scenario_description,
+        "events": events[-120:],
+        "structural_metrics": summary.model_dump(mode="json"),
+    }
+    try:
+        resp = await llm.generate_structured(
+            role="fidelity",
+            name="semantic_realism",
+            tick=int(events[-1].get("tick", 0)),
+            system=render_prompt("fidelity.semantic_judge.system"),
+            user=render_prompt("fidelity.semantic_judge.user", payload_json=json.dumps(payload, ensure_ascii=False)),
+            schema=_semantic_realism_schema(),
+            temperature=temperature,
+        )
+    except Exception:
+        return summary
+
+    raw_findings = resp.data.get("findings") if isinstance(resp.data, dict) else None
+    if not isinstance(raw_findings, list):
+        return summary
+
+    findings: list[dict[str, Any]] = []
+    by_category: dict[str, int] = {}
+    for item in raw_findings:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "").strip()
+        severity = str(item.get("severity") or "").strip()
+        finding_summary = str(item.get("summary") or "").strip()
+        if not category or not finding_summary:
+            continue
+        evidence_refs = []
+        raw_refs = item.get("evidence_refs") or []
+        if isinstance(raw_refs, list):
+            for ref in raw_refs:
+                if not isinstance(ref, dict):
+                    continue
+                evidence_refs.append(
+                    {
+                        "tick": int(ref.get("tick", 0)),
+                        "event_type": str(ref.get("event_type") or "").strip(),
+                        "actor_id": str(ref.get("actor_id") or "").strip() or None,
+                    }
+                )
+        finding = {
+            "category": category,
+            "severity": severity or "medium",
+            "summary": finding_summary,
+            "evidence_refs": evidence_refs,
+        }
+        findings.append(finding)
+        by_category[category] = by_category.get(category, 0) + 1
+
+    if not findings:
+        return summary
+
+    metrics = dict(summary.by_metric)
+    metrics["semantic_realism_findings_total"] = len(findings)
+    return summary.model_copy(
+        update={
+            "semantic_realism_findings_total": len(findings),
+            "semantic_realism_by_category": by_category,
+            "semantic_realism_findings": findings,
+            "by_metric": metrics,
+        }
+    )
 
 
 def save_fidelity(summary: FidelitySummary, path: Path) -> None:
@@ -239,22 +295,6 @@ def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
             if isinstance(item, dict):
                 out.append(item)
     return out
-
-
-def _world_event_has_narrating_leakage(
-    *,
-    description: str,
-    agent_terms: set[str],
-    work_terms: set[str],
-) -> bool:
-    normalized = " ".join((description or "").casefold().split())
-    if not normalized:
-        return False
-    has_action = any(token in normalized for token in _LEAK_ACTION_HINTS)
-    mentions_agent = any(term and term in normalized for term in agent_terms)
-    mentions_work = any(term and term in normalized for term in work_terms)
-    closes_state = any(token in normalized for token in _STRONG_STATE_LEAK_HINTS)
-    return bool((has_action and mentions_agent) or (closes_state and mentions_work))
 
 
 def _approved_action_is_perform(payload: dict[str, Any]) -> bool:

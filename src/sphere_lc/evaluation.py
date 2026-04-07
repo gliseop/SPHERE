@@ -8,6 +8,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .llm import LLMCaller
+from .prompts import render_prompt
+
 class EvaluationSummary(BaseModel):
     """Итог сравнения runtime-сигналов и truth-layer."""
 
@@ -74,10 +77,10 @@ def evaluate_run(*, events_path: Path, truth_path: Path, truth_freeform_path: Pa
     truth_findings = [item for item in truth_findings if item is not None]
     signal_findings = [_signal_finding(item) for item in event_records if str(item.get("event_type") or "") == "audit_flagged"]
     signal_findings = [item for item in signal_findings if item is not None]
-    semantic_tp, semantic_fp, semantic_fn = _semantic_match(truth_findings=truth_findings, signal_findings=signal_findings)
-    case_tp, case_fp, case_fn = _case_match(truth_findings=truth_findings, signal_findings=signal_findings)
-    truth_cases_total = len({_case_key(item) for item in truth_findings})
-    signal_cases_total = len({_case_key(item) for item in signal_findings})
+    truth_cases = _build_case_items(truth_findings)
+    signal_cases = _build_case_items(signal_findings)
+    truth_cases_total = len(truth_cases)
+    signal_cases_total = len(signal_cases)
 
     for truth_idx, signal_idx in matched_pairs:
         violation_type = str(truth_entries[truth_idx]["violation_type"])
@@ -109,27 +112,151 @@ def evaluate_run(*, events_path: Path, truth_path: Path, truth_freeform_path: Pa
         f1=round(f1, 4),
         semantic_truth_source=semantic_truth_source,
         semantic_truth_total=len(truth_findings),
-        semantic_true_positive=semantic_tp,
-        semantic_false_positive=semantic_fp,
-        semantic_false_negative=semantic_fn,
-        semantic_precision=round((semantic_tp / len(signal_findings)) if signal_findings else 0.0, 4),
-        semantic_recall=round((semantic_tp / len(truth_findings)) if truth_findings else 0.0, 4),
-        semantic_f1=round(_f1((semantic_tp / len(signal_findings)) if signal_findings else 0.0, (semantic_tp / len(truth_findings)) if truth_findings else 0.0), 4),
+        semantic_true_positive=0,
+        semantic_false_positive=len(signal_findings),
+        semantic_false_negative=len(truth_findings),
+        semantic_precision=0.0,
+        semantic_recall=0.0,
+        semantic_f1=0.0,
         case_truth_source=semantic_truth_source,
         case_truth_total=truth_cases_total,
-        case_true_positive=case_tp,
-        case_false_positive=case_fp,
-        case_false_negative=case_fn,
-        case_precision=round((case_tp / signal_cases_total) if signal_cases_total else 0.0, 4),
-        case_recall=round((case_tp / truth_cases_total) if truth_cases_total else 0.0, 4),
-        case_f1=round(
-            _f1(
-                (case_tp / signal_cases_total) if signal_cases_total else 0.0,
-                (case_tp / truth_cases_total) if truth_cases_total else 0.0,
-            ),
-            4,
-        ),
+        case_true_positive=0,
+        case_false_positive=signal_cases_total,
+        case_false_negative=truth_cases_total,
+        case_precision=0.0,
+        case_recall=0.0,
+        case_f1=0.0,
         by_violation_type=by_violation,
+    )
+
+
+def _evaluation_semantic_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "semantic_matches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "truth_index": {"type": "integer"},
+                        "signal_index": {"type": "integer"},
+                    },
+                    "required": ["truth_index", "signal_index"],
+                },
+            },
+            "case_matches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "truth_case_index": {"type": "integer"},
+                        "signal_case_index": {"type": "integer"},
+                    },
+                    "required": ["truth_case_index", "signal_case_index"],
+                },
+            },
+        },
+        "required": ["semantic_matches", "case_matches"],
+    }
+
+
+async def augment_evaluation_with_semantic_judge(
+    *,
+    summary: EvaluationSummary,
+    llm: LLMCaller,
+    events_path: Path,
+    truth_path: Path,
+    truth_freeform_path: Path | None,
+    scenario_description: str,
+    temperature: float = 0.0,
+) -> EvaluationSummary:
+    """Дополнить strict evaluation отдельным semantic/case judge pass."""
+
+    truth_records = [item for item in _iter_jsonl(truth_path) if isinstance(item, dict)]
+    freeform_truth_records = [item for item in _iter_jsonl(truth_freeform_path) if isinstance(item, dict)] if truth_freeform_path else []
+    event_records = [item for item in _iter_jsonl(events_path) if isinstance(item, dict)]
+
+    semantic_truth_records = freeform_truth_records if freeform_truth_records else truth_records
+    truth_findings = [_truth_finding(item) for item in semantic_truth_records]
+    truth_findings = [item for item in truth_findings if item is not None]
+    signal_findings = [_signal_finding(item) for item in event_records if str(item.get("event_type") or "") == "audit_flagged"]
+    signal_findings = [item for item in signal_findings if item is not None]
+    truth_cases = _build_case_items(truth_findings)
+    signal_cases = _build_case_items(signal_findings)
+
+    if not truth_findings and not truth_cases:
+        return summary
+
+    payload = {
+        "scenario_description": scenario_description,
+        "strict_metrics": summary.model_dump(mode="json"),
+        "truth_findings": truth_findings,
+        "signal_findings": signal_findings,
+        "truth_cases": truth_cases,
+        "signal_cases": signal_cases,
+    }
+    try:
+        resp = await llm.generate_structured(
+            role="evaluation",
+            name="semantic_match",
+            tick=int(summary.truth_total + summary.runtime_flagged_total),
+            system=render_prompt("evaluation.semantic_match.system"),
+            user=render_prompt(
+                "evaluation.semantic_match.user",
+                payload_json=json.dumps(payload, ensure_ascii=False),
+            ),
+            schema=_evaluation_semantic_schema(),
+            temperature=temperature,
+        )
+    except Exception:
+        return summary
+
+    data = resp.data if isinstance(resp.data, dict) else {}
+    semantic_matches = _normalize_index_matches(
+        items=data.get("semantic_matches"),
+        left_size=len(truth_findings),
+        right_size=len(signal_findings),
+        left_key="truth_index",
+        right_key="signal_index",
+    )
+    case_matches = _normalize_index_matches(
+        items=data.get("case_matches"),
+        left_size=len(truth_cases),
+        right_size=len(signal_cases),
+        left_key="truth_case_index",
+        right_key="signal_case_index",
+    )
+
+    semantic_tp = len(semantic_matches)
+    semantic_fp = len(signal_findings) - semantic_tp
+    semantic_fn = len(truth_findings) - semantic_tp
+    case_tp = len(case_matches)
+    case_fp = len(signal_cases) - case_tp
+    case_fn = len(truth_cases) - case_tp
+    semantic_precision = (semantic_tp / len(signal_findings)) if signal_findings else 0.0
+    semantic_recall = (semantic_tp / len(truth_findings)) if truth_findings else 0.0
+    case_precision = (case_tp / len(signal_cases)) if signal_cases else 0.0
+    case_recall = (case_tp / len(truth_cases)) if truth_cases else 0.0
+
+    return summary.model_copy(
+        update={
+            "semantic_true_positive": semantic_tp,
+            "semantic_false_positive": semantic_fp,
+            "semantic_false_negative": semantic_fn,
+            "semantic_precision": round(semantic_precision, 4),
+            "semantic_recall": round(semantic_recall, 4),
+            "semantic_f1": round(_f1(semantic_precision, semantic_recall), 4),
+            "case_true_positive": case_tp,
+            "case_false_positive": case_fp,
+            "case_false_negative": case_fn,
+            "case_precision": round(case_precision, 4),
+            "case_recall": round(case_recall, 4),
+            "case_f1": round(_f1(case_precision, case_recall), 4),
+        }
     )
 
 
@@ -276,7 +403,7 @@ def _truth_finding(item: dict[str, Any]) -> dict[str, Any] | None:
         "target": _normalize_target(item.get("target_agent_id")),
         "beneficiary": _normalize_target(item.get("beneficiary")),
         "violation_type": _normalize_violation_type(item.get("violation_type") or item.get("violation_type_freeform")),
-        "risk_tags": {str(tag).strip().casefold() for tag in list(item.get("risk_tags") or []) if str(tag).strip()},
+        "risk_tags": sorted({str(tag).strip().casefold() for tag in list(item.get("risk_tags") or []) if str(tag).strip()}),
         "summary": str(item.get("summary") or item.get("rationale") or ""),
         "mechanism": str(item.get("mechanism") or ""),
         "evidence_refs": _extract_evidence_refs(item.get("evidence_refs")),
@@ -301,53 +428,64 @@ def _signal_finding(item: dict[str, Any]) -> dict[str, Any] | None:
         ),
         "beneficiary": _normalize_target(payload.get("beneficiary")),
         "violation_type": _normalize_violation_type(payload.get("violation_type")),
-        "risk_tags": {str(tag).strip().casefold() for tag in list(payload.get("risk_tags") or []) if str(tag).strip()},
+        "risk_tags": sorted({str(tag).strip().casefold() for tag in list(payload.get("risk_tags") or []) if str(tag).strip()}),
         "summary": str(payload.get("summary") or ""),
         "mechanism": str(payload.get("mechanism") or ""),
         "evidence_refs": _extract_evidence_refs(payload.get("evidence_refs")),
     }
 
 
-def _semantic_match(*, truth_findings: list[dict[str, Any]], signal_findings: list[dict[str, Any]]) -> tuple[int, int, int]:
-    candidates: list[tuple[float, int, int]] = []
-    for ti, truth in enumerate(truth_findings):
-        for si, signal in enumerate(signal_findings):
-            score = _finding_match_score(truth=truth, signal=signal)
-            if score >= 0.55:
-                candidates.append((score, ti, si))
-    candidates.sort(reverse=True)
-    matched_truth: set[int] = set()
-    matched_signal: set[int] = set()
-    semantic_tp = 0
-    for _, ti, si in candidates:
-        if ti in matched_truth or si in matched_signal:
+def _build_case_items(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for finding in findings:
+        item = {
+            "subject": str(finding.get("subject") or "").strip(),
+            "target": _normalize_target(finding.get("target")),
+            "beneficiary": _normalize_target(finding.get("beneficiary")),
+            "violation_type": _normalize_violation_type(finding.get("violation_type")),
+            "risk_tags": sorted(str(tag).strip().casefold() for tag in set(finding.get("risk_tags") or set()) if str(tag).strip()),
+            "summary": str(finding.get("summary") or "").strip(),
+            "mechanism": str(finding.get("mechanism") or "").strip(),
+            "evidence_refs": _extract_evidence_refs(finding.get("evidence_refs")),
+        }
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen:
             continue
-        matched_truth.add(ti)
-        matched_signal.add(si)
-        semantic_tp += 1
-    return semantic_tp, len(signal_findings) - semantic_tp, len(truth_findings) - semantic_tp
+        seen.add(key)
+        out.append(item)
+    return out
 
 
-def _case_match(*, truth_findings: list[dict[str, Any]], signal_findings: list[dict[str, Any]]) -> tuple[int, int, int]:
-    truth_cases = {_case_key(item) for item in truth_findings}
-    signal_cases = {_case_key(item) for item in signal_findings}
-    tp = len(truth_cases & signal_cases)
-    fp = len(signal_cases - truth_cases)
-    fn = len(truth_cases - signal_cases)
-    return tp, fp, fn
-
-
-def _case_key(finding: dict[str, Any]) -> tuple[str, str, str]:
-    counterparty = (
-        _normalize_target(finding.get("target"))
-        or _normalize_target(finding.get("beneficiary"))
-        or ""
-    )
-    return (
-        str(finding.get("subject") or "").strip(),
-        _normalize_violation_type(finding.get("violation_type")),
-        counterparty,
-    )
+def _normalize_index_matches(
+    *,
+    items: Any,
+    left_size: int,
+    right_size: int,
+    left_key: str,
+    right_key: str,
+) -> list[tuple[int, int]]:
+    if not isinstance(items, list):
+        return []
+    out: list[tuple[int, int]] = []
+    used_left: set[int] = set()
+    used_right: set[int] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            left_idx = int(item.get(left_key))
+            right_idx = int(item.get(right_key))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= left_idx < left_size and 0 <= right_idx < right_size):
+            continue
+        if left_idx in used_left or right_idx in used_right:
+            continue
+        used_left.add(left_idx)
+        used_right.add(right_idx)
+        out.append((left_idx, right_idx))
+    return out
 
 
 def _strict_match(*, truth_entries: list[dict[str, Any]], signal_entries: list[dict[str, Any]]) -> list[tuple[int, int]]:
@@ -393,42 +531,10 @@ def _strict_match_score(*, truth: dict[str, Any], signal: dict[str, Any]) -> flo
     return 0.0
 
 
-def _finding_match_score(*, truth: dict[str, Any], signal: dict[str, Any]) -> float:
-    if truth["subject"] != signal["subject"]:
-        return 0.0
-    tick_gap = abs(int(truth["tick"]) - int(signal["tick"]))
-    if tick_gap > 2:
-        return 0.0
-    score = 0.3 if tick_gap == 0 else (0.22 if tick_gap == 1 else 0.15)
-    if _violation_type_match(truth.get("violation_type"), signal.get("violation_type")):
-        score += 0.15
-    if _compatible_target(truth.get("target"), signal.get("target")):
-        score += 0.2
-    if _compatible_target(truth.get("beneficiary"), signal.get("beneficiary")):
-        score += 0.1
-    score += 0.25 * _evidence_overlap(truth.get("evidence_refs", []), signal.get("evidence_refs", []))
-    if not _violation_type_match(truth.get("violation_type"), signal.get("violation_type")):
-        same_case_shape = bool(_compatible_target(truth.get("target"), signal.get("target"))) or bool(
-            _compatible_target(truth.get("beneficiary"), signal.get("beneficiary"))
-        )
-        if same_case_shape and _evidence_overlap(truth.get("evidence_refs", []), signal.get("evidence_refs", [])) >= 0.5:
-            score += 0.1
-    return min(score, 1.0)
-
-
 def _compatible_target(left: str | None, right: str | None) -> bool:
     if not left or not right:
         return False
     return left == right
-
-
-def _evidence_overlap(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> float:
-    left_sigs = {_evidence_ref_signature(item) for item in left}
-    right_sigs = {_evidence_ref_signature(item) for item in right}
-    if not left_sigs or not right_sigs:
-        return 0.0
-    return _jaccard(left_sigs, right_sigs)
-
 
 def _evidence_ref_signature(item: dict[str, Any], *, include_timestamp: bool = True) -> str:
     keys = {
@@ -453,15 +559,6 @@ def _violation_type_match(left: Any, right: Any) -> bool:
     if not left_norm or not right_norm:
         return False
     return left_norm == right_norm
-
-
-def _jaccard(left: set[Any], right: set[Any]) -> float:
-    if not left or not right:
-        return 0.0
-    union = left | right
-    if not union:
-        return 0.0
-    return len(left & right) / len(union)
 
 
 def _f1(precision: float, recall: float) -> float:

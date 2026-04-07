@@ -61,7 +61,24 @@ def _first_sentence(text: str, *, fallback: str = "") -> str:
 def _motivation_block(agent: AgentState, visible_events: list[Event]) -> str:
     summary = _first_sentence(agent.persona.summary, fallback="Сохранять контроль над ситуацией и действовать в своих интересах.")
     biography_hint = _first_sentence(agent.persona.biography, fallback=summary)
-    story_state = _first_sentence(agent.story_state, fallback=summary)
+    motivation = agent.persona.motivation
+
+    goal_text = _first_sentence(
+        motivation.goal if motivation is not None else "",
+        fallback=summary,
+    )
+    obligation_text = _first_sentence(
+        motivation.obligation if motivation is not None else "",
+        fallback=(agent.title if agent.internal else "Сохранять внешние связи и договорённости."),
+    )
+    gain_text = _first_sentence(
+        motivation.gain if motivation is not None else "",
+        fallback=biography_hint or summary,
+    )
+    pressure_text = _first_sentence(
+        motivation.pressure if motivation is not None else "",
+        fallback=_first_sentence(agent.story_state, fallback=summary),
+    )
 
     threat_text = ""
     for ev in reversed(visible_events[-20:]):
@@ -77,17 +94,22 @@ def _motivation_block(agent: AgentState, visible_events: list[Event]) -> str:
             if threat_text:
                 break
 
-    role_obligation = agent.title if agent.internal else "внешние связи и договорённости"
-    fear_text = threat_text or "Потерять влияние, доверие или контроль над развитием ситуации."
-    incentive_text = biography_hint or summary
+    fear_text = _first_sentence(
+        motivation.fear if motivation is not None else "",
+        fallback=threat_text or "Потерять влияние, доверие или контроль над развитием ситуации.",
+    )
+    resolved_threat = threat_text or _first_sentence(
+        motivation.threat if motivation is not None else "",
+        fallback="ошибка в выборе, потеря репутации, внешний шум или чужая инициатива",
+    )
     return render_prompt(
         "agent.blocks.motivation",
-        summary=summary,
+        goal_text=goal_text,
         fear_text=fear_text,
-        role_obligation=role_obligation,
-        incentive_text=incentive_text,
-        story_state=story_state,
-        threat_text=threat_text or "ошибка в выборе, потеря репутации, внешний шум или чужая инициатива",
+        obligation_text=obligation_text,
+        gain_text=gain_text,
+        pressure_text=pressure_text,
+        threat_text=resolved_threat,
     )
 
 

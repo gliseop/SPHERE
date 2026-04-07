@@ -67,6 +67,23 @@ class CreateEntityOp:
                 meta=dict(self.meta),
             )
         )
+        title = str(self.meta.get("title") or "").strip()
+        if self.kind == EntityKind.ORG and self.entity_id not in state.environment.institutions:
+            state.environment.institutions[self.entity_id] = InstitutionRegimeState(org_id=self.entity_id)
+        elif self.kind == EntityKind.ZONE and self.entity_id not in state.environment.zones:
+            state.environment.zones[self.entity_id] = ZoneState(
+                zone_id=self.entity_id,
+                title=title or self.entity_id,
+                zone_type=str(self.meta.get("zone_type") or "office"),
+                primary_org_id=str(self.meta.get("primary_org_id") or "").strip() or None,
+            )
+        elif self.kind == EntityKind.RESOURCE and self.entity_id not in state.environment.resource_pools:
+            state.environment.resource_pools[self.entity_id] = ResourcePoolState(
+                resource_id=self.entity_id,
+                title=title or self.entity_id,
+                owner_org_id=str(self.meta.get("owner_org_id") or "").strip() or None,
+                unit=str(self.meta.get("unit") or "").strip(),
+            )
         return [
             Event(
                 tick=state.tick,

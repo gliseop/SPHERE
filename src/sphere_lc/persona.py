@@ -108,6 +108,36 @@ class ExpertReflection(BaseModel):
     evidence_indices: list[int] = Field(default_factory=list)
 
 
+class MotivationDigest(BaseModel):
+    """Краткий мотивационный слой, извлечённый из интервью и рефлексий."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    goal: str = ""
+    fear: str = ""
+    obligation: str = ""
+    gain: str = ""
+    pressure: str = ""
+    threat: str = ""
+
+    @field_validator("goal", "fear", "obligation", "gain", "pressure", "threat")
+    @classmethod
+    def _strip_text(cls, v: str) -> str:
+        return (v or "").strip()
+
+    def has_content(self) -> bool:
+        return any(
+            [
+                self.goal.strip(),
+                self.fear.strip(),
+                self.obligation.strip(),
+                self.gain.strip(),
+                self.pressure.strip(),
+                self.threat.strip(),
+            ]
+        )
+
+
 class PersonaArtifact(BaseModel):
     """Полный артефакт персоны."""
 
@@ -118,6 +148,7 @@ class PersonaArtifact(BaseModel):
     biography: str = ""
     interview: list[InterviewQA] = Field(default_factory=list)
     reflections: list[ExpertReflection] = Field(default_factory=list)
+    motivation: MotivationDigest | None = None
 
     @field_validator("summary", "biography")
     @classmethod
@@ -329,6 +360,22 @@ def _reflection_schema() -> dict[str, Any]:
             }
         },
         "required": ["reflections"],
+    }
+
+
+def _motivation_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "goal": {"type": "string"},
+            "fear": {"type": "string"},
+            "obligation": {"type": "string"},
+            "gain": {"type": "string"},
+            "pressure": {"type": "string"},
+            "threat": {"type": "string"},
+        },
+        "required": ["goal", "fear", "obligation", "gain", "pressure", "threat"],
     }
 
 
@@ -690,6 +737,63 @@ class PersonaGenerator:
             ),
         ]
 
+    async def _generate_motivation(
+        self,
+        *,
+        agent_id: str,
+        language: str,
+        summary: str,
+        biography_excerpt: str,
+        interview: list[InterviewQA],
+        reflections: list[ExpertReflection],
+    ) -> MotivationDigest:
+        """Собрать interview-grounded мотивационный digest."""
+
+        interview_excerpt = "\n\n".join(
+            f"Q: {(qa.question or '').strip()}\nA: {(qa.answer or '').strip()}"
+            for qa in interview[:6]
+            if (qa.question or "").strip() and (qa.answer or "").strip()
+        )
+        reflections_excerpt = "\n".join(
+            f"{(item.expert or '').strip()}: {(item.summary or '').strip()}"
+            for item in reflections[:4]
+            if (item.expert or "").strip() and (item.summary or "").strip()
+        )
+        system = render_prompt("persona.motivation.system", language_repr=repr(language))
+        user = render_prompt(
+            "persona.motivation.user",
+            summary=summary or "(пусто)",
+            biography_excerpt=biography_excerpt or "(пусто)",
+            interview_excerpt=interview_excerpt or "(пусто)",
+            reflections_excerpt=reflections_excerpt or "(пусто)",
+        )
+        try:
+            resp = await self.llm.generate_structured(
+                role="persona_motivation",
+                name=agent_id,
+                tick=0,
+                system=system,
+                user=user,
+                schema=_motivation_schema(),
+                temperature=self.temperature,
+            )
+            digest = MotivationDigest.model_validate(resp.data)
+            if digest.has_content():
+                return digest
+        except Exception:
+            pass
+
+        fallback_excerpt = (summary or biography_excerpt or "").strip()
+        head = fallback_excerpt[:220].strip() or "Сохранять контроль над ситуацией."
+        return MotivationDigest(
+            goal=head,
+            fear="Потерять влияние, доверие или контроль над развитием ситуации.",
+            obligation="Сохранять обязательства, вытекающие из текущей роли и личных связей.",
+            gain=head,
+            pressure=head,
+            threat="Ошибка в выборе, потеря репутации, внешний шум или чужая инициатива.",
+        )
+
     async def generate(
         self,
         *,
@@ -751,6 +855,7 @@ class PersonaGenerator:
 
         answers: list[str] = []
         reflections: list[ExpertReflection] = []
+        motivation: MotivationDigest | None = None
         if artifact and len(artifact.interview) >= len(INTERVIEW_QUESTIONS_V2):
             answers = [
                 (qa.answer or "").strip()
@@ -763,6 +868,8 @@ class PersonaGenerator:
                 for item in list(artifact.reflections or [])
                 if (item.expert or "").strip() and (item.summary or "").strip()
             ]
+            if artifact.motivation is not None and artifact.motivation.has_content():
+                motivation = artifact.motivation
 
         if not answers:
             excerpt = biography[:1600].strip()
@@ -789,10 +896,20 @@ class PersonaGenerator:
                 biography_excerpt=biography[:1600].strip(),
                 interview=interview,
             )
+        if motivation is None or not motivation.has_content():
+            motivation = await self._generate_motivation(
+                agent_id=agent_id,
+                language=language,
+                summary=summary,
+                biography_excerpt=biography[:1600].strip(),
+                interview=interview,
+                reflections=reflections,
+            )
 
         return PersonaArtifact(
             summary=summary,
             biography=biography,
             interview=interview,
             reflections=reflections,
+            motivation=motivation,
         )

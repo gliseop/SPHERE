@@ -46,24 +46,24 @@ SPHERE/
 │   ├── entities.py             # EntityRegistry + EntityRecord (антифантомы)
 │   ├── id_alloc.py             # Детерминированное выделение новых ID
 │   ├── state.py                # WorldState (agents/work_items/artifacts/pending_interactions/votes + environment-layer) + AgentState.story_state + org/zone binding
-│   ├── persona.py              # PersonaArtifact/Library/Generator + SocialGraphExtractor
+│   ├── persona.py              # PersonaArtifact/Library/Generator + interview-grounded motivation digest + SocialGraphExtractor
 │   ├── memory.py               # Память агента (buffer + hybrid retrieval)
 │   ├── actions.py              # Внутренний Action-vocabulary + freeform `proposal` schema для агента
-│   ├── agent.py                # AgentRunner (1 LLM-вызов на ход, freeform turn proposal, motivation block, daily context + spatial brief)
+│   ├── agent.py                # AgentRunner (1 LLM-вызов на ход, freeform turn proposal, interview-grounded motivation block, daily context + spatial brief)
 │   ├── prompts.py              # Loader/renderer централизованного YAML-реестра LLM-промптов
 │   ├── prompts.yaml            # Единое хранилище prompt templates для core и web AI routes
 │   ├── ops.py                  # Детерминированные StateOp -> Event, включая CreateAgentOp
-│   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM materialization of freeform proposal)
+│   ├── arbiter.py              # Hybrid arbiter (caps + YAML-journal + LLM materialization of freeform proposal + step decomposition + document grounding)
 │   ├── auditor.py              # RuntimeAuditor (LLM-first detection + deterministic audit actuator + collegial review)
 │   ├── dao.py                  # DAO vote closure + position policy
 │   ├── engine.py               # WorldEngine (environment/artifact init, pending follow-up queues, micro-reactions, pre/post worldgen, deterministic apply)
-│   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, scene hooks, spawns, environment updates, artifact creations/updates)
+│   ├── worldgen.py             # WorldGenerator (pre/post tick: external events, scene hooks, spawns, environment updates, entity creations, artifact creations/updates)
 │   ├── composer.py             # WorldComposer (LLM -> ScenarioConfig + persona enrichment)
 │   ├── oracle.py               # ViolationOracle + FreeformTruthRecorder (LLM post-hoc analysis)
 │   ├── history_markdown.py     # Экспорт читабельной markdown-истории мира: события по тикам + встроенные agent inputs + полный LLM trace
 │   ├── truth.py                # TruthDetector + TruthLog (deterministic truth-layer sidecar)
 │   ├── evaluation.py           # Post-hoc evaluation against truth.jsonl
-│   ├── fidelity.py             # Post-hoc fidelity metrics + summary separation
+│   ├── fidelity.py             # Post-hoc fidelity metrics + semantic realism judge + summary separation
 │   ├── events.py               # EventLog (JSONL) — "истина" мира
 │   ├── tracing.py              # TraceLog (JSONL) — prompts/responses отдельно
 │   ├── llm/                    # LLM-провайдеры и утилиты (пакет)
@@ -203,6 +203,16 @@ SPHERE/
 
 8. **Запрет keyword/substring governance-логики как проектного решения.** Для когнитивных, governance- и corruption-related интерпретаций недопустимо проектировать систему вокруг жёстких списков keywords, needle-эвристик, substring-matching и hand-written lexical rubric’ов как основного механизма понимания смысла. Такие реализации считаются архитектурно неприемлемыми и не должны добавляться в новые фичи, конфиги, сценарии или template-policy. Допустим только узкий технический lexical слой для ID/валидации/антифантомов/форматных контрактов, но не для семантического вывода о мотивах, нарушениях, координации или коррупции.
 
+9. **БЯМ-first для semantic adjudication (семантического разбирательства).** Если задача требует интерпретировать смысл свободного `proposal`, документарного следа, narrative-эпизода, institutional risk (институционального риска), realism-сбоя, follow-up-обязательства или worldgen-события, основным механизмом должна быть БЯМ-классификация / БЯМ-materialization / БЯМ-оценка с явным контекстом и ссылкой на наблюдаемые факты мира. Нельзя подменять такие решения жёсткими rule-based (правиловыми) рубриками там, где требуется понимание смысла.
+
+10. **Детерминизм ограничен физикой и контрактами, а не смыслом.** Детерминированный слой должен обеспечивать apply, типизированные ID, валидацию сущностей, антифантомную защиту, форматные контракты и иные инфраструктурные гарантии. Но определение того, что именно означает сложный человеческий ход, насколько note действительно опирается на уже случившиеся события, как интерпретировать многошаговый контакт или какой institutional risk несёт эпизод, не должно сводиться к жёсткому дереву правил.
+
+11. **Запрет hardcoded semantic fixes для realism/truth/fidelity.** Недопустимо лечить проблемы правдоподобия, worldgen, audit, truth-layer, evaluation или fidelity через hand-written списки триггеров, жёсткие типы заметок, substring-паттерны, lexical post-processing или иные суррогатные эвристики как основной механизм. Если нужно semantic quality gate (семантическое ограничение качества), он должен проектироваться как отдельный БЯМ verifier/judge/adjudicator pass, а не как набор if/else по словам.
+
+12. **Prompt-layer сначала, string-cleanup потом.** Если проблема лежит в мотивационном блоке агента, institutional register (институциональном регистре), стилистике официальных сообщений, naming drift или уровне уверенности формулировок, сначала необходимо проверять и править существующие prompt templates, structured extraction (структурированное извлечение) и composition prompt-context, а не вводить строковые пост-обработчики как основной путь решения.
+
+13. **Генератор мира сам определяет недостающую внешнюю физику.** Если realism требует внешнего наблюдателя, документа, института, площадки или новой surface-структуры мира, предпочтителен путь, при котором worldgen / composer через БЯМ сам решает, какие сущности и артефакты нужно materialize-ить, а deterministic layer затем лишь валидирует и применяет их по контракту. Нежелательно заранее зашивать конечный список внешних субъектов как единственно допустимую модель мира.
+
 ## Стек и зависимости
 
 - Python 3.12+, Pydantic 2.0+, NetworkX 3.0+, OpenAI 1.0+, Rich 13.7+, python-dotenv 1.0+
@@ -312,7 +322,9 @@ cd web/frontend && npm run test:e2e
 - **Эмбеддинги**: в обычных прогонах по умолчанию используются реальные embeddings через OpenAI-совместимый API; при отсутствии ключа движок деградирует в BM25-only retrieval. `MockEmbeddingProvider` и `embeddings_mock=true` оставлены для тестов и дешёвых smoke-прогонов.
 - **Агентские промпты**: `AgentRunner` сообщает агенту текущее время мира (`tick` и каноническую дату, если она задана), но не говорит агенту, что он находится в симуляции.
 - **Freeform-интерфейс агента**: когнитивный агент должен возвращать один свободный `proposal` на тик, а не выбирать typed action из меню. Typed actions остаются внутренним/legacy-слоем арбитра и runtime; арбитр сам материализует `proposal` в формальные операции мира. Если содержательный `proposal` на первой попытке даёт `approved=true` и пустой `ops`, арбитр делает один semantic retry с более жёсткой инструкцией; только human-noop/наблюдение могут пройти с пустым `ops` без повтора.
+- **Interview-grounded motivation layer**: при наличии полноценной персоны `AgentRunner` больше не собирает stakes из случайной смеси summary/биографии/story-state. Runtime enrichment извлекает из интервью и expert reflections отдельный `motivation`-digest (`goal`, `fear`, `obligation`, `gain`, `pressure`, `threat`), и именно он считается основным источником краткого мотивационного блока агента; summary/biography остаются только fallback-слоем.
 - **Арбитр как «физика мира»**: арбитр определяет три вещи — допустимость действия, прямые последствия и побочные эффекты (свидетели, неформальные связи, привлечение внимания). Расширенный op-словарь включает `narrative_action` (физические/пространственные действия), `create_artifact`/`update_artifact` (документы), `upsert_informal_link` (побочные изменения связей), `add_information_signal` (побочное привлечение внимания), `upsert_pending_interaction`/`resolve_pending_interaction` (обязательства и follow-up). Побочные эффекты генерируются в дополнение к прямым ops, а не вместо них.
+- **Stepwise perform + document grounding**: свободный `perform` теперь может разлагаться арбитром на ordered steps с локальным scratch-state между шагами. Документарные ops (`add_work_note`, `submit_work_proposal`) дополнительно проходят отдельный БЯМ-grounding pass, который может переписать overclaim-текст перед commit в мир.
 - **Canonical built-in governance mapping**: встроенные режимы трактуются так: `G0` — без аудита, `G1` — аудит без freeze и без collegial review, `G2` — аудит + freeze, `G3` — аудит + freeze + collegial review. Для runtime, web presets и baseline-launcher источником истины служит `governance_modes.py`.
 - **Объём prompt-контекста**: не сжимать агентские и worldgen-промпты вручную только ради уменьшения токенов. Для ведения большого контекста полагаться на штатные механизмы памяти, суммаризации, compaction (компакции) и другие встроенные алгоритмы управления контекстом; большой объём сам по себе не считается дефектом.
 - **Temporal contract runtime**: `RuntimeConfig` поддерживает `tick_granularity` (`hour` / `half_day` / `day` / `week`) и каноническое world-time. `tick_duration_days` теперь трактуется как множитель выбранной гранулярности; для legacy-конфигов с `day` поведение остаётся прежним.
@@ -322,6 +334,7 @@ cd web/frontend && npm run test:e2e
 - **Имена новых агентов**: secondary-spawn, runtime-spawn и worldgen-spawn принимают только человеко-читаемые имена; жёсткий lexical gate по role-alias удалён. Блокируются только явно машинные/machine-like display-name, а “похоже на должность” остаётся сигналом правдоподобия, но не онтологическим запретом.
 - **Stateful environment layer**: `WorldState` теперь содержит отдельный `environment`-слой (`world.environment` в сценарии): режимы организаций, зоны, ресурсные пулы и информационный климат. Он инициализируется из конфига, отражается в YAML-журнале и safe `state_snapshot` для worldgen; post-worldgen теперь также может детерминированно менять его через `environment_updates` и события `environment_*_updated`.
 - **Документарный слой мира**: сценарий и runtime теперь поддерживают `art:*`-артефакты как first-class сущности (`world.artifacts`, `artifact_created`, `artifact_updated`). Они попадают в `WorldState`, журнал мира, worldgen snapshot и релевантный prompt агента.
+- **Worldgen entity bundle**: pre/post-worldgen может возвращать не только события, средовые апдейты и артефакты, но и `entity_creations` для `org:*`, `chan:*`, `zone:*`, `res:*`. Движок применяет их раньше связанных artifact/environment steps и сразу засеивает соответствующий environment-layer, чтобы внешняя физика мира могла materialize-иться без хардкодного списка институтов.
 - **Worldgen без scripted events**: детерминированные `scripted_events` удалены из authoring-модели; внешний фон теперь приходит только через `worldgen`, документы, сигналы среды и реальные действия агентов.
 - **Legacy worldgen compatibility**: post-worldgen нормализует legacy `artifact:*` в канонический `art:*`; legacy scenario-format больше не поддерживается и не должен использоваться в новых сценариях.
 - **Неформальные связи**: `environment.informal_links` теперь хранит латентные связи между агентами и может обновляться как из конфига/worldgen, так и детерминированно по самому ходу симуляции (например, через private contact и coordination).
@@ -334,10 +347,12 @@ cd web/frontend && npm run test:e2e
 - **Сюжетные аудиторы удалены**: narrative-агенты с capability `audit` больше не поддерживаются. Аудит существует только как отдельный runtime governance-layer, а не как персонаж симуляции.
 - **Collegial review**: спорные audit-case могут маршрутизироваться в отдельный collegial review через `audit_review` vote-path с детерминированным составом жюри и закрытием кейса по итогам review.
 - **Deterministic truth + freeform truth**: `truth.jsonl` остаётся strict baseline для exact evaluation, а `truth_freeform.jsonl` — отдельным LLM-sidecar для richer post-hoc записи нарушений в свободной форме по схеме. При наличии `truth_freeform.jsonl` semantic/case evaluation опирается именно на него, а strict metrics продолжают считаться по deterministic truth.
+- **Evaluation semantic judge**: semantic/case matching в `evaluation.py` больше не должен проектироваться как hand-written score по `violation_type`/target/evidence. Правильный путь — strict exact baseline плюс отдельный judge pass поверх truth/runtime findings и case-level представлений.
 - **Unified findings**: runtime audit, deterministic truth и freeform truth постепенно приводятся к общей finding-структуре (`summary`, `mechanism`, `beneficiary`, `risk_tags`, `evidence_refs`). Exact `violation_type` больше не считается единственным носителем смысла.
 - **Structural truth only**: deterministic truth-layer больше не должен делать text-based / keyword-based semantic выводы о коррупции, координации или сокрытии. Его зона ответственности — только структурно наблюдаемые паттерны мира (например, self-nomination, positive reputation after private contact, support vote after private contact).
-- **Semantic + case-level evaluation**: `evaluation.json` теперь содержит не только strict метрики exact-match, но и semantic matching (`semantic_true_positive`, `semantic_precision`, `semantic_recall`, `semantic_f1`) через finding matcher, а также case-level слой (`case_true_positive`, `case_precision`, `case_recall`, `case_f1`), который схлопывает повторяющиеся эпизоды по `subject + violation_type + counterparty`.
+- **Semantic + case-level evaluation**: `evaluation.json` теперь содержит не только strict метрики exact-match, но и semantic/case judge-слой (`semantic_true_positive`, `semantic_precision`, `semantic_recall`, `semantic_f1`, `case_true_positive`, `case_precision`, `case_recall`, `case_f1`), который считается отдельным БЯМ-pass поверх truth/runtime findings и case-level представлений, а не через hand-written label matcher.
 - **Status/truth/evaluation/fidelity sidecars**: каждый прогон может писать `status.json` (heartbeat и финальный статус `running`/`finished`/`failed`), `truth.jsonl` (deterministic truth-layer), `evaluation.json` (governance-eval), `fidelity.json` (правдоподобие и структурная дисциплина), `summary.json` (разделённая сводка), `perf_summary.json` (LLM-phase/tick performance profile), а также `environment_summary.json` и `environment_timeline.jsonl` для отдельной телеметрии усиленной среды.
+- **Semantic realism in fidelity**: кроме структурных счётчиков `fidelity.json` теперь может содержать отдельный БЯМ-sidecar поверх последних событий (`semantic_realism_findings_total`, `semantic_realism_by_category`, `semantic_realism_findings`). Этот слой не заменяет structural metrics, а дополняет их post-hoc semantic verdict'ами по правдоподобию.
 - **Memory summarization runtime**: `AgentMemory.maybe_summarize_working` теперь вызывается параллельно для нескольких агентов с bounded-parallel contract, чтобы memory-sidecar не тянул весь tick последовательно.
 - **Memory summarization policy**: рабочая память больше не суммаризируется при минимальном overflow. Перед LLM-вызовом движок ждёт, пока переполнение `working` превысит порог `working_summary_min_overflow`, и детерминированно схлопывает серийные технические записи перед отправкой batch в суммаризатор.
 - **Provider timeout contract**: один модельный ответ теперь ограничен жёстким deadline (`SPHERE_LLM_CALL_DEADLINE_S`, по умолчанию 30 секунд), а timeout-ошибки не растягиваются длинной retry-цепочкой тем же провайдером.
@@ -362,7 +377,7 @@ cd web/frontend && npm run test:e2e
 | Область | Описание |
 |----------|---------|
 | Runtime latency в full-ecology прогонах | Даже после 30-секундного timeout contract, persistent persona cache, compact audit snapshots и richer `perf_summary.json` длинные full-ecology прогоны остаются latency-bound: особенно дороги `memory`, prompt-heavy `runtime_auditor` и long-tail отдельных agent/auditor вызовов. |
-| Keyword/substring semantic heuristics | В кодовой базе остаются отдельные legacy-участки, где semantic решение всё ещё опирается на lexical matching вместо LLM-first или структурного reasoning. После текущей чистки primary governance/truth paths очищены; остаток нужно добрать точечно при следующем проходе по смежным helper-слоям и документации. |
+| Semantic judge calibration | Первичный аудит оформлен в `docs/plans/20260407_semantic_hardcode_audit.md`, а ключевые findings по `fidelity.py`, `auditor.py` и `evaluation.py` уже перенесены в explicit verifier/judge passes. Открытый остаточный долг — не вычищение substring-логики из primary paths, а калибровка prompt/schema качества новых judge-проходов на длинных full-ecology прогонах. |
 
 ### Завершённые миграции
 

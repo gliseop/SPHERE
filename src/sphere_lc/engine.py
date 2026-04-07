@@ -22,9 +22,9 @@ from .config import ScenarioConfig
 from .dao import DaoEngine
 from .embeddings import embed_texts_cached
 from .entities import EntityRecord, EntityRegistry
-from .evaluation import evaluate_run, save_evaluation
+from .evaluation import augment_evaluation_with_semantic_judge, evaluate_run, save_evaluation
 from .events import Event, EventLog
-from .fidelity import evaluate_fidelity, save_fidelity
+from .fidelity import augment_fidelity_with_semantic_judge, evaluate_fidelity, save_fidelity
 from .governance_modes import infer_builtin_governance_mode
 from .history_markdown import write_world_history_markdown
 from .id_alloc import IdAllocator
@@ -389,6 +389,25 @@ class WorldEngine:
                 if generated_pre.events:
                     event_log.extend(generated_pre.events)
                     tick_events.extend(generated_pre.events)
+                entity_events = self._apply_worldgen_entity_changes(
+                    state=state,
+                    creations=[
+                        {
+                            "entity_id": item.entity_id,
+                            "kind": item.kind,
+                            "title": item.title,
+                            "description": item.description,
+                            "zone_type": item.zone_type,
+                            "primary_org_id": item.primary_org_id,
+                            "owner_org_id": item.owner_org_id,
+                            "unit": item.unit,
+                        }
+                        for item in generated_pre.entity_creations
+                    ],
+                    event_log=event_log,
+                )
+                if entity_events:
+                    tick_events.extend(entity_events)
                 env_events = self._apply_worldgen_environment_updates(
                     state=state,
                     updates=generated_pre.environment_updates,
@@ -553,6 +572,25 @@ class WorldEngine:
                 if generated.events:
                     event_log.extend(generated.events)
                     tick_events.extend(generated.events)
+                entity_events = self._apply_worldgen_entity_changes(
+                    state=state,
+                    creations=[
+                        {
+                            "entity_id": item.entity_id,
+                            "kind": item.kind,
+                            "title": item.title,
+                            "description": item.description,
+                            "zone_type": item.zone_type,
+                            "primary_org_id": item.primary_org_id,
+                            "owner_org_id": item.owner_org_id,
+                            "unit": item.unit,
+                        }
+                        for item in generated.entity_creations
+                    ],
+                    event_log=event_log,
+                )
+                if entity_events:
+                    tick_events.extend(entity_events)
                 env_events = self._apply_worldgen_environment_updates(
                     state=state,
                     updates=generated.environment_updates,
@@ -741,6 +779,15 @@ class WorldEngine:
                 truth_path=self.artifacts.truth_path,
                 truth_freeform_path=freeform_truth_path_for_eval,
             )
+            governance_summary = await augment_evaluation_with_semantic_judge(
+                summary=governance_summary,
+                llm=llm,
+                events_path=self.artifacts.events_path,
+                truth_path=self.artifacts.truth_path,
+                truth_freeform_path=freeform_truth_path_for_eval,
+                scenario_description=self.cfg.description,
+                temperature=self.cfg.llm.temperature,
+            )
             save_evaluation(governance_summary, self.artifacts.evaluation_path)
         if self.artifacts.fidelity_path is not None:
             fidelity_summary = evaluate_fidelity(
@@ -749,6 +796,13 @@ class WorldEngine:
                 tick_duration_days=self.cfg.runtime.tick_duration_days,
                 temporal_past_slack_days=self.cfg.runtime.temporal_past_slack_days,
                 temporal_future_horizon_days=self.cfg.runtime.temporal_future_horizon_days,
+            )
+            fidelity_summary = await augment_fidelity_with_semantic_judge(
+                summary=fidelity_summary,
+                llm=llm,
+                events_path=self.artifacts.events_path,
+                scenario_description=self.cfg.description,
+                temperature=self.cfg.llm.temperature,
             )
             save_fidelity(fidelity_summary, self.artifacts.fidelity_path)
         if self.artifacts.summary_path is not None:
@@ -2252,6 +2306,74 @@ class WorldEngine:
                 )
             )
         return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_environment")
+
+    def _apply_worldgen_entity_changes(
+        self,
+        *,
+        state: WorldState,
+        creations: list[dict[str, Any]],
+        event_log: EventLog,
+    ) -> list[Event]:
+        """Материализовать новые внешние сущности, предложенные worldgen."""
+
+        if not creations:
+            return []
+
+        kind_map = {
+            "org": EntityKind.ORG,
+            "chan": EntityKind.CHANNEL,
+            "zone": EntityKind.ZONE,
+            "res": EntityKind.RESOURCE,
+        }
+        priority = {
+            "org": 0,
+            "chan": 1,
+            "zone": 2,
+            "res": 3,
+        }
+        ops: list[StateOp] = []
+        existing_ids = set(state.registry.list_ids())
+
+        for item in sorted(creations, key=lambda data: (priority.get(str(data.get("kind") or "").strip(), 99), str(data.get("entity_id") or ""))):
+            entity_id = str(item.get("entity_id") or "").strip()
+            kind_raw = str(item.get("kind") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if not entity_id or not kind_raw or not title:
+                continue
+            kind = kind_map.get(kind_raw)
+            if kind is None:
+                continue
+            try:
+                parsed = parse_typed_id(entity_id)
+            except ValueError:
+                entity_id = make_id(kind, normalize_slug(entity_id, fallback=kind_raw))
+            else:
+                if parsed.kind != kind:
+                    entity_id = make_id(kind, normalize_slug(parsed.slug, fallback=kind_raw))
+            if entity_id in existing_ids:
+                continue
+            existing_ids.add(entity_id)
+            meta: dict[str, Any] = {
+                "title": title,
+                "description": str(item.get("description") or "").strip(),
+            }
+            if kind == EntityKind.ZONE:
+                meta["zone_type"] = str(item.get("zone_type") or "office").strip() or "office"
+                meta["primary_org_id"] = str(item.get("primary_org_id") or "").strip() or None
+            if kind == EntityKind.RESOURCE:
+                meta["owner_org_id"] = str(item.get("owner_org_id") or "").strip() or None
+                meta["unit"] = str(item.get("unit") or "").strip()
+            ops.append(
+                CreateEntityOp(
+                    entity_id=entity_id,
+                    kind=kind,
+                    created_by=None,
+                    created_tick=state.tick,
+                    meta=meta,
+                )
+            )
+
+        return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_entity")
 
     def _apply_worldgen_artifact_changes(
         self,

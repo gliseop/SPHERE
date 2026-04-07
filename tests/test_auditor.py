@@ -124,6 +124,17 @@ class _FreeformSignalAuditorProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
+        if "runtime-поддержанности и policy-готовности" in system:
+            return StructuredLLMResponse(
+                data={
+                    "runtime_support_level": "supported",
+                    "canonical_violation_type": "support_vote_after_private_contact",
+                    "recommended_action": "route_to_collegial_review",
+                    "target_agent_id": "agent:off_2",
+                    "rationale": "Есть приватный контакт перед yes-vote в пользу того же адресата.",
+                },
+                model="mock",
+            )
         return StructuredLLMResponse(
             data={
                 "findings": [
@@ -589,12 +600,14 @@ def test_runtime_auditor_postprocess_preserves_noncanonical_llm_label_without_le
         evidence_refs=[],
     )
 
-    processed = auditor._postprocess_finding(
-        finding=finding,
-        state=state,
-        tick_events=tick_events,
-        recent_events=recent_events,
-        current_tick=3,
+    processed = asyncio.run(
+        auditor._postprocess_finding(
+            finding=finding,
+            state=state,
+            tick_events=tick_events,
+            recent_events=recent_events,
+            current_tick=3,
+        )
     )
 
     assert processed is not None

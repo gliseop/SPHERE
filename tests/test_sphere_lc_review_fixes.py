@@ -183,6 +183,99 @@ class _StillEmptyMaterializationProvider(MockLLMProvider):
         return super().generate_structured(system, user, schema, temperature)
 
 
+class _StepwisePerformProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "ACTOR: agent:off_1" in user and "PROPOSAL:" in user:
+            return StructuredLLMResponse(
+                data={
+                    "steps": [
+                        "Сначала перейду в соседний кабинет, чтобы оказаться рядом с коллегой.",
+                        "После этого лично сообщу коллеге итог и зафиксирую короткое сообщение.",
+                    ]
+                },
+                model="mock",
+            )
+        if "- actor_id: agent:off_1" in user and "перейду в соседний кабинет" in user:
+            return StructuredLLMResponse(
+                data={
+                    "approved": True,
+                    "reason": "move_first",
+                    "ops": [
+                        {
+                            "op_type": "narrative_action",
+                            "args": {
+                                "description": "Перешёл в кабинет коллеги.",
+                                "zone_id": "zone:room_b",
+                            },
+                        }
+                    ],
+                },
+                model="mock",
+            )
+        if "- actor_id: agent:off_1" in user and "лично сообщу коллеге итог" in user:
+            return StructuredLLMResponse(
+                data={
+                    "approved": True,
+                    "reason": "message_after_move",
+                    "ops": [
+                        {
+                            "op_type": "send_message",
+                            "args": {
+                                "to_id": "agent:off_2",
+                                "text": "Теперь можно обсудить итог лично.",
+                                "private": True,
+                            },
+                        }
+                    ],
+                },
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
+
+
+class _DocumentGroundingProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "document-layer materialization" in system:
+            return StructuredLLMResponse(
+                data={
+                    "supported_level": "unsupported",
+                    "rewritten_text": "Запросил у коллег подтверждение и ожидаю письменные пояснения по расхождениям.",
+                    "rationale": "candidate note утверждает уже полученный результат, которого в мире пока нет",
+                },
+                model="mock",
+            )
+        if "- actor_id: agent:off_1" in user:
+            return StructuredLLMResponse(
+                data={
+                    "approved": True,
+                    "reason": "approved",
+                    "ops": [
+                        {
+                            "op_type": "add_work_note",
+                            "args": {
+                                "work_id": "work:case",
+                                "text": "Получил подтверждение от коллег и учёл письменные пояснения в деле.",
+                            },
+                        }
+                    ],
+                },
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
+
+
 class _FailingProposeProvider(MockLLMProvider):
     def __init__(self) -> None:
         super().__init__()
@@ -316,12 +409,15 @@ def test_arbiter_allows_private_contact_after_same_turn_relocation(tmp_path: Pat
             ],
         }
     )
-    res = arbiter._convert_perform_decision(
-        state=state,
-        agent_id="agent:off_1",
-        agent_caps={"message"},
-        action_index=0,
-        decision=decision,
+    res, _, _ = asyncio.run(
+        arbiter._convert_perform_decision(
+            state=state,
+            agent_id="agent:off_1",
+            proposal="Сначала приду в кабинет, потом поговорю лично.",
+            agent_caps={"message"},
+            action_index=0,
+            decision=decision,
+        )
     )
 
     assert res.approved is True
@@ -955,6 +1051,56 @@ def test_arbiter_rejects_substantive_proposal_when_retry_still_empty(tmp_path: P
     assert provider.perform_calls == 2
     assert res[0].approved is False
     assert res[0].reason == "proposal_not_materialized_after_retry"
+
+
+def test_arbiter_decomposes_multi_step_proposal_into_ordered_ops(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state.registry.register(EntityRecord(entity_id="zone:room_a", kind=EntityKind.ZONE, created_by=None, created_tick=0, meta={"title": "Room A"}))
+    state.registry.register(EntityRecord(entity_id="zone:room_b", kind=EntityKind.ZONE, created_by=None, created_tick=0, meta={"title": "Room B"}))
+    state.agents["agent:off_1"].zone_id = "zone:room_a"
+    state.agents["agent:off_2"].zone_id = "zone:room_b"
+
+    arbiter = _mk_arbiter(tmp_path, mock=_StepwisePerformProvider())
+    act = PerformAction(
+        type=ActionType.PERFORM,
+        description="Сначала приду к коллеге, а потом лично сообщу ему итог.",
+        target_id="agent:off_2",
+        justification="",
+    )
+
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert res[0].approved is True
+    assert [op.__class__.__name__ for op in res[0].ops] == ["RecordNarrativeActionOp", "SendMessageOp"]
+
+
+def test_arbiter_rewrites_unsupported_document_note_via_grounding_verifier(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["work"], off_2_caps=["work"])
+    state.registry.register(
+        EntityRecord(
+            entity_id="work:case",
+            kind=EntityKind.WORK_ITEM,
+            created_by=None,
+            created_tick=0,
+            meta={"title": "Case"},
+        )
+    )
+    state.work_items["work:case"] = WorkItem(work_id="work:case", work_type="case", title="Case")
+
+    arbiter = _mk_arbiter(tmp_path, mock=_DocumentGroundingProvider())
+    act = PerformAction(
+        type=ActionType.PERFORM,
+        description="Сначала попрошу коллег подтвердить расхождения, затем зафиксирую это в деле.",
+        target_id="",
+        justification="",
+    )
+
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert res[0].approved is True
+    assert res[0].ops
+    assert res[0].ops[0].__class__.__name__ == "AddWorkNoteOp"
+    assert res[0].ops[0].text == "Запросил у коллег подтверждение и ожидаю письменные пояснения по расхождениям."
 
 
 def test_arbiter_rejects_temporally_backdated_message(tmp_path: Path) -> None:

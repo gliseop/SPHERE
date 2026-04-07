@@ -192,7 +192,7 @@ world:
 | `max_scene_changes_per_tick` | `int` | Лимит scene hooks / scene changes на тик |
 | `max_new_actors_per_window` | `int` | Лимит worldgen-spawn suggestions за одно окно |
 | `enrich_personas` | `bool` | Runtime-обогащение summary → biography/interview перед первым тиком |
-| `persona_enrich_mode` | `full`/`core` | `full` = summary+biography+interview+expert reflection, `core` = summary+biography |
+| `persona_enrich_mode` | `full`/`core` | `full` = summary+biography+interview+expert reflection+motivation digest, `core` = summary+biography |
 | `spawn_secondary` | `bool` | Извлекать вторичных агентов из социального графа биографий до первого тика |
 | `max_secondary_per_agent` | `int` | Лимит социальных связей, извлекаемых из одной персоны |
 | `max_agents` | `int` | Общий потолок на количество агентов в мире |
@@ -299,8 +299,11 @@ world:
 
 Post-worldgen теперь также может возвращать:
 
+- `entity_creations` — materialization новых typed-сущностей мира (`org:*`, `chan:*`, `zone:*`, `res:*`);
 - `artifact_creations` — создание новых `art:*` сущностей;
 - `artifact_updates` — обновление уже существующих артефактов.
+
+`entity_creations` применяются раньше связанных `artifact_creations` и `environment_updates`, чтобы worldgen мог сначала ввести внешний институт, зону наблюдения или ресурсный контур, а потом уже повесить на них документарный след.
 
 Для обратной совместимости legacy `artifact:*` в post-worldgen нормализуется движком в канонический `art:*`.
 
@@ -468,7 +471,16 @@ persona:
     - expert: "economist"
       summary: "Сильно реагирует на карьерные стимулы и управляемый риск."
       evidence_indices: [2, 8]
+  motivation:
+    goal: "Сохранить управляемость процесса и не потерять влияние на решение."
+    fear: "Боится публичного конфликта и потери репутационного контроля."
+    obligation: "Считает, что должен удержать подразделение от открытого срыва."
+    gain: "Видит выгоду в тихом закрытии напряжения без формальной эскалации."
+    pressure: "Чувствует давление сроков, статуса и ожиданий руководства."
+    threat: "Опасается внешнего шума, проверки и чужой инициативы."
 ```
+
+Поле `motivation` опционально и хранит компактный interview-grounded digest, извлечённый из интервью и expert reflections. Оно предназначено только для краткого мотивационного блока в prompt-layer. Источником личности по-прежнему считаются `summary`, `biography`, `interview` и `reflections`, а не один лишь digest.
 
 ### Кэш runtime-обогащения персон (`personas.json`)
 
@@ -489,7 +501,15 @@ persona:
       "summary": "…",
       "biography": "…",
       "interview": [],
-      "reflections": []
+      "reflections": [],
+      "motivation": {
+        "goal": "…",
+        "fear": "…",
+        "obligation": "…",
+        "gain": "…",
+        "pressure": "…",
+        "threat": "…"
+      }
     }
   }
 }
@@ -843,21 +863,13 @@ Deterministic truth-layer после удаления lexical/keyword-эврис
 }
 ```
 
-При сопоставлении runtime-сигналов с truth-layer strict baseline всегда считается по deterministic `truth.jsonl`: он нормализует `evidence_refs` до core-signature и меньше зависит от шумовых полей внутри evidence. Если рядом присутствует `truth_freeform.jsonl`, semantic/case метрики берут truth именно оттуда; иначе они fallback’ятся на deterministic truth. Поверх strict baseline дополнительно считаются:
+При сопоставлении runtime-сигналов с truth-layer strict baseline всегда считается по deterministic `truth.jsonl`: он нормализует `evidence_refs` до core-signature и меньше зависит от шумовых полей внутри evidence. Если рядом присутствует `truth_freeform.jsonl`, semantic/case метрики берут truth именно оттуда; иначе они fallback’ятся на deterministic truth.
 
-- semantic matching:
+Semantic- и case-метрики теперь считаются отдельным judge pass:
 
-- совпадение subject;
-- temporal proximity;
-- overlap по `target_agent_id` / `beneficiary`;
-- overlap по `evidence_refs`;
-- overlap по `risk_tags`;
-- similarity `summary + mechanism`.
-
-- case-level matching:
-
-- схлопывание повторяющихся episode-level finding’ов в кейс по `subject + violation_type + counterparty`;
-- отдельные `case_*` метрики для более устойчивой governance-оценки, когда один и тот же кейс даёт несколько близких runtime/truth-эпизодов.
+- на вход judge получает `truth_findings`, `signal_findings`, `truth_cases`, `signal_cases` и strict baseline metrics;
+- judge матчить эпизоды по смыслу `summary` / `mechanism` / `beneficiary` / `target` / evidence trail, а не по exact `violation_type`;
+- strict baseline и semantic judge остаются раздельными слоями и не подменяют друг друга.
 
 ### Fidelity sidecar (`fidelity.json`)
 
@@ -869,13 +881,28 @@ Deterministic truth-layer после удаления lexical/keyword-эврис
   "identity_machine_name_total": 0,
   "identity_role_alias_total": 0,
   "phantom_rejection_total": 3,
-  "bureaucratic_loop_total": 5,
+  "bureaucratic_loop_total": 0,
   "world_event_total": 12,
-  "narrating_leakage_total": 1,
+  "narrating_leakage_total": 0,
   "perform_approved_total": 4,
-  "reputation_event_total": 7
+  "reputation_event_total": 7,
+  "semantic_realism_findings_total": 2,
+  "semantic_realism_by_category": {
+    "document_grounding": 1,
+    "external_surface_gap": 1
+  },
+  "semantic_realism_findings": [
+    {
+      "category": "document_grounding",
+      "severity": "high",
+      "summary": "Документ утверждает подтверждение, которого ещё нет в событиях мира.",
+      "evidence_refs": [{"tick": 7, "event_type": "work_note_added", "actor_id": "agent:off_1"}]
+    }
+  ]
 }
 ```
+
+Structural counters и semantic realism layer не смешиваются: первые остаются детерминированными метриками дисциплины мира, второй является отдельным БЯМ-sidecar для post-hoc оценки правдоподобия.
 
 ### Сводный отчёт (`summary.json`)
 

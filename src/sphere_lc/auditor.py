@@ -60,6 +60,7 @@ class AuditFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     finding_id: str
+    source: Literal["rules", "llm"] = "rules"
     tick: int
     subject_agent_id: str
     violation_type: str
@@ -126,6 +127,16 @@ class _RawAuditFindingModel(BaseModel):
     notes: str = ""
 
 
+class _ActuationVerifierModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_support_level: Literal["supported", "partially_supported", "unsupported"] = "supported"
+    canonical_violation_type: str = ""
+    recommended_action: str = ""
+    target_agent_id: str = ""
+    rationale: str = ""
+
+
 def _audit_schema(*, max_findings: int) -> dict[str, Any]:
     return {
         "type": "object",
@@ -164,6 +175,30 @@ def _audit_schema(*, max_findings: int) -> dict[str, Any]:
             },
         },
         "required": ["findings"],
+    }
+
+
+def _actuation_verifier_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "runtime_support_level": {
+                "type": "string",
+                "enum": ["supported", "partially_supported", "unsupported"],
+            },
+            "canonical_violation_type": {"type": "string"},
+            "recommended_action": {"type": "string", "enum": sorted(_RECOMMENDED_ACTIONS)},
+            "target_agent_id": {"type": "string"},
+            "rationale": {"type": "string"},
+        },
+        "required": [
+            "runtime_support_level",
+            "canonical_violation_type",
+            "recommended_action",
+            "target_agent_id",
+            "rationale",
+        ],
     }
 
 
@@ -229,9 +264,18 @@ class RuntimeAuditor:
                     current_tick=current_tick,
                 )
             )
-        findings = [self._postprocess_finding(finding=item, state=state, tick_events=tick_events, recent_events=recent_events, current_tick=current_tick) for item in findings]
-        findings = [item for item in findings if item is not None]
-        return self._dedupe_findings(findings)
+        processed: list[AuditFinding] = []
+        for item in findings:
+            ready = await self._postprocess_finding(
+                finding=item,
+                state=state,
+                tick_events=tick_events,
+                recent_events=recent_events,
+                current_tick=current_tick,
+            )
+            if ready is not None:
+                processed.append(ready)
+        return self._dedupe_findings(processed)
 
     async def _llm_findings(
         self,
@@ -298,6 +342,7 @@ class RuntimeAuditor:
                 confidence = min(confidence, float(self.cfg.external_subject_confidence_cap))
             findings.append(
                 self._make_finding(
+                    source="llm",
                     tick=current_tick,
                     subject_agent_id=raw.subject_agent_id,
                     target_agent_id=raw.target_agent_id,
@@ -843,7 +888,7 @@ class RuntimeAuditor:
                 break
         return list(reversed(kept_reversed))
 
-    def _postprocess_finding(
+    async def _postprocess_finding(
         self,
         *,
         finding: AuditFinding,
@@ -860,32 +905,52 @@ class RuntimeAuditor:
             current_tick=current_tick,
         )
         target_agent_id = finding.target_agent_id or self._first_event_target_agent_id(evidence_refs)
-        normalized_violation_type, normalized_freeform = self._normalize_violation_type(
-            violation_type=finding.violation_type,
-            violation_type_freeform=finding.violation_type_freeform,
-            risk_family=finding.risk_family,
-            subject_agent_id=finding.subject_agent_id,
-            target_agent_id=target_agent_id,
-            summary=finding.summary,
-            mechanism=finding.mechanism,
-            evidence_refs=evidence_refs,
-            state=state,
-            recent_events=recent_events,
-            tick_events=tick_events,
-            current_tick=current_tick,
-        )
+        normalized_violation_type = str(finding.violation_type or "").strip() or "other"
+        normalized_freeform = str(finding.violation_type_freeform or "").strip()
+        suggested_action = finding.recommended_action
+        support_level = "supported"
+        notes = finding.notes
+
+        if finding.source == "llm" and self.llm is not None:
+            verdict = await self._verify_llm_finding(
+                finding=finding,
+                state=state,
+                tick_events=tick_events,
+                recent_events=recent_events,
+                current_tick=current_tick,
+                candidate_evidence_refs=evidence_refs,
+            )
+            if verdict is not None:
+                support_level = str(verdict.runtime_support_level or "supported").strip() or "supported"
+                canonical_violation_type = str(verdict.canonical_violation_type or "").strip()
+                if canonical_violation_type in _CANONICAL_VIOLATION_TYPES:
+                    if (
+                        not normalized_freeform
+                        and normalized_violation_type
+                        and normalized_violation_type not in _CANONICAL_VIOLATION_TYPES
+                        and normalized_violation_type != "other"
+                    ):
+                        normalized_freeform = normalized_violation_type
+                    normalized_violation_type = canonical_violation_type
+                verified_target_id = str(verdict.target_agent_id or "").strip()
+                if verified_target_id in state.agents:
+                    target_agent_id = verified_target_id
+                if str(verdict.recommended_action or "").strip():
+                    suggested_action = str(verdict.recommended_action or "").strip()
+                rationale = str(verdict.rationale or "").strip()
+                if rationale:
+                    notes = f"{notes}\n{rationale}".strip() if notes else rationale
+
         confidence = float(finding.confidence)
         subject = state.agents.get(finding.subject_agent_id)
         if subject is not None and not subject.internal:
             confidence = min(confidence, float(self.cfg.external_subject_confidence_cap))
         if normalized_violation_type.startswith("self_") and not target_agent_id:
             target_agent_id = finding.subject_agent_id
-        if not self._llm_finding_has_required_runtime_support(
-            violation_type=normalized_violation_type,
-            subject_agent_id=finding.subject_agent_id,
+        if not self._finding_has_min_runtime_support(
+            finding=finding,
             evidence_refs=evidence_refs,
-            recent_events=recent_events,
-            tick_events=tick_events,
+            support_level=support_level,
         ):
             return None
         recommended_action = self._resolve_recommended_action(
@@ -893,10 +958,11 @@ class RuntimeAuditor:
             risk_family=finding.risk_family,
             severity=finding.severity,
             confidence=confidence,
-            suggested_action=finding.recommended_action,
+            suggested_action=suggested_action,
             risk_tags=finding.risk_tags,
         )
         return self._make_finding(
+            source=finding.source,
             tick=finding.tick,
             subject_agent_id=finding.subject_agent_id,
             target_agent_id=target_agent_id,
@@ -912,152 +978,86 @@ class RuntimeAuditor:
             risk_tags=list(finding.risk_tags),
             related_agent_ids=list(finding.related_agent_ids),
             evidence_refs=evidence_refs,
-            notes=finding.notes,
+            notes=notes,
         )
+
+    async def _verify_llm_finding(
+        self,
+        *,
+        finding: AuditFinding,
+        state: WorldState,
+        tick_events: list[Event],
+        recent_events: list[Event],
+        current_tick: int,
+        candidate_evidence_refs: list[dict[str, Any]],
+    ) -> _ActuationVerifierModel | None:
+        if self.llm is None:
+            return None
+
+        payload = {
+            "tick": current_tick,
+            "finding_draft": {
+                "subject_agent_id": finding.subject_agent_id,
+                "target_agent_id": finding.target_agent_id,
+                "violation_type": finding.violation_type,
+                "violation_type_freeform": finding.violation_type_freeform,
+                "risk_family": finding.risk_family,
+                "severity": finding.severity,
+                "confidence": float(finding.confidence),
+                "summary": finding.summary,
+                "mechanism": finding.mechanism,
+                "beneficiary": finding.beneficiary,
+                "risk_tags": list(finding.risk_tags),
+                "recommended_action": finding.recommended_action,
+            },
+            "candidate_evidence_refs": list(candidate_evidence_refs),
+            "current_tick_events": self._sanitize_events(state=state, events=tick_events),
+            "recent_events": self._sanitize_events(
+                state=state,
+                events=self._compact_recent_events_for_llm(
+                    events=recent_events[-self.cfg.lookback_events :]
+                ),
+            ),
+            "state_snapshot": self._state_snapshot(state),
+        }
+        try:
+            resp = await self.llm.generate_structured(
+                role="auditor",
+                name="actuation_verifier",
+                tick=current_tick,
+                system=render_prompt("auditor.actuation_verifier.system"),
+                user=render_prompt(
+                    "auditor.actuation_verifier.user",
+                    payload_json=json.dumps(payload, ensure_ascii=False),
+                ),
+                schema=_actuation_verifier_schema(),
+                temperature=self.temperature,
+            )
+        except Exception:
+            return None
+        try:
+            return _ActuationVerifierModel.model_validate(resp.data)
+        except Exception:
+            return None
 
     @staticmethod
-    def _llm_finding_has_required_runtime_support(
+    def _finding_has_min_runtime_support(
         *,
-        violation_type: str,
-        subject_agent_id: str,
+        finding: AuditFinding,
         evidence_refs: list[dict[str, Any]],
-        recent_events: list[Event],
-        tick_events: list[Event],
+        support_level: str,
     ) -> bool:
-        if not violation_type:
+        if support_level == "unsupported":
             return False
-
         evidence_types = {
             str(ref.get("event_type") or "").strip()
             for ref in evidence_refs
             if isinstance(ref, dict)
         }
         evidence_types.discard("")
-
-        if violation_type == "support_vote_after_private_contact":
-            if "vote_cast" in evidence_types:
-                return True
-            for event in [*recent_events, *tick_events]:
-                if event.event_type != "vote_cast":
-                    continue
-                if str(event.actor_id or "") != subject_agent_id:
-                    continue
-                if str((event.payload or {}).get("choice") or "") == "yes":
-                    return True
+        if finding.source == "llm" and evidence_types and evidence_types <= {"arbiter_rejected"}:
             return False
-
-        if violation_type == "non_escalation_under_pressure":
-            # Чистая цепочка отклонённых арбитром намерений не должна считаться
-            # содержательным нарушением: действие не материализовалось в мир.
-            if evidence_types and evidence_types <= {"arbiter_rejected"}:
-                return False
-
         return True
-
-    def _normalize_violation_type(
-        self,
-        *,
-        violation_type: str,
-        violation_type_freeform: str,
-        risk_family: str,
-        subject_agent_id: str,
-        target_agent_id: str | None,
-        summary: str,
-        mechanism: str,
-        evidence_refs: list[dict[str, Any]],
-        state: WorldState,
-        recent_events: list[Event],
-        tick_events: list[Event],
-        current_tick: int,
-    ) -> tuple[str, str]:
-        normalized = str(violation_type or "").strip() or "other"
-        freeform = str(violation_type_freeform or "").strip()
-        if normalized not in _CANONICAL_VIOLATION_TYPES:
-            inferred = self._infer_canonical_violation_type(
-                normalized=normalized,
-                freeform=freeform,
-                risk_family=risk_family,
-                subject_agent_id=subject_agent_id,
-                target_agent_id=target_agent_id,
-                evidence_refs=evidence_refs,
-                state=state,
-                recent_events=recent_events,
-                tick_events=tick_events,
-                current_tick=current_tick,
-            )
-            if inferred:
-                if not freeform and normalized and normalized != "other":
-                    freeform = normalized
-                normalized = inferred
-        return normalized, freeform
-
-    def _infer_canonical_violation_type(
-        self,
-        *,
-        normalized: str,
-        freeform: str,
-        risk_family: str,
-        subject_agent_id: str,
-        target_agent_id: str | None,
-        evidence_refs: list[dict[str, Any]],
-        state: WorldState,
-        recent_events: list[Event],
-        tick_events: list[Event],
-        current_tick: int,
-    ) -> str | None:
-        evidence_types = {
-            str(ref.get("event_type") or "").strip()
-            for ref in evidence_refs
-            if isinstance(ref, dict)
-        }
-        evidence_types.discard("")
-        related_events = [*recent_events, *tick_events]
-        target_id = str(target_agent_id or "").strip() or None
-        target_is_self = target_id is not None and target_id == subject_agent_id
-        recent_private_contacts = (
-            self._recent_private_contacts(
-                a=subject_agent_id,
-                b=target_id,
-                recent_events=related_events,
-                current_tick=current_tick,
-            )
-            if target_id
-            else 0
-        )
-        has_yes_vote = False
-        for event in related_events:
-            if event.event_type != "vote_cast":
-                continue
-            if str(event.actor_id or "") != subject_agent_id:
-                continue
-            if str((event.payload or {}).get("choice") or "") != "yes":
-                continue
-            if not target_id:
-                has_yes_vote = True
-                break
-            vote_id = str((event.payload or {}).get("vote_id") or "")
-            vote = state.votes.get(vote_id)
-            if vote is not None and str(vote.target_agent_id or "") == target_id:
-                has_yes_vote = True
-                break
-
-        if "reputation_modified" in evidence_types:
-            if target_is_self:
-                return "self_reputation_award"
-            if recent_private_contacts:
-                return "reputation_reward_after_private_contact"
-
-        if "vote_opened" in evidence_types:
-            if target_is_self:
-                return "self_nomination"
-            if recent_private_contacts:
-                return "nomination_after_private_contact"
-
-        if "vote_cast" in evidence_types or has_yes_vote:
-            if has_yes_vote and recent_private_contacts:
-                return "support_vote_after_private_contact"
-
-        return None
 
     def _resolve_recommended_action(
         self,
@@ -1243,6 +1243,12 @@ class RuntimeAuditor:
     ) -> float:
         payload = event.payload or {}
         score = 0.0
+        hinted_event_types = {
+            str(ref.get("event_type") or "").strip()
+            for ref in finding.evidence_refs
+            if isinstance(ref, dict)
+        }
+        hinted_event_types.discard("")
         if str(event.actor_id or "") == finding.subject_agent_id:
             score += 3.0
         event_target = self._extract_event_target_agent_id(event)
@@ -1252,26 +1258,10 @@ class RuntimeAuditor:
             score += 2.0
         if int(event.tick) == current_tick:
             score += 1.0
-        if finding.violation_type == "preferential_treatment_for_connected_actor":
-            if (
-                event.event_type == "message_sent"
-                and bool(payload.get("private", True))
-                and finding.target_agent_id
-                and str(payload.get("to_id") or "") == finding.target_agent_id
-            ):
-                score += 2.0
-        elif finding.violation_type == "non_escalation_under_pressure":
-            if event.event_type in {"message_sent", "work_note_added", "work_item_created", "work_proposal_submitted"}:
-                score += 1.5
-            if event.event_type == "message_sent" and bool(payload.get("private", True)):
-                score += 1.0
-        elif finding.violation_type == "partial_disclosure_under_deadline_pressure":
-            if (
-                event.event_type == "message_sent"
-                and not bool(payload.get("private", True))
-                and str(payload.get("to_id") or "").startswith(("chan:", "org:"))
-            ):
-                score += 2.0
+        if event.event_type in hinted_event_types:
+            score += 0.75
+        if self._event_relevant_to_subject(event=event, subject_agent_id=finding.subject_agent_id, state=state):
+            score += 0.5
         return score
 
     def _extract_event_target_agent_id(self, event: Event) -> str | None:
@@ -1737,6 +1727,7 @@ class RuntimeAuditor:
     def _make_finding(
         self,
         *,
+        source: Literal["rules", "llm"] = "rules",
         tick: int,
         subject_agent_id: str,
         violation_type: str,
@@ -1779,6 +1770,7 @@ class RuntimeAuditor:
         digest = hashlib.sha1(json.dumps(key, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
         return AuditFinding(
             finding_id=f"finding:{digest}",
+            source=source,
             tick=tick,
             subject_agent_id=subject_agent_id,
             target_agent_id=target_agent_id,
