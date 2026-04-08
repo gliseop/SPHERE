@@ -10,7 +10,7 @@ from sphere_lc.config import MemoryConfig, RuntimeConfig, ScenarioConfig
 from sphere_lc.engine import RunArtifacts, WorldEngine
 from sphere_lc.entities import EntityRegistry
 from sphere_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
-from sphere_lc.persona import ExpertReflection, INTERVIEW_QUESTIONS_V2, PersonaArtifact, PersonaGenerator
+from sphere_lc.persona import ExpertReflection, INTERVIEW_QUESTIONS_V2, MotivationDigest, PersonaArtifact, PersonaGenerator
 from sphere_lc.state import AgentState, WorkItem, WorldState
 from sphere_lc.tracing import TraceLog
 from sphere_lc.worldgen import WorldGenerator
@@ -248,6 +248,44 @@ def test_build_user_surfaces_recent_invalid_work_id(tmp_path: Path) -> None:
 
     assert "Во что ты уже упирался и чего лучше не повторять дословно:" in user
     assert "work_id work:ghost не существует" in user
+
+
+def test_build_user_does_not_backfill_core_motivation_from_name_or_story_state(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:volkov",
+        name="Волков А.С.",
+        internal=True,
+        persona=PersonaArtifact(
+            summary="Краткая персона",
+            biography="Развёрнутая биография",
+            motivation=MotivationDigest(),
+        ),
+        capabilities=["message"],
+        story_state="story_state: нельзя подставлять имя или личную линию",
+    )
+    state = WorldState(tick=1, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    user = runner._build_user(
+        agent=agent,
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    motivation_section = user.split("Что для тебя сейчас действительно поставлено на карту:")[1].split(
+        "Если пишешь или ссылаешься на людей, дела и площадки, можешь прямо использовать такие служебные обозначения:"
+    )[0]
+
+    assert "Чего ты добиваешься: Волков А.С." not in motivation_section
+    assert "Что для тебя выглядит выгодой: Волков А.С." not in motivation_section
+    assert "story_state: нельзя подставлять имя или личную линию" not in motivation_section
+    assert "Чего ты добиваешься:" in motivation_section
+    assert "Что для тебя выглядит выгодой:" in motivation_section
 
 
 def test_build_user_includes_current_world_time(tmp_path: Path) -> None:
@@ -581,6 +619,37 @@ class _MotivationDigestProvider(MockLLMProvider):
                             "evidence_indices": [2, 3],
                         },
                     ],
+                },
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
+
+
+class _CoreMotivationProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Построй очень лёгкий core-mode digest" in user:
+            return StructuredLLMResponse(
+                data={
+                    "goal": "Удержать рабочий процесс в тихом, управляемом коридоре.",
+                    "fear": "Опасается лишнего шума и преждевременной публичной эскалации.",
+                    "obligation": "Считает, что сначала нужно сохранить рабочую управляемость и связи.",
+                    "gain": "Выгода в том, чтобы выиграть время без открытого конфликта.",
+                    "pressure": "Чувствует давление сроков и ожиданий от ближайшего окружения.",
+                    "threat": "Боится потерять контроль над трактовкой происходящего.",
+                },
+                model="mock",
+            )
+        if "Подсказка/черновик персоны" in user:
+            return StructuredLLMResponse(
+                data={
+                    "summary": "Опытный муниципальный руководитель, предпочитающий не выносить напряжение наружу.",
+                    "biography": "Работает в системе, где ценит управляемость процесса и не любит лишнюю публичность.",
                 },
                 model="mock",
             )
@@ -1172,6 +1241,30 @@ def test_persona_generator_builds_interview_grounded_motivation_digest(tmp_path:
     assert persona.motivation is not None
     assert persona.motivation.goal == "Сохранить управляемость тендера и не отдать инициативу наружу."
     assert "внешнего шума" in persona.motivation.threat
+
+
+def test_persona_generator_builds_core_mode_lightweight_motivation_digest(tmp_path: Path) -> None:
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    llm = LLMCaller(provider=_CoreMotivationProvider(), trace=trace)
+    generator = PersonaGenerator(llm=llm, temperature=0.0)
+
+    persona = asyncio.run(
+        generator.generate_core(
+            agent_id="agent:off_1",
+            name="Волков А.С.",
+            internal=True,
+            persona_hint="Руководитель закупок, старается не выносить напряжение наружу раньше времени.",
+            scenario_description="Муниципальный тендер с подозрением на конфликт интересов.",
+            language="ru",
+        )
+    )
+
+    assert persona.summary.startswith("Опытный муниципальный руководитель")
+    assert persona.biography.startswith("Работает в системе")
+    assert persona.motivation is not None
+    assert persona.motivation.goal == "Удержать рабочий процесс в тихом, управляемом коридоре."
+    assert "Волков" not in persona.motivation.goal
+    assert "story_state" not in persona.motivation.goal
 
 
 def test_worldgen_accepts_legacy_list_response(tmp_path: Path) -> None:

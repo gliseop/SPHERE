@@ -114,6 +114,7 @@ def _normalize_perform_op_type(op_type: str) -> str:
         "record_narrative_action": "narrative_action",
         "add_narrative_action": "narrative_action",
         "UpsertInformalLinkOp": "upsert_informal_link",
+        "information_signal": "add_information_signal",
         "AddInformationSignalOp": "add_information_signal",
         "UpsertPendingInteractionOp": "upsert_pending_interaction",
         "create_pending_interaction": "upsert_pending_interaction",
@@ -149,6 +150,7 @@ class _PerformOpModel(BaseModel):
 
     op_type: str
     args: dict[str, Any]
+    source: str = "ops"
 
 
 class _PerformArbiterOutput(BaseModel):
@@ -190,6 +192,8 @@ def _normalize_perform_op_args(op_type: str, args: dict[str, Any]) -> dict[str, 
         _move("private", "private", "is_private")
         if "private" not in normalized and "channel_id" in normalized:
             normalized["private"] = False
+    elif op_type in {"add_work_note", "submit_work_proposal"}:
+        _move("text", "text", "note", "note_text", "content", "description", "summary")
     elif op_type == "upsert_pending_interaction":
         _move("target_agent_id", "target_agent_id", "responder_agent_id", "recipient_agent_id")
         _move("source_agent_id", "source_agent_id", "initiator_agent_id", "initiator_id", "actor_id")
@@ -214,7 +218,10 @@ def _normalize_perform_op_args(op_type: str, args: dict[str, Any]) -> dict[str, 
         "channel_id",
         "message",
         "content",
+        "note",
+        "note_text",
         "description" if op_type != "narrative_action" and op_type != "add_information_signal" and op_type != "create_artifact" else "",
+        "summary" if op_type in {"add_work_note", "submit_work_proposal"} else "",
         "is_private",
         "params",
     ):
@@ -234,39 +241,72 @@ def _normalize_perform_llm_output(raw: Any) -> dict[str, Any]:
         "ops": [],
     }
 
-    raw_ops: list[Any] = []
+    normalized_ops: list[dict[str, Any]] = []
     ops_value = raw.get("ops")
     if isinstance(ops_value, list):
-        raw_ops.extend(ops_value)
+        for item in ops_value:
+            if not isinstance(item, dict):
+                continue
+            raw_type = str(item.get("op_type") or item.get("type") or "").strip()
+            op_type = _normalize_perform_op_type(raw_type)
+            if not op_type:
+                continue
+            raw_args = item.get("args")
+            if isinstance(raw_args, dict):
+                args = dict(raw_args)
+            elif isinstance(item.get("params"), dict):
+                args = dict(item.get("params") or {})
+            else:
+                args = {
+                    key: value
+                    for key, value in item.items()
+                    if key not in {"op_type", "type", "args", "params"}
+                }
+            raw_target_id = str(item.get("target_id") or "").strip()
+            if op_type == "send_message" and raw_target_id and "to_id" not in args:
+                args["to_id"] = raw_target_id
+            if op_type in {"add_work_note", "submit_work_proposal"} and raw_target_id and "work_id" not in args:
+                args["work_id"] = raw_target_id
+            normalized_ops.append(
+                {
+                    "op_type": op_type,
+                    "args": _normalize_perform_op_args(op_type, args),
+                    "source": "ops",
+                }
+            )
+
     side_effects_value = raw.get("side_effects")
     if isinstance(side_effects_value, list):
-        raw_ops.extend(side_effects_value)
-
-    normalized_ops: list[dict[str, Any]] = []
-    for item in raw_ops:
-        if not isinstance(item, dict):
-            continue
-        raw_type = str(item.get("op_type") or item.get("type") or "").strip()
-        op_type = _normalize_perform_op_type(raw_type)
-        if not op_type:
-            continue
-        raw_args = item.get("args")
-        if isinstance(raw_args, dict):
-            args = dict(raw_args)
-        elif isinstance(item.get("params"), dict):
-            args = dict(item.get("params") or {})
-        else:
-            args = {
-                key: value
-                for key, value in item.items()
-                if key not in {"op_type", "type", "args", "params"}
-            }
-        normalized_ops.append(
-            {
-                "op_type": op_type,
-                "args": _normalize_perform_op_args(op_type, args),
-            }
-        )
+        for item in side_effects_value:
+            if not isinstance(item, dict):
+                continue
+            raw_type = str(item.get("op_type") or item.get("type") or "").strip()
+            op_type = _normalize_perform_op_type(raw_type)
+            if not op_type:
+                continue
+            raw_args = item.get("args")
+            if isinstance(raw_args, dict):
+                args = dict(raw_args)
+            elif isinstance(item.get("params"), dict):
+                args = dict(item.get("params") or {})
+            else:
+                args = {
+                    key: value
+                    for key, value in item.items()
+                    if key not in {"op_type", "type", "args", "params"}
+                }
+            raw_target_id = str(item.get("target_id") or "").strip()
+            if op_type == "send_message" and raw_target_id and "to_id" not in args:
+                args["to_id"] = raw_target_id
+            if op_type in {"add_work_note", "submit_work_proposal"} and raw_target_id and "work_id" not in args:
+                args["work_id"] = raw_target_id
+            normalized_ops.append(
+                {
+                    "op_type": op_type,
+                    "args": _normalize_perform_op_args(op_type, args),
+                    "source": "side_effect",
+                }
+            )
 
     normalized["ops"] = normalized_ops
     return normalized
@@ -1247,6 +1287,7 @@ class Arbiter:
 
         ops: list[StateOp] = []
         for item in decision.ops:
+            is_side_effect = str(getattr(item, "source", "") or "").strip().casefold() == "side_effect"
             try:
                 parsed_ops = self._op_from_llm(
                     agent_id=agent_id,
@@ -1256,6 +1297,8 @@ class Arbiter:
                     id_alloc=allocator,
                 )
             except Exception as exc:
+                if is_side_effect and ops:
+                    continue
                 return ActionResult(
                     action_index,
                     False,
@@ -1265,6 +1308,8 @@ class Arbiter:
             for op in parsed_ops:
                 missing = self._missing_capability_for_op(op, agent_caps)
                 if missing:
+                    if is_side_effect and ops:
+                        continue
                     return ActionResult(action_index, False, f"missing_capability:{missing}", []), work_state, allocator
                 op = await self._ground_documentary_op(
                     state=work_state,
@@ -1276,6 +1321,8 @@ class Arbiter:
                 try:
                     op.apply(work_state)
                 except Exception as exc:
+                    if is_side_effect and ops:
+                        continue
                     return ActionResult(
                         action_index,
                         False,
@@ -1708,7 +1755,7 @@ class Arbiter:
                     link_type=link_type,
                     strength_delta=strength_delta,
                     visibility=str(args.get("visibility") or "latent") or "latent",
-                    source=str(args.get("source") or "arbiter_side_effect"),
+                    source=str(args.get("source") or "").strip() or agent_id,
                 )
             ]
 

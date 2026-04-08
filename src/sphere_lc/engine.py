@@ -88,9 +88,12 @@ from .utils import (
 )
 from .worldgen import (
     AgentDailyContext,
+    ArtifactDependencyIssue,
     EnvironmentUpdates,
     SceneHook,
     SpawnSuggestion,
+    collect_artifact_dependency_issues,
+    normalize_worldgen_artifact_id,
     WorldGenerator,
     WorldgenOutput,
 )
@@ -605,6 +608,20 @@ class WorldEngine:
                 )
                 if consequence_events:
                     tick_events.extend(consequence_events)
+                artifact_dependency_issues = collect_artifact_dependency_issues(
+                    known_entity_ids=set(state.registry.list_ids()),
+                    artifact_creations=generated.artifact_creations,
+                )
+                if artifact_dependency_issues:
+                    dependency_events = self._emit_worldgen_artifact_dependency_issues(
+                        issues=artifact_dependency_issues,
+                        tick=state.tick,
+                    )
+                    event_log.extend(dependency_events)
+                    tick_events.extend(dependency_events)
+                blocked_artifact_ids = {
+                    issue.artifact_id for issue in artifact_dependency_issues if issue.artifact_id
+                }
                 artifact_events = self._apply_worldgen_artifact_changes(
                     state=state,
                     creations=[
@@ -621,6 +638,7 @@ class WorldEngine:
                             "tags": list(item.tags or []),
                         }
                         for item in generated.artifact_creations
+                        if normalize_worldgen_artifact_id(item.artifact_id) not in blocked_artifact_ids
                     ],
                     updates=[
                         {
@@ -2389,23 +2407,8 @@ class WorldEngine:
         ops: list[StateOp] = []
         existing_ids = set(state.registry.list_ids()) | set(state.artifacts.keys())
 
-        def _normalize_worldgen_artifact_id(raw_id: Any) -> str:
-            artifact_id = str(raw_id or "").strip()
-            if not artifact_id:
-                return ""
-            if artifact_id.startswith("artifact:"):
-                artifact_id = f"art:{artifact_id.split(':', 1)[1]}"
-            try:
-                parsed = parse_typed_id(artifact_id)
-            except ValueError:
-                slug = artifact_id.split(":", 1)[1] if ":" in artifact_id else artifact_id
-                return make_id(EntityKind.ARTIFACT, normalize_slug(slug, fallback="artifact"))
-            if parsed.kind == EntityKind.ARTIFACT:
-                return artifact_id
-            return make_id(EntityKind.ARTIFACT, normalize_slug(parsed.slug, fallback="artifact"))
-
         for item in creations:
-            artifact_id = _normalize_worldgen_artifact_id(item.get("artifact_id"))
+            artifact_id = normalize_worldgen_artifact_id(item.get("artifact_id"))
             artifact_type = str(item.get("artifact_type") or "").strip()
             title = str(item.get("title") or "").strip()
             if not artifact_id or not artifact_type or not title or artifact_id in existing_ids:
@@ -2428,7 +2431,7 @@ class WorldEngine:
             )
 
         for item in updates:
-            artifact_id = _normalize_worldgen_artifact_id(item.get("artifact_id"))
+            artifact_id = normalize_worldgen_artifact_id(item.get("artifact_id"))
             if not artifact_id or artifact_id not in state.artifacts:
                 continue
             ops.append(
@@ -2447,6 +2450,43 @@ class WorldEngine:
                 )
             )
         return self._apply_ops(state=state, ops=ops, event_log=event_log, origin="worldgen_artifact")
+
+
+    def _emit_worldgen_artifact_dependency_issues(
+        self,
+        *,
+        issues: list[ArtifactDependencyIssue],
+        tick: int,
+    ) -> list[Event]:
+        """Сигнализировать о том, что worldgen ссылается на несуществующие сущности."""
+
+        events: list[Event] = []
+        for issue in issues:
+            missing_dependencies = [
+                dependency_id
+                for dependency_id in [issue.missing_owner_org_id, issue.missing_zone_id]
+                if dependency_id is not None
+            ]
+            if not missing_dependencies:
+                continue
+            payload: dict[str, Any] = {
+                "artifact_id": issue.artifact_id,
+                "missing_dependencies": missing_dependencies,
+            }
+            if issue.missing_owner_org_id is not None:
+                payload["missing_owner_org_id"] = issue.missing_owner_org_id
+            if issue.missing_zone_id is not None:
+                payload["missing_zone_id"] = issue.missing_zone_id
+            events.append(
+                Event(
+                    tick=tick,
+                    event_type="worldgen_artifact_dependency_missing",
+                    actor_id=None,
+                    payload=payload,
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            )
+        return events
 
 
     def _apply_environment_material_consequences(

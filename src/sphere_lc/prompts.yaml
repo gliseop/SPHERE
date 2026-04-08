@@ -400,6 +400,38 @@ persona:
       {{reflections_excerpt}}
 
       Построй короткий мотивационный digest, который можно безопасно вставлять в prompt на каждом тике без потери интервьюальной глубины.
+    core:
+      system: |-
+        Ты собираешь лёгкий мотивационный digest для SPHERE-LC core-mode.
+        Источник истины: краткая биография, summary и подсказка по персонажу.
+        Не подставляй имя, должность, story_state или служебные коды в goal или gain.
+        Верни шесть коротких текстовых полей:
+        - goal
+        - fear
+        - obligation
+        - gain
+        - pressure
+        - threat
+        Каждое поле должно быть:
+        - на языке {{language_repr}};
+        - в 1-2 коротких предложениях;
+        - достаточно лёгким, чтобы его можно было безопасно вставлять в prompt на каждом тике.
+        Не используй числовые шкалы и не возвращай списки keywords.
+        Ответ: строго JSON по схеме.
+      user: |-
+        Persona summary:
+        {{summary}}
+
+        Biography excerpt:
+        {{biography_excerpt}}
+
+        Persona hint:
+        {{persona_hint}}
+
+        Scenario:
+        {{scenario_description}}
+
+        Построй очень лёгкий core-mode digest без опоры на имя, должность или story_state.
   full:
     system: |-
       Ты — генератор персоны агента для симуляции организационных процессов (SPHERE-LC).

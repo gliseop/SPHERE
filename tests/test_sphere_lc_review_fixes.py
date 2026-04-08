@@ -351,7 +351,7 @@ def test_arbiter_rejects_private_message_across_known_zones(tmp_path: Path) -> N
 
 
 def test_narrative_action_with_zone_updates_actor_location() -> None:
-    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state = _mk_state(off_1_caps=["message", "work"], off_2_caps=["message"])
     state.agents["agent:off_1"].zone_id = "zone:left"
     state.registry.register(
         EntityRecord(entity_id="zone:left", kind=EntityKind.ZONE, created_by=None, created_tick=0)
@@ -375,7 +375,7 @@ def test_narrative_action_with_zone_updates_actor_location() -> None:
 
 
 def test_arbiter_allows_private_contact_after_same_turn_relocation(tmp_path: Path) -> None:
-    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state = _mk_state(off_1_caps=["message", "work"], off_2_caps=["message"])
     state.agents["agent:off_1"].zone_id = "zone:left"
     state.agents["agent:off_2"].zone_id = "zone:right"
     state.registry.register(
@@ -437,7 +437,7 @@ def test_arbiter_allows_private_contact_after_same_turn_relocation(tmp_path: Pat
 
 
 def test_arbiter_rejects_public_message_to_non_channel_target(tmp_path: Path) -> None:
-    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state = _mk_state(off_1_caps=["message", "work"], off_2_caps=["message"])
     arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
 
     act = SendMessageAction(
@@ -989,20 +989,45 @@ def test_arbiter_normalizes_legacy_perform_payload_shape(tmp_path: Path) -> None
                         "reason": None,
                         "ops": [
                             {
-                                "op_type": "send_message",
+                                "op_type": "add_work_note",
+                                "target_id": "work:case",
                                 "params": {
-                                    "from_agent_id": "agent:off_1",
-                                    "to_agent_id": "agent:off_2",
-                                    "content": "Нужно коротко сверить позицию по делу.",
+                                    "note": "Краткая фиксация по делу.",
+                                    "author_id": "",
+                                },
+                            },
+                            {
+                                "op_type": "submit_work_proposal",
+                                "target_id": "work:case",
+                                "args": {
+                                    "content": "Предлагаю учесть дефекты в графике.",
+                                    "author_id": "",
+                                },
+                            },
+                            {
+                                "op_type": "send_message",
+                                "target_id": "agent:off_2",
+                                "args": {
+                                    "message": "Нужно коротко сверить позицию по делу.",
                                     "is_private": True,
                                 },
-                            }
+                            },
                         ],
                         "side_effects": [
                             {
-                                "op_type": "add_information_signal",
+                                "op_type": "information_signal",
                                 "params": {
                                     "description": "В отделе назревает внутреннее обсуждение спорного вопроса."
+                                },
+                            },
+                            {
+                                "op_type": "upsert_informal_link",
+                                "args": {
+                                    "agent_a_id": "agent:off_1",
+                                    "agent_b_id": "agent:off_2",
+                                    "link_type": "coordination",
+                                    "strength_delta": 0.1,
+                                    "source": "",
                                 },
                             }
                         ],
@@ -1011,7 +1036,21 @@ def test_arbiter_normalizes_legacy_perform_payload_shape(tmp_path: Path) -> None
                 )
             return super().generate_structured(system, user, schema, temperature)
 
-    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state = _mk_state(off_1_caps=["message", "work"], off_2_caps=["message"])
+    state.work_items["work:case"] = WorkItem(
+        work_id="work:case",
+        work_type="case",
+        title="Case",
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="work:case",
+            kind=EntityKind.WORK_ITEM,
+            created_by=None,
+            created_tick=0,
+            meta={"work_type": "case", "title": "Case"},
+        )
+    )
     arbiter = _mk_arbiter(tmp_path, mock=_LegacyPerformShapeProvider())
     act = PerformAction(
         type=ActionType.PERFORM,
@@ -1024,8 +1063,84 @@ def test_arbiter_normalizes_legacy_perform_payload_shape(tmp_path: Path) -> None
 
     assert res[0].approved is True
     op_names = [op.__class__.__name__ for op in res[0].ops]
+    assert "AddWorkNoteOp" in op_names
+    assert "SubmitWorkProposalOp" in op_names
     assert "SendMessageOp" in op_names
     assert "AddInformationSignalOp" in op_names
+    assert "UpsertInformalLinkOp" in op_names
+
+    note_op = next(op for op in res[0].ops if op.__class__.__name__ == "AddWorkNoteOp")
+    proposal_op = next(op for op in res[0].ops if op.__class__.__name__ == "SubmitWorkProposalOp")
+    link_op = next(op for op in res[0].ops if op.__class__.__name__ == "UpsertInformalLinkOp")
+
+    assert note_op.text == "Краткая фиксация по делу."
+    assert proposal_op.text == "Предлагаю учесть дефекты в графике."
+    assert link_op.source == "agent:off_1"
+
+
+def test_arbiter_keeps_main_step_when_side_effect_is_invalid(tmp_path: Path) -> None:
+    class _SideEffectFailureProvider(MockLLMProvider):
+        def generate_structured(
+            self,
+            system: str,
+            user: str,
+            schema: dict,
+            temperature: float = 0.0,
+        ):
+            if "- actor_id: agent:off_1" in user:
+                return StructuredLLMResponse(
+                    data={
+                        "approved": True,
+                        "reason": "ok",
+                        "ops": [
+                            {
+                                "op_type": "add_work_note",
+                                "target_id": "work:case",
+                                "args": {"note_text": "Главная заметка остаётся валидной."},
+                            }
+                        ],
+                        "side_effects": [
+                            {
+                                "op_type": "send_message",
+                                "args": {
+                                    "text": "Это побочный эффект без явного адресата.",
+                                    "private": True,
+                                },
+                            }
+                        ],
+                    },
+                    model="mock",
+                )
+            return super().generate_structured(system, user, schema, temperature)
+
+    state = _mk_state(off_1_caps=["message", "work"], off_2_caps=["message"])
+    state.work_items["work:case"] = WorkItem(
+        work_id="work:case",
+        work_type="case",
+        title="Case",
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="work:case",
+            kind=EntityKind.WORK_ITEM,
+            created_by=None,
+            created_tick=0,
+            meta={"work_type": "case", "title": "Case"},
+        )
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=_SideEffectFailureProvider())
+    act = PerformAction(
+        type=ActionType.PERFORM,
+        description="Добавлю в дело короткую заметку и отдельно отмечу общий сигнал.",
+        target_id="",
+        justification="",
+    )
+
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert res[0].approved is True
+    assert [op.__class__.__name__ for op in res[0].ops] == ["AddWorkNoteOp"]
+    assert res[0].ops[0].text == "Главная заметка остаётся валидной."
 
 
 def test_arbiter_normalizes_real_model_alias_op_types() -> None:
@@ -1033,6 +1148,7 @@ def test_arbiter_normalizes_real_model_alias_op_types() -> None:
     assert _normalize_perform_op_type("add_narrative_action") == "narrative_action"
     assert _normalize_perform_op_type("create_pending_interaction") == "upsert_pending_interaction"
     assert _normalize_perform_op_type("record_narrative_action_op") == "narrative_action"
+    assert _normalize_perform_op_type("information_signal") == "add_information_signal"
 
 
 def test_arbiter_rejects_substantive_proposal_when_retry_still_empty(tmp_path: Path) -> None:

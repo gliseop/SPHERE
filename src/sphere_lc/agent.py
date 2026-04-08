@@ -59,26 +59,12 @@ def _first_sentence(text: str, *, fallback: str = "") -> str:
 
 
 def _motivation_block(agent: AgentState, visible_events: list[Event]) -> str:
-    summary = _first_sentence(agent.persona.summary, fallback="Сохранять контроль над ситуацией и действовать в своих интересах.")
-    biography_hint = _first_sentence(agent.persona.biography, fallback=summary)
     motivation = agent.persona.motivation
 
-    goal_text = _first_sentence(
-        motivation.goal if motivation is not None else "",
-        fallback=summary,
-    )
-    obligation_text = _first_sentence(
-        motivation.obligation if motivation is not None else "",
-        fallback=(agent.title if agent.internal else "Сохранять внешние связи и договорённости."),
-    )
-    gain_text = _first_sentence(
-        motivation.gain if motivation is not None else "",
-        fallback=biography_hint or summary,
-    )
-    pressure_text = _first_sentence(
-        motivation.pressure if motivation is not None else "",
-        fallback=_first_sentence(agent.story_state, fallback=summary),
-    )
+    goal_text = _first_sentence(motivation.goal if motivation is not None else "")
+    obligation_text = _first_sentence(motivation.obligation if motivation is not None else "")
+    gain_text = _first_sentence(motivation.gain if motivation is not None else "")
+    pressure_text = _first_sentence(motivation.pressure if motivation is not None else "")
 
     threat_text = ""
     for ev in reversed(visible_events[-20:]):
@@ -94,14 +80,8 @@ def _motivation_block(agent: AgentState, visible_events: list[Event]) -> str:
             if threat_text:
                 break
 
-    fear_text = _first_sentence(
-        motivation.fear if motivation is not None else "",
-        fallback=threat_text or "Потерять влияние, доверие или контроль над развитием ситуации.",
-    )
-    resolved_threat = threat_text or _first_sentence(
-        motivation.threat if motivation is not None else "",
-        fallback="ошибка в выборе, потеря репутации, внешний шум или чужая инициатива",
-    )
+    fear_text = _first_sentence(motivation.fear if motivation is not None else "") or threat_text
+    resolved_threat = threat_text or _first_sentence(motivation.threat if motivation is not None else "")
     return render_prompt(
         "agent.blocks.motivation",
         goal_text=goal_text,

@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .events import Event
+from .ids import EntityKind, make_id, normalize_slug, parse_typed_id
 from .ids import INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 from .llm import LLMCaller
 from .prompts import render_prompt
@@ -299,7 +300,12 @@ class ArtifactUpdate:
 
 @dataclass(slots=True)
 class WorldgenOutput:
-    """Нормализованный результат worldgen."""
+    """Нормализованный результат worldgen.
+
+    Контракт: `entity_creations` должны материализоваться до применения
+    `artifact_creations`, чтобы внешние `owner_org_id` / `zone_id` уже
+    существовали в реестре или были созданы в этом же проходе worldgen.
+    """
 
     events: list[Event]
     spawns: list[SpawnSuggestion]
@@ -309,6 +315,74 @@ class WorldgenOutput:
     entity_creations: list[EntityCreation] = field(default_factory=list)
     artifact_creations: list[ArtifactCreation] = field(default_factory=list)
     artifact_updates: list[ArtifactUpdate] = field(default_factory=list)
+
+
+def normalize_worldgen_artifact_id(raw_id: Any) -> str:
+    """Привести worldgen artifact ID к каноническому `art:*` виду."""
+
+    artifact_id = str(raw_id or "").strip()
+    if not artifact_id:
+        return ""
+    if artifact_id.startswith("artifact:"):
+        artifact_id = f"art:{artifact_id.split(':', 1)[1]}"
+    try:
+        parsed = parse_typed_id(artifact_id)
+    except ValueError:
+        slug = artifact_id.split(":", 1)[1] if ":" in artifact_id else artifact_id
+        return make_id(EntityKind.ARTIFACT, normalize_slug(slug, fallback="artifact"))
+    if parsed.kind == EntityKind.ARTIFACT:
+        return artifact_id
+    return make_id(EntityKind.ARTIFACT, normalize_slug(parsed.slug, fallback="artifact"))
+
+
+@dataclass(slots=True)
+class ArtifactDependencyIssue:
+    """Диагностическая запись о неразрешённой зависимости артефакта."""
+
+    artifact_id: str
+    missing_owner_org_id: str | None = None
+    missing_zone_id: str | None = None
+
+
+def collect_artifact_dependency_issues(
+    *,
+    known_entity_ids: set[str],
+    artifact_creations: list[ArtifactCreation],
+) -> list[ArtifactDependencyIssue]:
+    """Найти артефакты, которые ссылаются на отсутствующие внешние сущности.
+
+    Артефакт допускается только тогда, когда его `owner_org_id` и `zone_id`
+    уже существуют в `known_entity_ids`. Это позволяет worldgen сначала
+    материализовать внешнюю инфраструктуру через `entity_creations`, а уже
+    потом опираться на неё в документах.
+    """
+
+    available_entity_ids = {entity_id.strip() for entity_id in known_entity_ids if entity_id.strip()}
+    issues: list[ArtifactDependencyIssue] = []
+    for item in artifact_creations:
+        artifact_id = normalize_worldgen_artifact_id(item.artifact_id)
+        if not artifact_id:
+            continue
+        missing_owner_org_id = None
+        if item.owner_org_id is not None:
+            owner_org_id = item.owner_org_id.strip()
+            if owner_org_id and owner_org_id not in available_entity_ids:
+                missing_owner_org_id = owner_org_id
+        missing_zone_id = None
+        if item.zone_id is not None:
+            zone_id = item.zone_id.strip()
+            if zone_id and zone_id not in available_entity_ids:
+                missing_zone_id = zone_id
+        if missing_owner_org_id is None and missing_zone_id is None:
+            continue
+        issues.append(
+            ArtifactDependencyIssue(
+                artifact_id=artifact_id,
+                missing_owner_org_id=missing_owner_org_id,
+                missing_zone_id=missing_zone_id,
+            )
+        )
+    return issues
 
 
 def _worldgen_schema(

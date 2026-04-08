@@ -521,7 +521,7 @@ class PersonaGenerator:
         scenario_description: str,
         language: str,
     ) -> PersonaArtifact:
-        """Сгенерировать только summary+biography с фолбэками."""
+        """Сгенерировать core-персону с лёгким мотивационным digest."""
         artifact: PersonaArtifact | None = None
         try:
             artifact = await self._generate_core(
@@ -538,10 +538,19 @@ class PersonaGenerator:
         summary = (artifact.summary if artifact else "").strip()
         biography = (artifact.biography if artifact else "").strip()
         if not summary:
-            summary = (persona_hint or name).strip()
+            summary = (persona_hint or "Сдержанный участник процесса, действующий в рамках своей роли.").strip()
         if not biography:
             biography = summary
-        return PersonaArtifact(summary=summary, biography=biography, interview=[])
+
+        motivation = await self._generate_core_motivation(
+            agent_id=agent_id,
+            language=language,
+            summary=summary,
+            biography_excerpt=biography[:1600].strip(),
+            persona_hint=persona_hint,
+            scenario_description=scenario_description,
+        )
+        return PersonaArtifact(summary=summary, biography=biography, interview=[], motivation=motivation)
 
     async def _generate_core(
         self,
@@ -793,6 +802,43 @@ class PersonaGenerator:
             pressure=head,
             threat="Ошибка в выборе, потеря репутации, внешний шум или чужая инициатива.",
         )
+
+    async def _generate_core_motivation(
+        self,
+        *,
+        agent_id: str,
+        language: str,
+        summary: str,
+        biography_excerpt: str,
+        persona_hint: str,
+        scenario_description: str,
+    ) -> MotivationDigest:
+        """Собрать лёгкий мотивационный digest для core-mode."""
+
+        system = render_prompt("persona.motivation.core.system", language_repr=repr(language))
+        user = render_prompt(
+            "persona.motivation.core.user",
+            summary=summary or "(пусто)",
+            biography_excerpt=biography_excerpt or "(пусто)",
+            persona_hint=persona_hint or "(пусто)",
+            scenario_description=scenario_description or "(пусто)",
+        )
+        try:
+            resp = await self.llm.generate_structured(
+                role="persona_motivation_core",
+                name=agent_id,
+                tick=0,
+                system=system,
+                user=user,
+                schema=_motivation_schema(),
+                temperature=self.temperature,
+            )
+            digest = MotivationDigest.model_validate(resp.data)
+            if digest.has_content():
+                return digest
+        except Exception:
+            pass
+        return MotivationDigest()
 
     async def generate(
         self,

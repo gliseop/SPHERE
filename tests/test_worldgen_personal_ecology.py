@@ -367,6 +367,42 @@ class _ExternalEntityWorldgenProvider(MockLLMProvider):
         return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
 
 
+class _MissingExternalDependencyWorldgenProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сделай следующий ход в этой ситуации." in user:
+            return StructuredLLMResponse(
+                data={"actions": [{"type": "noop", "justification": "idle"}]},
+                model="mock",
+            )
+        if '"phase": "post"' in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [],
+                    "spawns": [],
+                    "artifact_creations": [
+                        {
+                            "artifact_id": "art:oversight_note",
+                            "artifact_type": "memo",
+                            "title": "Записка о внешнем наблюдении",
+                            "summary": "Артефакт ссылается на ещё не материализованный owner_org_id.",
+                            "owner_org_id": "org:oversight",
+                            "zone_id": "zone:oversight",
+                            "visibility": "internal",
+                            "status": "draft",
+                        }
+                    ],
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
 class _ArtifactPrefixWorldgenProvider(MockLLMProvider):
     def generate_structured(
         self,
@@ -1441,12 +1477,64 @@ def test_post_worldgen_can_materialize_external_entities_before_artifacts(tmp_pa
         and event["payload"].get("origin") == "worldgen_artifact"
         for event in events
     )
+    assert not any(event["event_type"] == "worldgen_artifact_dependency_missing" for event in events)
     created_ids = {
         event["payload"].get("entity_id")
         for event in events
         if event["event_type"] == "entity_created"
     }
     assert {"org:media", "zone:public_sphere"} <= created_ids
+
+
+def test_post_worldgen_skips_artifacts_with_missing_external_owner_dependency(tmp_path: Path) -> None:
+    provider = _MissingExternalDependencyWorldgenProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "missing-external-owner-dependency",
+            "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_every_ticks": 1,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "Чиновник",
+                    "capabilities": ["message"],
+                    "org_id": "org:city_hall",
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    assert "art:oversight_note" not in state.artifacts
+    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    dependency_events = [
+        event
+        for event in events
+        if event["event_type"] == "worldgen_artifact_dependency_missing"
+    ]
+    assert dependency_events
+    assert dependency_events[0]["payload"]["missing_owner_org_id"] == "org:oversight"
+    assert dependency_events[0]["payload"]["missing_zone_id"] == "zone:oversight"
+    assert not any(
+        event["event_type"] == "arbiter_op_failed"
+        and event["payload"].get("origin") == "worldgen_artifact"
+        for event in events
+    )
 
 
 def test_post_worldgen_normalizes_legacy_artifact_prefix(tmp_path: Path) -> None:
