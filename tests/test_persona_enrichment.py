@@ -562,6 +562,7 @@ class _OptionalSpawnsWorldgenProvider(MockLLMProvider):
 class _CaptureWorldgenPromptProvider(MockLLMProvider):
     def __init__(self) -> None:
         super().__init__()
+        self.last_system = ""
         self.last_user = ""
 
     def generate_structured(
@@ -571,6 +572,7 @@ class _CaptureWorldgenPromptProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
+        self.last_system = system
         self.last_user = user
         return StructuredLLMResponse(data={"events": []}, model="mock")
 
@@ -1317,4 +1319,23 @@ def test_worldgen_prompt_includes_canonical_date(tmp_path: Path) -> None:
     )
 
     assert '"current_date": "2026-03-12"' in provider.last_user
+
+
+def test_worldgen_prompt_requires_entity_creations_before_external_artifacts(tmp_path: Path) -> None:
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    provider = _CaptureWorldgenPromptProvider()
+    llm = LLMCaller(provider=provider, trace=trace)
+    wg = WorldGenerator(llm=llm, temperature=0.0)
+
+    _ = asyncio.run(
+        wg.generate(
+            tick=4,
+            recent_events=[],
+            language="ru",
+            phase="post",
+            scenario_description="test external artifact dependency contract",
+        )
+    )
+
+    assert "Не возвращай artifact с `owner_org_id` или `zone_id`" in provider.last_system
 

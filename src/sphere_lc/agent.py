@@ -233,7 +233,40 @@ def _format_spatial_brief(*, agent: AgentState, state: WorldState) -> str:
         same_org = int(bool(agent.org_id and other.org_id == agent.org_id))
         return (-same_zone, -same_org, other.agent_id)
 
-    lines = [render_prompt("agent.blocks.spatial.header")]
+    lines: list[str] = []
+    current_zone = state.environment.zones.get(str(agent.zone_id or ""))
+    if agent.zone_id:
+        lines.append(render_prompt("agent.blocks.spatial.current_location_header"))
+        lines.append(
+            render_prompt(
+                "agent.blocks.spatial.current_location_line",
+                zone_id=agent.zone_id or "(не задано)",
+                zone_title=current_zone.title if current_zone is not None else "(без названия)",
+                org_suffix=f" | org={agent.org_id}" if agent.org_id else "",
+            )
+        )
+
+    same_zone_agents = [
+        other
+        for other in sorted(located_agents, key=_agent_rank)
+        if agent.zone_id and other.zone_id == agent.zone_id
+    ]
+    if same_zone_agents:
+        lines.append(render_prompt("agent.blocks.spatial.same_zone_header"))
+        for other in same_zone_agents[:4]:
+            zone = state.environment.zones.get(str(other.zone_id or ""))
+            lines.append(
+                render_prompt(
+                    "agent.blocks.spatial.same_zone_line",
+                    agent_id=other.agent_id,
+                    name=other.name,
+                    title_suffix=f", {other.title}" if other.internal and other.title else "",
+                    zone_id=other.zone_id or "(не задано)",
+                    zone_title=zone.title if zone is not None else "(без названия)",
+                )
+            )
+
+    lines.append(render_prompt("agent.blocks.spatial.header"))
     for other in sorted(located_agents, key=_agent_rank)[:8]:
         zone = state.environment.zones.get(str(other.zone_id or ""))
         lines.append(
@@ -259,7 +292,8 @@ def _format_spatial_brief(*, agent: AgentState, state: WorldState) -> str:
                     security_suffix=f", безопасность={zone.security_level}" if zone.security_level else "",
                 )
             )
-    if len(lines) == 1:
+    lines.append(render_prompt("agent.blocks.spatial.reachability_hint"))
+    if not lines:
         return ""
     return "\n".join(lines) + "\n\n"
 
@@ -449,8 +483,12 @@ def _format_proposal_examples(
         lines.append(render_prompt("agent.blocks.proposal_examples.bad_no_work"))
     if "dao" not in caps and not targeted_vote_id:
         lines.append(render_prompt("agent.blocks.proposal_examples.bad_no_dao"))
+    if peer_id:
+        lines.append(render_prompt("agent.blocks.proposal_examples.lookup_before_private", peer_id=peer_id))
+    lines.append(render_prompt("agent.blocks.proposal_examples.use_known_ids"))
     lines.append(render_prompt("agent.blocks.proposal_examples.move_before_private"))
     lines.append(render_prompt("agent.blocks.proposal_examples.observable_step"))
+    lines.append(render_prompt("agent.blocks.proposal_examples.bad_assume_location"))
     return "\n".join(lines) + "\n\n"
 
 

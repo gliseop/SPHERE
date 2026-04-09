@@ -924,9 +924,14 @@ def test_agent_prompt_includes_spatial_brief_for_other_agents(tmp_path: Path) ->
     )
 
     assert "Кого и где обычно можно сейчас найти:" in prompt
+    assert "Где ты сам сейчас находишься:" in prompt
+    assert "Ты сам сейчас: zone:city_hall [Здание мэрии] | org=org:city_hall" in prompt
     assert "agent:head (Head, начальник отдела): zone:boardroom [Кабинет начальника]" in prompt
     assert "Какие площадки у тебя вообще есть перед глазами:" in prompt
     assert "zone:boardroom: Кабинет начальника | org=org:city_hall" in prompt
+    assert "Если нужного человека нет в твоей зоне" in prompt
+    assert "Если не уверен, где сейчас agent:head" in prompt
+    assert "буду использовать именно этот `agent:*`, `chan:*`, `org:*` или `work:*`" in prompt
 
 
 def test_agent_prompt_examples_respect_missing_work_capability(tmp_path: Path) -> None:
