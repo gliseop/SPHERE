@@ -154,10 +154,12 @@ async def augment_fidelity_with_semantic_judge(
     events = _iter_jsonl(events_path)
     if not events:
         return summary
+    signal_counters = _semantic_signal_counters(events)
     payload = {
         "scenario_description": scenario_description,
         "events": events[-120:],
         "structural_metrics": summary.model_dump(mode="json"),
+        "semantic_signal_counters": signal_counters,
     }
     try:
         resp = await llm.generate_structured(
@@ -221,6 +223,34 @@ async def augment_fidelity_with_semantic_judge(
             "by_metric": metrics,
         }
     )
+
+
+def _semantic_signal_counters(events: list[dict[str, Any]]) -> dict[str, int]:
+    counters = {
+        "unknown_to_id_count": 0,
+        "ambiguous_to_id_count": 0,
+        "dependency_missing_count": 0,
+        "pending_expired_count": 0,
+        "observation_only_approved_count": 0,
+    }
+    for item in events:
+        event_type = str(item.get("event_type") or "")
+        payload = item.get("payload") or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        if event_type == "worldgen_artifact_dependency_missing":
+            counters["dependency_missing_count"] += 1
+        elif event_type == "pending_interaction_expired":
+            counters["pending_expired_count"] += 1
+        elif event_type == "arbiter_approved" and str(payload.get("reason") or "").strip() == "observation_only":
+            counters["observation_only_approved_count"] += 1
+        elif event_type == "arbiter_rejected":
+            reason = str(payload.get("reason") or "")
+            if "unknown to_id" in reason:
+                counters["unknown_to_id_count"] += 1
+            if "ambiguous_to_id" in reason:
+                counters["ambiguous_to_id_count"] += 1
+    return counters
 
 
 def save_fidelity(summary: FidelitySummary, path: Path) -> None:

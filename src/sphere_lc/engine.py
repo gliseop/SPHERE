@@ -612,16 +612,62 @@ class WorldEngine:
                     known_entity_ids=set(state.registry.list_ids()),
                     artifact_creations=generated.artifact_creations,
                 )
+                repair_result = None
                 if artifact_dependency_issues:
+                    repair_result = await worldgen.repair_artifact_dependencies(
+                        tick=state.tick,
+                        language=self.cfg.runtime.language,
+                        scenario_description=self.cfg.description,
+                        state_snapshot=self._build_worldgen_state_snapshot(state=state),
+                        issues=artifact_dependency_issues,
+                        artifact_creations=generated.artifact_creations,
+                    )
+                    if repair_result.entity_creations:
+                        repaired_entity_events = self._apply_worldgen_entity_changes(
+                            state=state,
+                            creations=[
+                                {
+                                    "entity_id": item.entity_id,
+                                    "kind": item.kind,
+                                    "title": item.title,
+                                    "description": item.description,
+                                    "zone_type": item.zone_type,
+                                    "primary_org_id": item.primary_org_id,
+                                    "owner_org_id": item.owner_org_id,
+                                    "unit": item.unit,
+                                }
+                                for item in repair_result.entity_creations
+                            ],
+                            event_log=event_log,
+                        )
+                        if repaired_entity_events:
+                            tick_events.extend(repaired_entity_events)
+                    artifact_dependency_issues = collect_artifact_dependency_issues(
+                        known_entity_ids=set(state.registry.list_ids()),
+                        artifact_creations=generated.artifact_creations,
+                    )
                     dependency_events = self._emit_worldgen_artifact_dependency_issues(
                         issues=artifact_dependency_issues,
                         tick=state.tick,
+                        repair_entity_ids=(
+                            [item.entity_id for item in repair_result.entity_creations]
+                            if repair_result is not None
+                            else []
+                        ),
+                        dropped_artifact_ids=(
+                            set(repair_result.drop_artifact_ids)
+                            if repair_result is not None
+                            else set()
+                        ),
                     )
-                    event_log.extend(dependency_events)
-                    tick_events.extend(dependency_events)
+                    if dependency_events:
+                        event_log.extend(dependency_events)
+                        tick_events.extend(dependency_events)
                 blocked_artifact_ids = {
                     issue.artifact_id for issue in artifact_dependency_issues if issue.artifact_id
                 }
+                if repair_result is not None:
+                    blocked_artifact_ids.update(repair_result.drop_artifact_ids)
                 artifact_events = self._apply_worldgen_artifact_changes(
                     state=state,
                     creations=[
@@ -2457,10 +2503,14 @@ class WorldEngine:
         *,
         issues: list[ArtifactDependencyIssue],
         tick: int,
+        repair_entity_ids: list[str] | None = None,
+        dropped_artifact_ids: set[str] | None = None,
     ) -> list[Event]:
         """Сигнализировать о том, что worldgen ссылается на несуществующие сущности."""
 
         events: list[Event] = []
+        repaired_ids = [entity_id for entity_id in (repair_entity_ids or []) if entity_id]
+        dropped_ids = dropped_artifact_ids or set()
         for issue in issues:
             missing_dependencies = [
                 dependency_id
@@ -2472,11 +2522,16 @@ class WorldEngine:
             payload: dict[str, Any] = {
                 "artifact_id": issue.artifact_id,
                 "missing_dependencies": missing_dependencies,
+                "repair_attempted": bool(repair_entity_ids is not None or dropped_artifact_ids is not None),
             }
             if issue.missing_owner_org_id is not None:
                 payload["missing_owner_org_id"] = issue.missing_owner_org_id
             if issue.missing_zone_id is not None:
                 payload["missing_zone_id"] = issue.missing_zone_id
+            if repaired_ids:
+                payload["repair_entity_ids"] = list(repaired_ids)
+            if issue.artifact_id in dropped_ids:
+                payload["artifact_dropped"] = True
             events.append(
                 Event(
                     tick=tick,

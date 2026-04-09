@@ -150,6 +150,13 @@ class _ArtifactUpdateModel(BaseModel):
     tags: list[str] | None = None
 
 
+class _DependencyRepairModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entity_creations: list[_EntityCreationModel] = Field(default_factory=list)
+    drop_artifact_ids: list[str] = Field(default_factory=list)
+
+
 @dataclass(slots=True)
 class SpawnSuggestion:
     """Предложение worldgen создать нового агента."""
@@ -342,6 +349,14 @@ class ArtifactDependencyIssue:
     artifact_id: str
     missing_owner_org_id: str | None = None
     missing_zone_id: str | None = None
+
+
+@dataclass(slots=True)
+class ArtifactDependencyRepair:
+    """Результат repair-pass для отсутствующих worldgen-зависимостей."""
+
+    entity_creations: list[EntityCreation] = field(default_factory=list)
+    drop_artifact_ids: set[str] = field(default_factory=set)
 
 
 def collect_artifact_dependency_issues(
@@ -659,12 +674,114 @@ def _build_system_prompt(*, phase: Literal["pre", "post"], language: str) -> str
     return render_prompt(key, language_repr=repr(language)) + "\n"
 
 
+def _build_repair_prompt(*, language: str) -> str:
+    return render_prompt("worldgen.repair.system", language_repr=repr(language)) + "\n"
+
+
 @dataclass(slots=True)
 class WorldGenerator:
     """LLM-генератор внешних событий мира."""
 
     llm: LLMCaller
     temperature: float = 0.0
+
+    async def repair_artifact_dependencies(
+        self,
+        *,
+        tick: int,
+        language: str,
+        scenario_description: str,
+        state_snapshot: dict[str, Any],
+        issues: list[ArtifactDependencyIssue],
+        artifact_creations: list[ArtifactCreation],
+    ) -> ArtifactDependencyRepair:
+        """Попытаться доопределить недостающие сущности для artifact dependencies."""
+
+        if not issues:
+            return ArtifactDependencyRepair()
+
+        payload = {
+            "tick": tick,
+            "scenario_description": scenario_description,
+            "state_snapshot": state_snapshot or {},
+            "issues": [
+                {
+                    "artifact_id": item.artifact_id,
+                    "missing_owner_org_id": item.missing_owner_org_id,
+                    "missing_zone_id": item.missing_zone_id,
+                }
+                for item in issues
+            ],
+            "artifact_creations": [
+                {
+                    "artifact_id": item.artifact_id,
+                    "artifact_type": item.artifact_type,
+                    "title": item.title,
+                    "summary": item.summary,
+                    "owner_org_id": item.owner_org_id,
+                    "zone_id": item.zone_id,
+                }
+                for item in artifact_creations
+            ],
+        }
+        try:
+            resp = await self.llm.generate_structured(
+                role="worldgen",
+                name="artifact_dependency_repair",
+                tick=tick,
+                system=_build_repair_prompt(language=language),
+                user=render_prompt("worldgen.repair.user", payload_json=json.dumps(payload, ensure_ascii=False)),
+                schema={
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "entity_creations": _worldgen_schema(
+                            phase="post",
+                            event_budget=0,
+                            max_new_actors=0,
+                            max_scene_changes=0,
+                            agent_context_budget=0,
+                        )["properties"]["entity_creations"],
+                        "drop_artifact_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["entity_creations", "drop_artifact_ids"],
+                },
+                temperature=self.temperature,
+            )
+            parsed = _DependencyRepairModel.model_validate(resp.data)
+        except Exception:
+            return ArtifactDependencyRepair()
+
+        entity_creations: list[EntityCreation] = []
+        for raw in parsed.entity_creations:
+            entity_id = raw.entity_id.strip()
+            kind = raw.kind.strip()
+            title = raw.title.strip()
+            if not entity_id or not kind or not title:
+                continue
+            entity_creations.append(
+                EntityCreation(
+                    entity_id=entity_id,
+                    kind=kind,
+                    title=title,
+                    description=(raw.description or "").strip(),
+                    zone_type=(raw.zone_type or "").strip() or None,
+                    primary_org_id=(raw.primary_org_id or "").strip() or None,
+                    owner_org_id=(raw.owner_org_id or "").strip() or None,
+                    unit=(raw.unit or "").strip() or None,
+                )
+            )
+        return ArtifactDependencyRepair(
+            entity_creations=entity_creations,
+            drop_artifact_ids={
+                normalize_worldgen_artifact_id(item)
+                for item in parsed.drop_artifact_ids
+                if normalize_worldgen_artifact_id(item)
+            },
+        )
 
     async def generate(
         self,

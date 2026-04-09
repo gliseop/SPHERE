@@ -42,6 +42,39 @@ def _mk_state() -> WorldState:
     return state
 
 
+class _SemanticRealismCounterProvider(MockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_user = ""
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        self.last_user = user
+        if '"unknown_to_id_count": 2' in user and '"dependency_missing_count": 2' in user:
+            return StructuredLLMResponse(
+                data={
+                    "findings": [
+                        {
+                            "category": "stall_from_identity_and_external_surface",
+                            "severity": "high",
+                            "summary": "Симуляция теряет коммуникацию и внешнее давление из-за повторяющихся identity/dependency failures.",
+                            "evidence_refs": [
+                                {"tick": 0, "event_type": "arbiter_rejected", "actor_id": "agent:off_1"},
+                                {"tick": 1, "event_type": "worldgen_artifact_dependency_missing"},
+                            ],
+                        }
+                    ]
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"findings": []}, model="mock")
+
+
 class _EvaluationSemanticJudgeProvider(MockLLMProvider):
     def generate_structured(
         self,
@@ -891,4 +924,114 @@ def test_fidelity_semantic_judge_augments_summary(tmp_path: Path) -> None:
     assert augmented.semantic_realism_findings_total == 1
     assert augmented.semantic_realism_by_category["document_grounding"] == 1
     assert augmented.semantic_realism_findings[0]["category"] == "document_grounding"
+
+
+def test_fidelity_semantic_judge_uses_structural_stall_counters(tmp_path: Path) -> None:
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "tick": 0,
+                        "event_type": "arbiter_rejected",
+                        "actor_id": "agent:off_1",
+                        "payload": {"reason": "perform_op_invalid:send_message:ValueError:unknown to_id"},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "tick": 1,
+                        "event_type": "arbiter_rejected",
+                        "actor_id": "agent:off_1",
+                        "payload": {"reason": "perform_op_invalid:send_message:ValueError:unknown to_id"},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "tick": 1,
+                        "event_type": "worldgen_artifact_dependency_missing",
+                        "actor_id": None,
+                        "payload": {"artifact_id": "art:1", "missing_dependencies": ["org:gazette"]},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "tick": 2,
+                        "event_type": "worldgen_artifact_dependency_missing",
+                        "actor_id": None,
+                        "payload": {"artifact_id": "art:2", "missing_dependencies": ["org:gazette"]},
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary = FidelitySummary(by_metric={})
+    provider = _SemanticRealismCounterProvider()
+    llm = LLMCaller(provider=provider, trace=TraceLog(tmp_path / "trace.jsonl"))
+
+    augmented = asyncio.run(
+        augment_fidelity_with_semantic_judge(
+            summary=summary,
+            llm=llm,
+            events_path=events_path,
+            scenario_description="test structural stall realism",
+        )
+    )
+
+    assert '"unknown_to_id_count": 2' in provider.last_user
+    assert '"dependency_missing_count": 2' in provider.last_user
+    assert augmented.semantic_realism_findings_total == 1
+
+
+def test_fidelity_semantic_judge_does_not_penalize_observation_only(tmp_path: Path) -> None:
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "tick": 0,
+                        "event_type": "arbiter_approved",
+                        "actor_id": "agent:off_1",
+                        "payload": {"reason": "observation_only", "action_type": "perform"},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "tick": 1,
+                        "event_type": "arbiter_approved",
+                        "actor_id": "agent:off_1",
+                        "payload": {"reason": "observation_only", "action_type": "perform"},
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary = FidelitySummary(by_metric={})
+    llm = LLMCaller(
+        provider=MockLLMProvider(structured_responses={'"scenario_description": "test observation realism"': {"findings": []}}),
+        trace=TraceLog(tmp_path / "trace.jsonl"),
+    )
+
+    augmented = asyncio.run(
+        augment_fidelity_with_semantic_judge(
+            summary=summary,
+            llm=llm,
+            events_path=events_path,
+            scenario_description="test observation realism",
+        )
+    )
+
+    assert augmented.semantic_realism_findings_total == 0
 

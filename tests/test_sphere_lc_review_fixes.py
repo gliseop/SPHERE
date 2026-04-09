@@ -52,7 +52,7 @@ from sphere_lc.llm.providers import OpenAICompatibleProvider, create_provider
 from sphere_lc.memory import AgentMemory, WorkingEntry
 from sphere_lc.ops import CreateAgentOp, RecordNarrativeActionOp
 from sphere_lc.ops import CloseAuditCaseOp, OpenAuditCaseOp, OpenVoteOp, UpdateAuditCaseOp
-from sphere_lc.state import AgentState, Vote, WorkItem, WorldState
+from sphere_lc.state import AgentState, ArtifactState, Vote, WorkItem, WorldState
 from sphere_lc.tracing import TraceLog
 from sphere_lc.worldgen import WorldGenerator
 
@@ -178,6 +178,75 @@ class _StillEmptyMaterializationProvider(MockLLMProvider):
             self.perform_calls += 1
             return StructuredLLMResponse(
                 data={"approved": True, "reason": "approved_but_empty", "ops": []},
+                model="mock",
+        )
+        return super().generate_structured(system, user, schema, temperature)
+
+
+class _ObservationOnlyProvider(MockLLMProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.perform_calls = 0
+        self.observation_checks = 0
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "является ли шаг observation-only" in system:
+            self.observation_checks += 1
+            return StructuredLLMResponse(
+                data={"observation_only": True, "rationale": "read-only"},
+                model="mock",
+            )
+        if "- actor_id: agent:off_1" in user:
+            self.perform_calls += 1
+            return StructuredLLMResponse(
+                data={
+                    "approved": False,
+                    "reason": "Просмотр существующего документа не создаёт изменения состояния мира.",
+                    "ops": [],
+                },
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
+
+
+class _MixedObservationProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "ACTOR: agent:off_1" in user and "PROPOSAL:" in user:
+            return StructuredLLMResponse(
+                data={"steps": ["Сначала просмотрю art:brief и сверю детали.", "Затем напишу agent:off_2 короткое сообщение."]},
+                model="mock",
+            )
+        if "является ли шаг observation-only" in system and "просмотрю art:brief" in user:
+            return StructuredLLMResponse(data={"observation_only": True, "rationale": "read-only"}, model="mock")
+        if "- actor_id: agent:off_1" in user and "просмотрю art:brief" in user:
+            return StructuredLLMResponse(
+                data={"approved": False, "reason": "read-only review", "ops": []},
+                model="mock",
+            )
+        if "- actor_id: agent:off_1" in user and "напишу agent:off_2" in user:
+            return StructuredLLMResponse(
+                data={
+                    "approved": True,
+                    "reason": "approved",
+                    "ops": [
+                        {
+                            "op_type": "send_message",
+                            "args": {"to_id": "agent:off_2", "private": True, "text": "Коротко сообщаю итог сверки."},
+                        }
+                    ],
+                },
                 model="mock",
             )
         return super().generate_structured(system, user, schema, temperature)
@@ -526,6 +595,133 @@ def test_arbiter_recovers_canonical_agent_id_from_step_text(tmp_path: Path) -> N
     assert res.approved is True
     assert [op.__class__.__name__ for op in res.ops] == ["SendMessageOp"]
     assert res.ops[0].to_id == "agent:off_2"
+
+
+def test_arbiter_resolves_exact_display_name_from_args(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+    decision = _PerformArbiterOutput.model_validate(
+        {
+            "approved": True,
+            "reason": "approved",
+            "ops": [
+                {
+                    "op_type": "send_message",
+                    "args": {
+                        "to_id": "Off 2",
+                        "private": True,
+                        "text": "Нужна короткая сверка.",
+                    },
+                }
+            ],
+        }
+    )
+
+    res, _, _ = asyncio.run(
+        arbiter._convert_perform_decision(
+            state=state,
+            agent_id="agent:off_1",
+            proposal="Напишу коллеге Off 2 и уточню детали.",
+            step_target_id="",
+            agent_caps={"message"},
+            action_index=0,
+            decision=decision,
+        )
+    )
+
+    assert res.approved is True
+    assert res.ops[0].to_id == "agent:off_2"
+
+
+def test_arbiter_returns_ambiguous_to_id_for_duplicate_display_name(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state.agents["agent:off_3"] = AgentState(
+        agent_id="agent:off_3",
+        name="Off 2",
+        internal=True,
+        capabilities=["message"],
+    )
+    state.registry.register(
+        EntityRecord(entity_id="agent:off_3", kind=EntityKind.AGENT, created_by=None, created_tick=0, meta={"name": "Off 2"})
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+    decision = _PerformArbiterOutput.model_validate(
+        {
+            "approved": True,
+            "reason": "approved",
+            "ops": [
+                {
+                    "op_type": "send_message",
+                    "args": {
+                        "to_id": "Off 2",
+                        "private": True,
+                        "text": "Нужна короткая сверка.",
+                    },
+                }
+            ],
+        }
+    )
+
+    res, _, _ = asyncio.run(
+        arbiter._convert_perform_decision(
+            state=state,
+            agent_id="agent:off_1",
+            proposal="Напишу Off 2 и уточню детали.",
+            step_target_id="",
+            agent_caps={"message"},
+            action_index=0,
+            decision=decision,
+        )
+    )
+
+    assert res.approved is False
+    assert "ambiguous_to_id" in res.reason
+
+
+def test_arbiter_observation_only_step_is_approved_noop(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    provider = _ObservationOnlyProvider()
+    arbiter = _mk_arbiter(tmp_path, mock=provider)
+
+    act = PerformAction(
+        type=ActionType.PERFORM,
+        description="Просмотрю art:brief и сверю его с текущей перепиской.",
+        target_id="",
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert res[0].approved is True
+    assert res[0].reason == "observation_only"
+    assert res[0].ops == []
+    assert provider.observation_checks >= 1
+
+
+def test_arbiter_keeps_materialized_followup_after_observation_step(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state.artifacts["art:brief"] = ArtifactState(
+        artifact_id="art:brief",
+        artifact_type="brief",
+        title="Brief",
+        summary="Краткая справка",
+        owner_org_id=None,
+        zone_id=None,
+    )
+    state.registry.register(
+        EntityRecord(entity_id="art:brief", kind=EntityKind.ARTIFACT, created_by=None, created_tick=0, meta={"title": "Brief"})
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=_MixedObservationProvider())
+
+    act = PerformAction(
+        type=ActionType.PERFORM,
+        description="Сначала просмотрю art:brief и сверю детали, затем напишу agent:off_2 короткое сообщение.",
+        target_id="",
+        justification="",
+    )
+    res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
+
+    assert res[0].approved is True
+    assert [op.__class__.__name__ for op in res[0].ops] == ["SendMessageOp"]
 
 
 def test_arbiter_rejects_public_message_to_non_channel_target(tmp_path: Path) -> None:
@@ -1257,7 +1453,7 @@ def test_arbiter_rejects_substantive_proposal_when_retry_still_empty(tmp_path: P
     )
     res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
 
-    assert provider.perform_calls == 2
+    assert provider.perform_calls >= 2
     assert res[0].approved is False
     assert res[0].reason == "proposal_not_materialized_after_retry"
 

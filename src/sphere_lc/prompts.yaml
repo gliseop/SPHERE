@@ -234,6 +234,18 @@ worldgen:
       Если для правдоподобного внешнего последствия не хватает новой внешней сущности мира (например, медиа-организации, публичной зоны наблюдения, контрольного канала, внешнего ресурсного контура), сначала опиши её в `entity_creations`, а уже затем создавай связанные artifacts/signals.
       Не возвращай artifact с `owner_org_id` или `zone_id`, которых нет ни в `state_snapshot`, ни в `entity_creations` этого же ответа.
       Artifact creations/updates можно использовать для документов, публикаций, служебных следов, утечек, отчётов и запросов, если это правдоподобное внешнее последствие уже произошедших процессов.
+  repair:
+    system: |-
+      Ты выполняешь узкий repair-pass для worldgen artifact dependencies.
+      На входе: список artifacts с отсутствующими owner_org_id / zone_id и текущий state_snapshot.
+      Твоя задача:
+      1. Либо вернуть только те `entity_creations`, которые реально нужны, чтобы artifact стал валидным.
+      2. Либо вернуть `drop_artifact_ids`, если такой artifact не должен materialize-иться в этом мире.
+      Не придумывай новые artifacts и не переписывай сами artifact payload.
+      Не используй hardcoded allowlist внешних организаций. Решай по контексту мира.
+      Ответ: строго JSON по схеме.
+    user: |-
+      {{payload_json}}
 memory:
   summarize:
     system: "Ты — модуль суммаризации памяти агента."
@@ -512,6 +524,7 @@ arbiter:
         - если proposal уже атомарный, верни один шаг;
         - если proposal многошаговый, сначала ставь перемещение/поиск/встречу, потом разговор/передачу/документ, потом публичный отклик;
         - если личный контакт желателен, но точная локация адресата или пространственное пересечение неочевидны, первым шагом должен быть короткий message/lookup/availability-check, а не мгновенная встреча;
+        - если шаг означает только чтение, просмотр, сверку, проверку или ожидание уже существующего объекта без изменения мира, оставь его как observation-step;
         - не выдумывай новые действия, которых нет в proposal;
         - не используй typed ops и не описывай JSON/схему словами.
         Ответ: строго JSON по схеме.
@@ -563,6 +576,7 @@ arbiter:
       - «Вынесу вопрос о повышении agent:Z» → open_vote, а не прямую смену должности.
       - Не отклоняй send_message только из-за отсутствия capability `message`.
       - Если proposal просит «написать», а текст не процитирован, synthesize faithful text из proposal.
+      - Если шаг означает только прочитать, просмотреть, сверить, проверить или дождаться уже существующего материала без изменения world state, верни approved=true, reason=observation_only и пустой ops.
       - op_type=`vote` нормализуй: `vote_id/choice` → cast_vote, `target_agent_id/new_title` → open_vote.
 
       Если proposal — осознанное бездействие/наблюдение → approved=true, пустой ops.
@@ -574,6 +588,7 @@ arbiter:
       ПРЕДЫДУЩАЯ ПОПЫТКА materialization вернула approved=true и пустой ops для содержательного proposal.
       Сделай повторную попытку более строго:
       - если из proposal следуют наблюдаемые шаги мира, выдай хотя бы один конкретный op;
+      - если шаг является чистым чтением, просмотром, сверкой, проверкой или ожиданием уже существующего объекта без изменения мира, верни approved=true, reason=observation_only и пустой ops;
       - если proposal слишком абстрактен, не grounded в world state или не может быть честно материализован, отклони его.
       - не оставляй содержательный proposal в approved=true с пустым ops.
     user: |-
@@ -594,6 +609,25 @@ arbiter:
       - target_id: {{target_id}}
 
       PREVIOUS ATTEMPT:
+      - approved: {{approved}}
+      - reason: {{reason}}
+      - ops_count: {{ops_count}}
+  observation_verifier:
+    system: |-
+      Ты проверяешь только один вопрос: является ли шаг observation-only.
+      Observation-only = чтение, просмотр, сверка, проверка, изучение, ожидание или внутреннее наблюдение уже существующего объекта, документа, сообщения или дела без изменения world state.
+      Если шаг не создаёт сообщение, документ, заметку, публикацию, перемещение, встречу или другое наблюдаемое изменение мира, верни observation_only=true.
+      Не помечай observation-only те случаи, где в шаге реально обещано кому-то написать, что-то передать, внести правку, создать artifact или провести встречу.
+      Ответ: строго JSON по схеме.
+    user: |-
+      YAML JOURNAL:
+      {{journal_yaml}}
+
+      STEP:
+      - actor_id: {{agent_id}}
+      - proposal: {{proposal}}
+
+      PREVIOUS DECISION:
       - approved: {{approved}}
       - reason: {{reason}}
       - ops_count: {{ops_count}}
@@ -660,9 +694,12 @@ fidelity:
       - преждевременную самоэкзонерацию без достаточного мирового следа.
       Важные примеры semantic realism failure:
       - повторяющиеся `unknown to_id`, если из-за них мир систематически теряет естественную коммуникацию;
+      - повторяющиеся `ambiguous_to_id`, если мир знает участников эпизода, но не может адресовать естественный follow-up;
       - повторяющиеся `private_contact_requires_shared_zone`, если агенты снова и снова пытаются невозможный личный контакт вместо промежуточного сообщения;
       - повторяющиеся dependency-missing diagnostics для worldgen external artifacts;
       - истечения pending interactions без живого follow-up.
+      Observation-only approved steps сами по себе не являются realism failure.
+      Смотри не только на сырые events, но и на `semantic_signal_counters`: они сводят structural stall/dependency patterns.
       Категории формулируй свободно короткими устойчивыми метками.
       Ответ: строго JSON по схеме.
     user: |-

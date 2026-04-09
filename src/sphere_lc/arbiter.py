@@ -66,6 +66,7 @@ from .state import WorldState
 from .utils import (
     looks_like_machine_name,
     normalize_agent_display_name,
+    normalize_whitespace,
 )
 
 
@@ -177,6 +178,19 @@ class _DocumentGroundingOutput(BaseModel):
     supported_level: str = "supported"
     rewritten_text: str = ""
     rationale: str = ""
+
+
+class _ObservationVerifierOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    observation_only: bool = False
+    rationale: str = ""
+
+
+@dataclass(slots=True)
+class _ResolvedContextualId:
+    status: str
+    value: str = ""
 
 
 def _normalize_perform_op_args(op_type: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -508,6 +522,18 @@ def _perform_output_schema() -> dict[str, Any]:
             "ops": {"type": "array", "items": {"oneOf": ops_one_of}},
         },
         "required": ["approved", "ops"],
+    }
+
+
+def _observation_verifier_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "observation_only": {"type": "boolean"},
+            "rationale": {"type": "string"},
+        },
+        "required": ["observation_only"],
     }
 
 
@@ -1075,6 +1101,14 @@ class Arbiter:
             system=system,
             user=user,
         )
+        if not decision.approved and await self._verify_observation_only(
+            state=state,
+            agent_id=agent_id,
+            proposal=proposal,
+            journal_yaml=journal_yaml,
+            previous_decision=decision,
+        ):
+            return _PerformArbiterOutput(approved=True, reason="observation_only", ops=[])
         if not self._should_retry_unmaterialized_proposal(proposal=proposal, decision=decision):
             return decision
 
@@ -1091,12 +1125,24 @@ class Arbiter:
             system=retry_system,
             user=retry_user,
         )
+        if not retried.approved and await self._verify_observation_only(
+            state=state,
+            agent_id=agent_id,
+            proposal=proposal,
+            journal_yaml=journal_yaml,
+            previous_decision=retried,
+        ):
+            return _PerformArbiterOutput(approved=True, reason="observation_only", ops=[])
         if self._should_retry_unmaterialized_proposal(proposal=proposal, decision=retried):
-            return _PerformArbiterOutput(
-                approved=False,
-                reason="proposal_not_materialized_after_retry",
-                ops=[],
-            )
+            if await self._verify_observation_only(
+                state=state,
+                agent_id=agent_id,
+                proposal=proposal,
+                journal_yaml=journal_yaml,
+                previous_decision=retried,
+            ):
+                return _PerformArbiterOutput(approved=True, reason="observation_only", ops=[])
+            return _PerformArbiterOutput(approved=False, reason="proposal_not_materialized_after_retry", ops=[])
         return retried
 
     def _perform_llm_user_prompt(
@@ -1282,9 +1328,43 @@ class Arbiter:
             return False
         if not decision.approved or decision.ops:
             return False
-        if str(decision.reason or "").strip() in {"noop", "noop_proposal"}:
+        if str(decision.reason or "").strip() in {"noop", "noop_proposal", "observation_only"}:
             return False
         return True
+
+    async def _verify_observation_only(
+        self,
+        *,
+        state: WorldState,
+        agent_id: str,
+        proposal: str,
+        journal_yaml: str,
+        previous_decision: _PerformArbiterOutput,
+    ) -> bool:
+        """Проверить отдельным LLM-pass, является ли шаг чистым наблюдением."""
+
+        try:
+            resp = await self.llm.generate_structured(
+                role="arbiter",
+                name="observation_verifier",
+                tick=state.tick,
+                system=render_prompt("arbiter.observation_verifier.system"),
+                user=render_prompt(
+                    "arbiter.observation_verifier.user",
+                    journal_yaml=journal_yaml,
+                    agent_id=agent_id,
+                    proposal=proposal,
+                    approved=previous_decision.approved,
+                    reason=previous_decision.reason,
+                    ops_count=len(previous_decision.ops),
+                ),
+                schema=_observation_verifier_schema(),
+                temperature=self.temperature,
+            )
+            verdict = _ObservationVerifierOutput.model_validate(resp.data)
+        except Exception:
+            return False
+        return bool(verdict.observation_only)
 
     async def _convert_perform_decision(
         self,
@@ -1482,6 +1562,85 @@ class Arbiter:
             out.append(match)
         return out
 
+    @staticmethod
+    def _normalize_identity_text(text: str) -> str:
+        normalized = normalize_whitespace(text or "")
+        normalized = re.sub(r"[^\w]+", " ", normalized, flags=re.UNICODE)
+        return normalize_whitespace(normalized).casefold()
+
+    @classmethod
+    def _display_name_candidates(
+        cls,
+        *,
+        state: WorldState,
+        allowed_kinds: set[EntityKind],
+        exclude_ids: set[str],
+    ) -> list[tuple[str, str]]:
+        candidates: list[tuple[str, str]] = []
+        for entity_id in sorted(state.registry.list_ids()):
+            if entity_id in exclude_ids:
+                continue
+            try:
+                parsed = parse_typed_id(entity_id)
+            except ValueError:
+                continue
+            if parsed.kind not in allowed_kinds:
+                continue
+            display_name = ""
+            if parsed.kind == EntityKind.AGENT:
+                agent = state.agents.get(entity_id)
+                if agent is not None:
+                    display_name = agent.name
+                else:
+                    record = state.registry.get(entity_id)
+                    display_name = str(record.meta.get("name") or "") if record is not None else ""
+            elif parsed.kind == EntityKind.WORK_ITEM:
+                work = state.work_items.get(entity_id)
+                if work is not None:
+                    display_name = work.title
+                else:
+                    record = state.registry.get(entity_id)
+                    display_name = str(record.meta.get("title") or "") if record is not None else ""
+            elif parsed.kind == EntityKind.ARTIFACT:
+                artifact = state.artifacts.get(entity_id)
+                if artifact is not None:
+                    display_name = artifact.title
+                else:
+                    record = state.registry.get(entity_id)
+                    display_name = str(record.meta.get("title") or "") if record is not None else ""
+            else:
+                record = state.registry.get(entity_id)
+                if record is not None:
+                    display_name = str(record.meta.get("title") or record.meta.get("name") or "")
+            normalized_name = cls._normalize_identity_text(display_name)
+            if normalized_name:
+                candidates.append((entity_id, normalized_name))
+        return candidates
+
+    @classmethod
+    def _match_exact_display_names(
+        cls,
+        *,
+        state: WorldState,
+        text: str,
+        allowed_kinds: set[EntityKind],
+        exclude_ids: set[str],
+        in_full_text: bool,
+    ) -> list[str]:
+        normalized_text = cls._normalize_identity_text(text)
+        if not normalized_text:
+            return []
+        matches: list[str] = []
+        for entity_id, normalized_name in cls._display_name_candidates(
+            state=state,
+            allowed_kinds=allowed_kinds,
+            exclude_ids=exclude_ids,
+        ):
+            matched = normalized_name in normalized_text if in_full_text else normalized_text == normalized_name
+            if matched and entity_id not in matches:
+                matches.append(entity_id)
+        return matches
+
     @classmethod
     def _resolve_contextual_id(
         cls,
@@ -1493,8 +1652,9 @@ class Arbiter:
         action_target_id: str = "",
         fallback_id: str = "",
         exclude_ids: set[str] | None = None,
-    ) -> str:
-        """Разрешить typed-id через явное значение, текст шага и известный target context."""
+        prefer_context: bool = False,
+    ) -> _ResolvedContextualId:
+        """Разрешить typed-id через локальный контекст шага без fuzzy matching."""
 
         excluded = exclude_ids or set()
 
@@ -1510,9 +1670,24 @@ class Arbiter:
                 return None
             return value
 
+        def _resolved(candidate: str) -> _ResolvedContextualId:
+            return _ResolvedContextualId(status="resolved", value=candidate)
+
+        def _try_context() -> _ResolvedContextualId | None:
+            for candidate in (action_target_id, fallback_id):
+                resolved = _valid(candidate)
+                if resolved is not None:
+                    return _resolved(resolved)
+            return None
+
         direct = _valid(raw_id)
         if direct is not None:
-            return direct
+            return _resolved(direct)
+
+        if prefer_context:
+            contextual = _try_context()
+            if contextual is not None:
+                return contextual
 
         extracted = cls._extract_existing_typed_ids(
             state=state,
@@ -1521,13 +1696,38 @@ class Arbiter:
             exclude_ids=excluded,
         )
         if len(extracted) == 1:
-            return extracted[0]
+            return _resolved(extracted[0])
+        if len(extracted) > 1:
+            return _ResolvedContextualId(status="ambiguous")
 
-        for candidate in (action_target_id, fallback_id):
-            resolved = _valid(candidate)
-            if resolved is not None:
-                return resolved
-        return str(raw_id or "").strip()
+        raw_name_matches = cls._match_exact_display_names(
+            state=state,
+            text=str(raw_id or ""),
+            allowed_kinds=allowed_kinds,
+            exclude_ids=excluded,
+            in_full_text=False,
+        )
+        if len(raw_name_matches) == 1:
+            return _resolved(raw_name_matches[0])
+        if len(raw_name_matches) > 1:
+            return _ResolvedContextualId(status="ambiguous")
+
+        text_name_matches = cls._match_exact_display_names(
+            state=state,
+            text=proposal_text,
+            allowed_kinds=allowed_kinds,
+            exclude_ids=excluded,
+            in_full_text=True,
+        )
+        if len(text_name_matches) == 1:
+            return _resolved(text_name_matches[0])
+        if len(text_name_matches) > 1:
+            return _ResolvedContextualId(status="ambiguous")
+
+        contextual = _try_context()
+        if contextual is not None:
+            return contextual
+        return _ResolvedContextualId(status="unknown", value=str(raw_id or "").strip())
 
     @staticmethod
     def _validate_in_person_contact_feasibility(
@@ -1578,6 +1778,36 @@ class Arbiter:
                 return f"open_vote_already_exists_for_target:{target_agent_id}"
         return None
 
+    def _resolve_id_or_raise(
+        self,
+        *,
+        state: WorldState,
+        raw_id: str,
+        proposal_text: str,
+        allowed_kinds: set[EntityKind],
+        unknown_reason: str,
+        ambiguous_reason: str,
+        action_target_id: str = "",
+        fallback_id: str = "",
+        exclude_ids: set[str] | None = None,
+        prefer_context: bool = False,
+    ) -> str:
+        resolution = self._resolve_contextual_id(
+            state=state,
+            raw_id=raw_id,
+            proposal_text=proposal_text,
+            allowed_kinds=allowed_kinds,
+            action_target_id=action_target_id,
+            fallback_id=fallback_id,
+            exclude_ids=exclude_ids,
+            prefer_context=prefer_context,
+        )
+        if resolution.status == "resolved" and resolution.value:
+            return resolution.value
+        if resolution.status == "ambiguous":
+            raise ValueError(ambiguous_reason)
+        raise ValueError(unknown_reason)
+
     def _op_from_llm(
         self,
         *,
@@ -1603,16 +1833,16 @@ class Arbiter:
 
         if op_type == "send_message":
             private = bool(args.get("private", True))
-            to_id = self._resolve_contextual_id(
+            to_id = self._resolve_id_or_raise(
                 state=state,
                 raw_id=str(args.get("to_id") or ""),
                 proposal_text=proposal_text,
                 allowed_kinds={EntityKind.AGENT} if private else {EntityKind.CHANNEL, EntityKind.ORG},
+                unknown_reason="unknown to_id",
+                ambiguous_reason="ambiguous_to_id",
                 action_target_id=action_target_id,
                 fallback_id=fallback_target_agent_id,
             )
-            if not to_id or not state.registry.exists(to_id):
-                raise ValueError("unknown to_id")
             temporal_error = self._validate_temporal_texts(
                 current_tick=state.tick,
                 texts=[str(args.get("text") or "")],
@@ -1635,17 +1865,17 @@ class Arbiter:
             ]
 
         if op_type == "in_person_contact":
-            target_agent_id = self._resolve_contextual_id(
+            target_agent_id = self._resolve_id_or_raise(
                 state=state,
                 raw_id=str(args.get("target_agent_id") or ""),
                 proposal_text=proposal_text,
                 allowed_kinds={EntityKind.AGENT},
+                unknown_reason="unknown target_agent_id",
+                ambiguous_reason="ambiguous_target_agent_id",
                 action_target_id=action_target_id,
                 fallback_id=fallback_target_agent_id,
                 exclude_ids={agent_id},
             )
-            if target_agent_id not in state.agents:
-                raise ValueError("unknown target_agent_id")
             contact_error = self._validate_in_person_contact_feasibility(
                 state=state,
                 from_id=agent_id,
@@ -1712,15 +1942,15 @@ class Arbiter:
             ]
 
         if op_type == "add_work_note":
-            work_id = self._resolve_contextual_id(
+            work_id = self._resolve_id_or_raise(
                 state=state,
                 raw_id=str(args.get("work_id") or ""),
                 proposal_text=proposal_text,
                 allowed_kinds={EntityKind.WORK_ITEM},
+                unknown_reason="unknown work_id",
+                ambiguous_reason="ambiguous_work_id",
                 action_target_id=action_target_id,
             )
-            if work_id not in state.work_items:
-                raise ValueError("unknown work_id")
             temporal_error = self._validate_temporal_texts(
                 current_tick=state.tick,
                 texts=[str(args.get("text") or "")],
@@ -1730,15 +1960,15 @@ class Arbiter:
             return [AddWorkNoteOp(actor_id=agent_id, work_id=work_id, text=str(args.get("text") or ""))]
 
         if op_type == "submit_work_proposal":
-            work_id = self._resolve_contextual_id(
+            work_id = self._resolve_id_or_raise(
                 state=state,
                 raw_id=str(args.get("work_id") or ""),
                 proposal_text=proposal_text,
                 allowed_kinds={EntityKind.WORK_ITEM},
+                unknown_reason="unknown work_id",
+                ambiguous_reason="ambiguous_work_id",
                 action_target_id=action_target_id,
             )
-            if work_id not in state.work_items:
-                raise ValueError("unknown work_id")
             temporal_error = self._validate_temporal_texts(
                 current_tick=state.tick,
                 texts=[str(args.get("text") or "")],
@@ -1887,7 +2117,7 @@ class Arbiter:
             zone_id = str(args.get("zone_id") or "").strip() or None
             if zone_id and not state.registry.exists(zone_id):
                 zone_id = None
-            counterparty_agent_id = self._resolve_contextual_id(
+            counterparty_resolution = self._resolve_contextual_id(
                 state=state,
                 raw_id=str(args.get("counterparty_agent_id") or args.get("target_agent_id") or ""),
                 proposal_text=proposal_text,
@@ -1895,7 +2125,11 @@ class Arbiter:
                 action_target_id=action_target_id,
                 fallback_id=fallback_target_agent_id,
                 exclude_ids={agent_id},
+                prefer_context=True,
             )
+            if counterparty_resolution.status == "ambiguous":
+                raise ValueError("ambiguous_target_agent_id")
+            counterparty_agent_id = counterparty_resolution.value
             witnesses_raw = args.get("witnesses") or []
             witnesses = [str(w) for w in witnesses_raw if str(w) in state.agents]
             return [
@@ -1910,26 +2144,27 @@ class Arbiter:
             ]
 
         if op_type == "upsert_informal_link":
-            agent_a = self._resolve_contextual_id(
+            agent_a = self._resolve_id_or_raise(
                 state=state,
                 raw_id=str(args.get("agent_a_id") or ""),
                 proposal_text="",
                 allowed_kinds={EntityKind.AGENT},
+                unknown_reason="unknown agent_a_id: ",
+                ambiguous_reason="ambiguous_agent_a_id",
                 fallback_id=agent_id,
             )
-            agent_b = self._resolve_contextual_id(
+            agent_b = self._resolve_id_or_raise(
                 state=state,
                 raw_id=str(args.get("agent_b_id") or ""),
                 proposal_text=proposal_text,
                 allowed_kinds={EntityKind.AGENT},
+                unknown_reason="unknown agent_b_id: ",
+                ambiguous_reason="ambiguous_agent_b_id",
                 action_target_id=action_target_id,
                 fallback_id=fallback_target_agent_id,
                 exclude_ids={agent_a or agent_id},
+                prefer_context=True,
             )
-            if agent_a not in state.agents:
-                raise ValueError(f"unknown agent_a_id: {agent_a}")
-            if agent_b not in state.agents:
-                raise ValueError(f"unknown agent_b_id: {agent_b}")
             if agent_a == agent_b:
                 raise ValueError("informal link requires two different agents")
             link_type = str(args.get("link_type") or "").strip()
@@ -1961,17 +2196,18 @@ class Arbiter:
             ]
 
         if op_type == "upsert_pending_interaction":
-            target_agent_id = self._resolve_contextual_id(
+            target_agent_id = self._resolve_id_or_raise(
                 state=state,
                 raw_id=str(args.get("target_agent_id") or ""),
                 proposal_text=proposal_text,
                 allowed_kinds={EntityKind.AGENT},
+                unknown_reason="unknown target_agent_id",
+                ambiguous_reason="ambiguous_target_agent_id",
                 action_target_id=action_target_id,
                 fallback_id=fallback_target_agent_id,
                 exclude_ids={agent_id},
+                prefer_context=True,
             )
-            if target_agent_id not in state.agents:
-                raise ValueError(f"unknown target_agent_id: {target_agent_id}")
             source_agent_id = str(args.get("source_agent_id") or "").strip() or agent_id
             if source_agent_id not in state.agents:
                 source_agent_id = agent_id
