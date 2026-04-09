@@ -191,7 +191,7 @@ class CreateAgentOp:
 
 @dataclass(frozen=True, slots=True)
 class SendMessageOp:
-    """Отправить сообщение агенту или в канал."""
+    """Отправить удалённое сообщение агенту или в канал."""
 
     from_id: str
     to_id: str
@@ -204,21 +204,14 @@ class SendMessageOp:
         if not state.registry.exists(self.to_id):
             raise ValueError(f"Recipient not found: {self.to_id!r}")
 
-        # Private сообщения разрешены только агентам.
+        # Private сообщения разрешены только агентам, но не требуют shared-zone:
+        # это удалённая коммуникация, а не физический личный контакт.
         if self.private:
             ensure_kind(self.to_id, EntityKind.AGENT)
             sender = state.agents.get(self.from_id)
             recipient = state.agents.get(self.to_id)
             if sender is None or recipient is None:
                 raise ValueError("Private message requires agent sender and recipient")
-            if (
-                sender.zone_id is not None
-                and recipient.zone_id is not None
-                and sender.zone_id != recipient.zone_id
-            ):
-                raise ValueError(
-                    f"private_contact_requires_shared_zone:{self.from_id}:{self.to_id}:{sender.zone_id}!={recipient.zone_id}"
-                )
             audience = [self.from_id, self.to_id]
         else:
             # Публикация в канал (chan:*) или org:* трактуем как "public-ish".
@@ -252,6 +245,7 @@ class RecordNarrativeActionOp:
     description: str
     action_kind: str = "general"
     zone_id: str | None = None
+    counterparty_agent_id: str | None = None
     witnesses: list[str] | None = None
 
     def apply(self, state: WorldState) -> list[Event]:
@@ -259,6 +253,12 @@ class RecordNarrativeActionOp:
             ensure_kind(self.zone_id, EntityKind.ZONE)
             if not state.registry.exists(self.zone_id):
                 raise ValueError(f"Unknown zone_id: {self.zone_id!r}")
+        if self.counterparty_agent_id is not None:
+            ensure_kind(self.counterparty_agent_id, EntityKind.AGENT)
+            if self.counterparty_agent_id not in state.agents:
+                raise ValueError(f"Unknown counterparty_agent_id: {self.counterparty_agent_id!r}")
+            if self.counterparty_agent_id == self.actor_id:
+                raise ValueError("counterparty_agent_id must differ from actor_id")
         valid_witnesses: list[str] = []
         for w in (self.witnesses or []):
             if w in state.agents and w != self.actor_id:
@@ -285,8 +285,14 @@ class RecordNarrativeActionOp:
                         ),
                         overwrite=True,
                     )
-        if valid_witnesses:
-            audience = list({self.actor_id} | set(valid_witnesses))
+        if valid_witnesses or self.counterparty_agent_id:
+            audience = list(
+                {
+                    self.actor_id,
+                    *(valid_witnesses or []),
+                    *([self.counterparty_agent_id] if self.counterparty_agent_id else []),
+                }
+            )
         else:
             audience = [INTERNAL_AUDIENCE]
         return [
@@ -300,6 +306,7 @@ class RecordNarrativeActionOp:
                     "zone_id": self.zone_id,
                     "previous_zone_id": previous_zone_id,
                     "relocated": relocated,
+                    "counterparty_agent_id": self.counterparty_agent_id,
                     "witnesses": valid_witnesses,
                 },
                 audience=audience,

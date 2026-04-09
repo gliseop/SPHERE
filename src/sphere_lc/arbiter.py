@@ -72,6 +72,7 @@ from .utils import (
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _DOTTED_DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
 _CAMEL_TO_SNAKE_RE = re.compile(r"(?<!^)(?=[A-Z])")
+_TYPED_ID_RE = re.compile(r"\b[a-z]+:[A-Za-z0-9][A-Za-z0-9_.-]*\b")
 
 
 def _extract_dates(text: str) -> list[date]:
@@ -113,6 +114,9 @@ def _normalize_perform_op_type(op_type: str) -> str:
         "RecordNarrativeActionOp": "narrative_action",
         "record_narrative_action": "narrative_action",
         "add_narrative_action": "narrative_action",
+        "private_contact": "in_person_contact",
+        "PrivateContactOp": "in_person_contact",
+        "InPersonContactOp": "in_person_contact",
         "UpsertInformalLinkOp": "upsert_informal_link",
         "information_signal": "add_information_signal",
         "AddInformationSignalOp": "add_information_signal",
@@ -192,13 +196,20 @@ def _normalize_perform_op_args(op_type: str, args: dict[str, Any]) -> dict[str, 
         _move("private", "private", "is_private")
         if "private" not in normalized and "channel_id" in normalized:
             normalized["private"] = False
+    elif op_type == "in_person_contact":
+        _move("target_agent_id", "target_agent_id", "to_id", "to_agent_id", "agent_b_id", "counterparty_agent_id")
+        _move("summary", "summary", "description", "text", "content", "message")
+        _move("zone_id", "zone_id", "location_zone_id")
     elif op_type in {"add_work_note", "submit_work_proposal"}:
         _move("text", "text", "note", "note_text", "content", "description", "summary")
     elif op_type == "upsert_pending_interaction":
-        _move("target_agent_id", "target_agent_id", "responder_agent_id", "recipient_agent_id")
+        _move("target_agent_id", "target_agent_id", "responder_agent_id", "recipient_agent_id", "to_id")
         _move("source_agent_id", "source_agent_id", "initiator_agent_id", "initiator_id", "actor_id")
         _move("summary", "summary", "description", "text")
         _move("due_offset_ticks", "due_offset_ticks", "due_in_ticks")
+    elif op_type == "upsert_informal_link":
+        _move("agent_a_id", "agent_a_id", "source_agent_id", "actor_id", "from_id")
+        _move("agent_b_id", "agent_b_id", "target_agent_id", "to_id", "recipient_agent_id", "counterparty_agent_id")
     elif op_type == "add_information_signal":
         _move("signal", "signal", "description", "text", "message")
     elif op_type == "create_artifact":
@@ -265,6 +276,8 @@ def _normalize_perform_llm_output(raw: Any) -> dict[str, Any]:
             raw_target_id = str(item.get("target_id") or "").strip()
             if op_type == "send_message" and raw_target_id and "to_id" not in args:
                 args["to_id"] = raw_target_id
+            if op_type == "in_person_contact" and raw_target_id and "target_agent_id" not in args:
+                args["target_agent_id"] = raw_target_id
             if op_type in {"add_work_note", "submit_work_proposal"} and raw_target_id and "work_id" not in args:
                 args["work_id"] = raw_target_id
             normalized_ops.append(
@@ -298,6 +311,8 @@ def _normalize_perform_llm_output(raw: Any) -> dict[str, Any]:
             raw_target_id = str(item.get("target_id") or "").strip()
             if op_type == "send_message" and raw_target_id and "to_id" not in args:
                 args["to_id"] = raw_target_id
+            if op_type == "in_person_contact" and raw_target_id and "target_agent_id" not in args:
+                args["target_agent_id"] = raw_target_id
             if op_type in {"add_work_note", "submit_work_proposal"} and raw_target_id and "work_id" not in args:
                 args["work_id"] = raw_target_id
             normalized_ops.append(
@@ -340,6 +355,15 @@ def _perform_output_schema() -> dict[str, Any]:
                 "private": {"type": "boolean"},
             },
             ["to_id", "text"],
+        ),
+        op(
+            "in_person_contact",
+            {
+                "target_agent_id": {"type": "string"},
+                "summary": {"type": "string"},
+                "zone_id": {"type": "string"},
+            },
+            ["target_agent_id", "summary"],
         ),
         op(
             "create_work_item",
@@ -758,14 +782,6 @@ class Arbiter:
             target_error = self._validate_message_target(to_id=action.to_id, private=bool(action.private))
             if target_error:
                 return ActionResult(action_index, False, target_error, [])
-            contact_error = self._validate_private_contact_feasibility(
-                state=state,
-                from_id=agent_id,
-                to_id=action.to_id,
-                private=bool(action.private),
-            )
-            if contact_error:
-                return ActionResult(action_index, False, contact_error, [])
             return ActionResult(
                 action_index,
                 True,
@@ -1167,7 +1183,10 @@ class Arbiter:
             if isinstance(op, SendMessageOp):
                 lines.append(f"- send_message -> {op.to_id} (private={op.private})")
             elif isinstance(op, RecordNarrativeActionOp):
-                lines.append(f"- narrative_action -> {op.description}")
+                if op.action_kind == "in_person_contact" and op.counterparty_agent_id:
+                    lines.append(f"- in_person_contact -> {op.counterparty_agent_id}")
+                else:
+                    lines.append(f"- narrative_action -> {op.description}")
             elif isinstance(op, AddWorkNoteOp):
                 lines.append(f"- add_work_note -> {op.work_id}")
             elif isinstance(op, SubmitWorkProposalOp):
@@ -1274,6 +1293,7 @@ class Arbiter:
         agent_id: str,
         action_index: int,
         proposal: str,
+        step_target_id: str,
         agent_caps: set[str],
         decision: _PerformArbiterOutput,
         scratch_state: WorldState | None = None,
@@ -1286,6 +1306,14 @@ class Arbiter:
             return ActionResult(action_index, False, decision.reason or "rejected", []), work_state, allocator
 
         ops: list[StateOp] = []
+        context_target_agent_id = self._resolve_contextual_id(
+            state=work_state,
+            raw_id="",
+            proposal_text=proposal,
+            allowed_kinds={EntityKind.AGENT},
+            action_target_id=step_target_id,
+            exclude_ids={agent_id},
+        )
         for item in decision.ops:
             is_side_effect = str(getattr(item, "source", "") or "").strip().casefold() == "side_effect"
             try:
@@ -1295,6 +1323,9 @@ class Arbiter:
                     op_type=item.op_type,
                     args=item.args,
                     id_alloc=allocator,
+                    proposal_text=proposal,
+                    action_target_id=step_target_id,
+                    fallback_target_agent_id=context_target_agent_id,
                 )
             except Exception as exc:
                 if is_side_effect and ops:
@@ -1330,6 +1361,14 @@ class Arbiter:
                         [],
                     ), work_state, allocator
                 ops.append(op)
+                if isinstance(op, SendMessageOp) and op.to_id in work_state.agents:
+                    context_target_agent_id = op.to_id
+                elif isinstance(op, UpsertPendingInteractionOp):
+                    context_target_agent_id = op.target_agent_id
+                elif isinstance(op, UpsertInformalLinkOp):
+                    context_target_agent_id = op.agent_b_id if op.agent_a_id == agent_id else op.agent_a_id
+                elif isinstance(op, RecordNarrativeActionOp) and op.counterparty_agent_id:
+                    context_target_agent_id = op.counterparty_agent_id
 
         if commit_ids:
             self.id_alloc.counters = dict(allocator.counters or {})
@@ -1379,6 +1418,7 @@ class Arbiter:
                 agent_caps=agent_caps,
                 action_index=action_index,
                 proposal=step,
+                step_target_id=step_action.target_id,
                 decision=decision,
                 scratch_state=scratch_state,
                 scratch_alloc=scratch_alloc,
@@ -1420,17 +1460,84 @@ class Arbiter:
         return None
 
     @staticmethod
-    def _validate_private_contact_feasibility(
+    def _extract_existing_typed_ids(
+        *,
+        state: WorldState,
+        text: str,
+        allowed_kinds: set[EntityKind],
+        exclude_ids: set[str] | None = None,
+    ) -> list[str]:
+        """Вытащить уже существующие typed-id нужных kind из текста шага."""
+        out: list[str] = []
+        excluded = exclude_ids or set()
+        for match in _TYPED_ID_RE.findall(text or ""):
+            if match in excluded or not state.registry.exists(match):
+                continue
+            try:
+                parsed = parse_typed_id(match)
+            except ValueError:
+                continue
+            if parsed.kind not in allowed_kinds or match in out:
+                continue
+            out.append(match)
+        return out
+
+    @classmethod
+    def _resolve_contextual_id(
+        cls,
+        *,
+        state: WorldState,
+        raw_id: str,
+        proposal_text: str,
+        allowed_kinds: set[EntityKind],
+        action_target_id: str = "",
+        fallback_id: str = "",
+        exclude_ids: set[str] | None = None,
+    ) -> str:
+        """Разрешить typed-id через явное значение, текст шага и известный target context."""
+
+        excluded = exclude_ids or set()
+
+        def _valid(candidate: str) -> str | None:
+            value = str(candidate or "").strip()
+            if not value or value in excluded or not state.registry.exists(value):
+                return None
+            try:
+                parsed = parse_typed_id(value)
+            except ValueError:
+                return None
+            if parsed.kind not in allowed_kinds:
+                return None
+            return value
+
+        direct = _valid(raw_id)
+        if direct is not None:
+            return direct
+
+        extracted = cls._extract_existing_typed_ids(
+            state=state,
+            text=proposal_text,
+            allowed_kinds=allowed_kinds,
+            exclude_ids=excluded,
+        )
+        if len(extracted) == 1:
+            return extracted[0]
+
+        for candidate in (action_target_id, fallback_id):
+            resolved = _valid(candidate)
+            if resolved is not None:
+                return resolved
+        return str(raw_id or "").strip()
+
+    @staticmethod
+    def _validate_in_person_contact_feasibility(
         *,
         state: WorldState,
         from_id: str,
-        to_id: str,
-        private: bool,
+        target_agent_id: str,
     ) -> str | None:
-        if not private:
-            return None
         sender = state.agents.get(from_id)
-        recipient = state.agents.get(to_id)
+        recipient = state.agents.get(target_agent_id)
         if sender is None or recipient is None:
             return None
         if sender.zone_id and recipient.zone_id and sender.zone_id != recipient.zone_id:
@@ -1479,6 +1586,9 @@ class Arbiter:
         op_type: str,
         args: dict[str, Any],
         id_alloc: IdAllocator | None = None,
+        proposal_text: str = "",
+        action_target_id: str = "",
+        fallback_target_agent_id: str = "",
     ) -> list[StateOp]:
         """Сконвертировать LLM-op в реальные ops."""
         allocator = id_alloc or self.id_alloc
@@ -1492,7 +1602,15 @@ class Arbiter:
             return []
 
         if op_type == "send_message":
-            to_id = str(args.get("to_id") or "")
+            private = bool(args.get("private", True))
+            to_id = self._resolve_contextual_id(
+                state=state,
+                raw_id=str(args.get("to_id") or ""),
+                proposal_text=proposal_text,
+                allowed_kinds={EntityKind.AGENT} if private else {EntityKind.CHANNEL, EntityKind.ORG},
+                action_target_id=action_target_id,
+                fallback_id=fallback_target_agent_id,
+            )
             if not to_id or not state.registry.exists(to_id):
                 raise ValueError("unknown to_id")
             temporal_error = self._validate_temporal_texts(
@@ -1503,24 +1621,60 @@ class Arbiter:
                 raise ValueError(temporal_error)
             target_error = self._validate_message_target(
                 to_id=to_id,
-                private=bool(args.get("private", True)),
+                private=private,
             )
             if target_error:
                 raise ValueError(target_error)
-            contact_error = self._validate_private_contact_feasibility(
-                state=state,
-                from_id=agent_id,
-                to_id=to_id,
-                private=bool(args.get("private", True)),
-            )
-            if contact_error:
-                raise ValueError(contact_error)
             return [
                 SendMessageOp(
                     from_id=agent_id,
                     to_id=to_id,
                     text=str(args.get("text") or ""),
-                    private=bool(args.get("private", True)),
+                    private=private,
+                )
+            ]
+
+        if op_type == "in_person_contact":
+            target_agent_id = self._resolve_contextual_id(
+                state=state,
+                raw_id=str(args.get("target_agent_id") or ""),
+                proposal_text=proposal_text,
+                allowed_kinds={EntityKind.AGENT},
+                action_target_id=action_target_id,
+                fallback_id=fallback_target_agent_id,
+                exclude_ids={agent_id},
+            )
+            if target_agent_id not in state.agents:
+                raise ValueError("unknown target_agent_id")
+            contact_error = self._validate_in_person_contact_feasibility(
+                state=state,
+                from_id=agent_id,
+                target_agent_id=target_agent_id,
+            )
+            if contact_error:
+                raise ValueError(contact_error)
+            summary = str(args.get("summary") or proposal_text or "").strip()
+            if not summary:
+                raise ValueError("in_person_contact requires summary")
+            zone_id = str(args.get("zone_id") or "").strip() or None
+            if zone_id and not state.registry.exists(zone_id):
+                zone_id = None
+            actor = state.agents.get(agent_id)
+            if zone_id is None and actor is not None:
+                zone_id = actor.zone_id
+            counterparty = state.agents.get(target_agent_id)
+            description = (
+                f"Провёл личный разговор с {counterparty.name}. {summary}"
+                if counterparty is not None
+                else summary
+            )
+            return [
+                RecordNarrativeActionOp(
+                    actor_id=agent_id,
+                    description=description,
+                    action_kind="in_person_contact",
+                    zone_id=zone_id,
+                    counterparty_agent_id=target_agent_id,
                 )
             ]
 
@@ -1558,7 +1712,13 @@ class Arbiter:
             ]
 
         if op_type == "add_work_note":
-            work_id = str(args.get("work_id") or "")
+            work_id = self._resolve_contextual_id(
+                state=state,
+                raw_id=str(args.get("work_id") or ""),
+                proposal_text=proposal_text,
+                allowed_kinds={EntityKind.WORK_ITEM},
+                action_target_id=action_target_id,
+            )
             if work_id not in state.work_items:
                 raise ValueError("unknown work_id")
             temporal_error = self._validate_temporal_texts(
@@ -1570,7 +1730,13 @@ class Arbiter:
             return [AddWorkNoteOp(actor_id=agent_id, work_id=work_id, text=str(args.get("text") or ""))]
 
         if op_type == "submit_work_proposal":
-            work_id = str(args.get("work_id") or "")
+            work_id = self._resolve_contextual_id(
+                state=state,
+                raw_id=str(args.get("work_id") or ""),
+                proposal_text=proposal_text,
+                allowed_kinds={EntityKind.WORK_ITEM},
+                action_target_id=action_target_id,
+            )
             if work_id not in state.work_items:
                 raise ValueError("unknown work_id")
             temporal_error = self._validate_temporal_texts(
@@ -1721,6 +1887,15 @@ class Arbiter:
             zone_id = str(args.get("zone_id") or "").strip() or None
             if zone_id and not state.registry.exists(zone_id):
                 zone_id = None
+            counterparty_agent_id = self._resolve_contextual_id(
+                state=state,
+                raw_id=str(args.get("counterparty_agent_id") or args.get("target_agent_id") or ""),
+                proposal_text=proposal_text,
+                allowed_kinds={EntityKind.AGENT},
+                action_target_id=action_target_id,
+                fallback_id=fallback_target_agent_id,
+                exclude_ids={agent_id},
+            )
             witnesses_raw = args.get("witnesses") or []
             witnesses = [str(w) for w in witnesses_raw if str(w) in state.agents]
             return [
@@ -1729,13 +1904,28 @@ class Arbiter:
                     description=description,
                     action_kind=str(args.get("action_kind") or "general"),
                     zone_id=zone_id,
+                    counterparty_agent_id=counterparty_agent_id or None,
                     witnesses=witnesses or None,
                 )
             ]
 
         if op_type == "upsert_informal_link":
-            agent_a = str(args.get("agent_a_id") or "")
-            agent_b = str(args.get("agent_b_id") or "")
+            agent_a = self._resolve_contextual_id(
+                state=state,
+                raw_id=str(args.get("agent_a_id") or ""),
+                proposal_text="",
+                allowed_kinds={EntityKind.AGENT},
+                fallback_id=agent_id,
+            )
+            agent_b = self._resolve_contextual_id(
+                state=state,
+                raw_id=str(args.get("agent_b_id") or ""),
+                proposal_text=proposal_text,
+                allowed_kinds={EntityKind.AGENT},
+                action_target_id=action_target_id,
+                fallback_id=fallback_target_agent_id,
+                exclude_ids={agent_a or agent_id},
+            )
             if agent_a not in state.agents:
                 raise ValueError(f"unknown agent_a_id: {agent_a}")
             if agent_b not in state.agents:
@@ -1771,7 +1961,15 @@ class Arbiter:
             ]
 
         if op_type == "upsert_pending_interaction":
-            target_agent_id = str(args.get("target_agent_id") or "")
+            target_agent_id = self._resolve_contextual_id(
+                state=state,
+                raw_id=str(args.get("target_agent_id") or ""),
+                proposal_text=proposal_text,
+                allowed_kinds={EntityKind.AGENT},
+                action_target_id=action_target_id,
+                fallback_id=fallback_target_agent_id,
+                exclude_ids={agent_id},
+            )
             if target_agent_id not in state.agents:
                 raise ValueError(f"unknown target_agent_id: {target_agent_id}")
             source_agent_id = str(args.get("source_agent_id") or "").strip() or agent_id

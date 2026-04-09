@@ -621,20 +621,23 @@ def _compact_recent_events(recent_events: list[Event]) -> tuple[list[dict[str, A
     private_signals: dict[tuple[str, str], dict[str, Any]] = {}
     for ev in recent_events[-200:]:
         if PUBLIC_AUDIENCE not in ev.audience and INTERNAL_AUDIENCE not in ev.audience:
+            actor_id = str(ev.actor_id or "")
+            to_id = ""
             if ev.event_type == "message_sent" and bool((ev.payload or {}).get("private", True)):
-                actor_id = str(ev.actor_id or "")
                 to_id = str((ev.payload or {}).get("to_id") or "")
-                if actor_id and to_id:
-                    key = tuple(sorted([actor_id, to_id]))
-                    signal = private_signals.setdefault(
-                        key,
-                        {
-                            "agents": list(key),
-                            "kind": "recent_private_contact",
-                            "count": 0,
-                        },
-                    )
-                    signal["count"] = int(signal["count"]) + 1
+            elif ev.event_type == "narrative_action" and str((ev.payload or {}).get("action_kind") or "").strip() == "in_person_contact":
+                to_id = str((ev.payload or {}).get("counterparty_agent_id") or "")
+            if actor_id and to_id:
+                key = tuple(sorted([actor_id, to_id]))
+                signal = private_signals.setdefault(
+                    key,
+                    {
+                        "agents": list(key),
+                        "kind": "recent_private_contact",
+                        "count": 0,
+                    },
+                )
+                signal["count"] = int(signal["count"]) + 1
             continue
 
         payload = dict(ev.payload or {})

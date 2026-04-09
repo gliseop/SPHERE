@@ -12,7 +12,7 @@ from sphere_lc.events import Event
 from sphere_lc.fidelity import FidelitySummary, augment_fidelity_with_semantic_judge
 from sphere_lc.ids import EntityKind
 from sphere_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
-from sphere_lc.state import AgentState, WorldState
+from sphere_lc.state import AgentState, Vote, WorldState
 from sphere_lc.tracing import TraceLog
 from sphere_lc.truth import TruthDetector, TruthLog, TruthRecord
 
@@ -243,6 +243,48 @@ def test_truth_detector_does_not_infer_partial_disclosure_from_public_text() -> 
     records = detector.detect_tick(state=state, tick_events=tick_events, recent_events=recent_events)
 
     assert records == []
+
+
+def test_truth_detector_counts_in_person_contact_for_vote_pattern() -> None:
+    state = _mk_state()
+    state.tick = 2
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_2",
+        created_tick=1,
+        closes_tick=3,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1"],
+    )
+    detector = TruthDetector(private_contact_window_ticks=3)
+    recent_events = [
+        Event(
+            tick=1,
+            event_type="narrative_action",
+            actor_id="agent:off_1",
+            payload={
+                "action_kind": "in_person_contact",
+                "description": "Личный разговор перед голосованием.",
+                "counterparty_agent_id": "agent:off_2",
+            },
+            audience=["agent:off_1", "agent:off_2"],
+        )
+    ]
+    tick_events = [
+        Event(
+            tick=2,
+            event_type="vote_cast",
+            actor_id="agent:off_1",
+            payload={"vote_id": "vote:1", "choice": "yes"},
+        )
+    ]
+
+    records = detector.detect_tick(state=state, tick_events=tick_events, recent_events=recent_events)
+
+    assert records
+    assert records[0].violation_type == "support_vote_after_private_contact"
 
 
 def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:

@@ -268,6 +268,55 @@ def test_runtime_auditor_flags_support_vote_after_private_contact() -> None:
     assert any(op.__class__.__name__ == "OpenAuditCaseOp" for op in outcome.ops)
 
 
+def test_runtime_auditor_counts_in_person_contact_for_vote_pattern() -> None:
+    state = _mk_state()
+    state.tick = 2
+    state.votes["vote:1"] = Vote(
+        vote_id="vote:1",
+        vote_type="position_change",
+        created_by="agent:off_2",
+        created_tick=1,
+        closes_tick=3,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1"],
+    )
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
+
+    recent_events = [
+        Event(
+            tick=1,
+            event_type="narrative_action",
+            actor_id="agent:off_1",
+            payload={
+                "action_kind": "in_person_contact",
+                "description": "Личный разговор перед голосованием.",
+                "counterparty_agent_id": "agent:off_2",
+            },
+            audience=["agent:off_1", "agent:off_2"],
+        )
+    ]
+    tick_events = [
+        Event(
+            tick=2,
+            event_type="vote_cast",
+            actor_id="agent:off_1",
+            payload={"vote_id": "vote:1", "choice": "yes"},
+        )
+    ]
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=tick_events,
+            recent_events=recent_events,
+        )
+    )
+
+    assert outcome.findings
+    assert outcome.findings[0].violation_type == "support_vote_after_private_contact"
+
+
 def test_runtime_auditor_maps_freeform_llm_signal_to_canonical_vote_pattern(tmp_path: Path) -> None:
     state = _mk_state()
     state.tick = 2

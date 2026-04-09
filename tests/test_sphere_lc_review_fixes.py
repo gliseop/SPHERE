@@ -326,7 +326,7 @@ def test_arbiter_rejects_private_message_to_non_agent_target(tmp_path: Path) -> 
     assert "private_message_requires_agent_target" in res[0].reason
 
 
-def test_arbiter_rejects_private_message_across_known_zones(tmp_path: Path) -> None:
+def test_arbiter_allows_private_message_across_known_zones(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=[], off_2_caps=[])
     state.agents["agent:off_1"].zone_id = "zone:left"
     state.agents["agent:off_2"].zone_id = "zone:right"
@@ -346,8 +346,8 @@ def test_arbiter_rejects_private_message_across_known_zones(tmp_path: Path) -> N
         justification="",
     )
     res = asyncio.run(arbiter.arbitrate_actions(state=state, agent_id="agent:off_1", actions=[act]))
-    assert res[0].approved is False
-    assert "private_contact_requires_shared_zone" in res[0].reason
+    assert res[0].approved is True
+    assert res[0].reason == "send_message"
 
 
 def test_narrative_action_with_zone_updates_actor_location() -> None:
@@ -374,7 +374,7 @@ def test_narrative_action_with_zone_updates_actor_location() -> None:
     assert events[0].payload["relocated"] is True
 
 
-def test_arbiter_allows_private_contact_after_same_turn_relocation(tmp_path: Path) -> None:
+def test_arbiter_allows_in_person_contact_after_same_turn_relocation(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["message", "work"], off_2_caps=["message"])
     state.agents["agent:off_1"].zone_id = "zone:left"
     state.agents["agent:off_2"].zone_id = "zone:right"
@@ -399,11 +399,10 @@ def test_arbiter_allows_private_contact_after_same_turn_relocation(tmp_path: Pat
                     },
                 },
                 {
-                    "op_type": "send_message",
+                    "op_type": "in_person_contact",
                     "args": {
-                        "to_id": "agent:off_2",
-                        "private": True,
-                        "text": "Нужно обсудить вопрос лично.",
+                        "target_agent_id": "agent:off_2",
+                        "summary": "Нужно обсудить вопрос лично.",
                     },
                 },
             ],
@@ -414,6 +413,7 @@ def test_arbiter_allows_private_contact_after_same_turn_relocation(tmp_path: Pat
             state=state,
             agent_id="agent:off_1",
             proposal="Сначала приду в кабинет, потом поговорю лично.",
+            step_target_id="",
             agent_caps={"message"},
             action_index=0,
             decision=decision,
@@ -434,6 +434,98 @@ def test_arbiter_allows_private_contact_after_same_turn_relocation(tmp_path: Pat
     for op in res.ops:
         op.apply(scratch_state)
     assert scratch_state.agents["agent:off_1"].zone_id == "zone:right"
+
+
+def test_arbiter_fills_side_effect_agent_ids_from_context(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+    decision = _PerformArbiterOutput.model_validate(
+        {
+            "approved": True,
+            "reason": "approved",
+            "ops": [
+                {
+                    "op_type": "send_message",
+                    "args": {
+                        "to_id": "agent:off_2",
+                        "private": True,
+                        "text": "Нужно коротко сверить детали.",
+                    },
+                },
+                {
+                    "op_type": "upsert_informal_link",
+                    "source": "side_effect",
+                    "args": {
+                        "link_type": "coordination",
+                        "strength_delta": 0.1,
+                    },
+                },
+                {
+                    "op_type": "upsert_pending_interaction",
+                    "source": "side_effect",
+                    "args": {
+                        "summary": "Жду ответ по деталям.",
+                    },
+                },
+            ],
+        }
+    )
+
+    res, _, _ = asyncio.run(
+        arbiter._convert_perform_decision(
+            state=state,
+            agent_id="agent:off_1",
+            proposal="Напишу agent:off_2 и зафиксирую, что жду от него ответ.",
+            step_target_id="",
+            agent_caps={"message"},
+            action_index=0,
+            decision=decision,
+        )
+    )
+
+    assert res.approved is True
+    assert [op.__class__.__name__ for op in res.ops] == [
+        "SendMessageOp",
+        "UpsertInformalLinkOp",
+        "UpsertPendingInteractionOp",
+    ]
+
+
+def test_arbiter_recovers_canonical_agent_id_from_step_text(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+    decision = _PerformArbiterOutput.model_validate(
+        {
+            "approved": True,
+            "reason": "approved",
+            "ops": [
+                {
+                    "op_type": "send_message",
+                    "args": {
+                        "to_id": "contractor",
+                        "private": True,
+                        "text": "Нужна короткая сверка по срокам.",
+                    },
+                }
+            ],
+        }
+    )
+
+    res, _, _ = asyncio.run(
+        arbiter._convert_perform_decision(
+            state=state,
+            agent_id="agent:off_1",
+            proposal="Напишу agent:off_2 и уточню сроки.",
+            step_target_id="",
+            agent_caps={"message"},
+            action_index=0,
+            decision=decision,
+        )
+    )
+
+    assert res.approved is True
+    assert [op.__class__.__name__ for op in res.ops] == ["SendMessageOp"]
+    assert res.ops[0].to_id == "agent:off_2"
 
 
 def test_arbiter_rejects_public_message_to_non_channel_target(tmp_path: Path) -> None:
@@ -1149,6 +1241,7 @@ def test_arbiter_normalizes_real_model_alias_op_types() -> None:
     assert _normalize_perform_op_type("create_pending_interaction") == "upsert_pending_interaction"
     assert _normalize_perform_op_type("record_narrative_action_op") == "narrative_action"
     assert _normalize_perform_op_type("information_signal") == "add_information_signal"
+    assert _normalize_perform_op_type("private_contact") == "in_person_contact"
 
 
 def test_arbiter_rejects_substantive_proposal_when_retry_still_empty(tmp_path: Path) -> None:

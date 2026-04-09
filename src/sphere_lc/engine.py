@@ -2842,10 +2842,17 @@ class WorldEngine:
             return False
         payload = event.payload or {}
         if interaction.category == "reply":
-            return (
+            if (
                 event.event_type == "message_sent"
                 and interaction.source_agent_id is not None
                 and str(payload.get("to_id") or "").strip() == interaction.source_agent_id
+            ):
+                return True
+            return (
+                event.event_type == "narrative_action"
+                and str(payload.get("action_kind") or "").strip() == "in_person_contact"
+                and interaction.source_agent_id is not None
+                and str(payload.get("counterparty_agent_id") or "").strip() == interaction.source_agent_id
             )
         if interaction.category == "artifact_follow_up":
             if interaction.artifact_id and event.event_type == "artifact_updated":
@@ -2942,6 +2949,21 @@ class WorldEngine:
                             agent_b_id=to_id,
                             link_type="private_contact",
                             strength_delta=0.1,
+                            visibility="latent",
+                            source="interaction",
+                        )
+                    )
+            if event.event_type == "narrative_action" and str(payload.get("action_kind") or "").strip() == "in_person_contact":
+                actor_id = str(event.actor_id or "").strip()
+                counterparty_id = str(payload.get("counterparty_agent_id") or "").strip()
+                if actor_id.startswith("agent:") and counterparty_id.startswith("agent:") and actor_id != counterparty_id:
+                    ops.append(
+                        UpsertInformalLinkOp(
+                            actor_id=actor_id,
+                            agent_a_id=actor_id,
+                            agent_b_id=counterparty_id,
+                            link_type="private_contact",
+                            strength_delta=0.12,
                             visibility="latent",
                             source="interaction",
                         )

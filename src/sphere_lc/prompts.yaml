@@ -170,7 +170,7 @@ agent:
       bad_assume_location: "- Плохо: \"Сразу встречусь лично с человеком, хотя не понимаю, где он сейчас находится и есть ли у нас пересечение по зоне.\""
     event_facts:
       world_event: "- {{description}}"
-      message_private: "- {{actor_label}} лично написал {{to_label}}: {{text}}"
+      message_private: "- {{actor_label}} написал напрямую {{to_label}}: {{text}}"
       message_public: "- {{actor_label}} сказал публично {{to_label}}: {{text}}"
       work_note_added: "- {{actor_label}} оставил заметку в {{work_label}}: {{text}}"
       work_item_created: "- Появилось новое дело: {{work_label}}"
@@ -549,15 +549,16 @@ arbiter:
       Pending interactions, audit-cases и monitoring не запрещают send_message без явного правила блокировки.
       Политика должностей: только через DAO (vote + consent). Не меняй должности напрямую.
       Нельзя выдумывать новых агентов. Нельзя писать приватно неизвестным ID.
-      Базовая коммуникация не требует capability: send_message разрешён всем, но подчиняется физике мира.
+      Базовая коммуникация не требует capability: send_message разрешён всем как удалённое сообщение.
+      Если нужен именно очный разговор, используй `in_person_contact` или `narrative_action`, а не подменяй это remote message.
 
       ПРИМЕРЫ materialization с побочными эффектами:
-      - «Переговорю с agent:X наедине в коридоре» → send_message(private) + narrative_action(встреча в коридоре, witnesses=[]) + upsert_informal_link(coordination, +0.1)
+      - «Переговорю с agent:X наедине в коридоре» → in_person_contact(target_agent_id=agent:X, summary=...) + upsert_informal_link(coordination, +0.1)
       - «Подготовлю докладную о несоответствиях» → create_artifact(type=report, title=...) + если public, add_information_signal
       - «Намекну подрядчику agent:Y, что контракт можно ускорить» → send_message(private, текст намёка) + upsert_informal_link(corruption, +0.15, visibility=latent)
       - «Пройду к директору и положу отчёт на стол» → narrative_action(физическая передача, zone_id=...) + send_message(текст сопроводительного слова)
       - Если proposal включает приход в другую зону, сначала materialize narrative_action с zone_id этой зоны; последующие ops в этом же ходе можно строить уже из новой локации актёра.
-      - Если proposal хочет личный разговор с agent:X, но из журнала не видно shared zone, сначала short send_message к agent:X с уточнением, где пересечься, и только потом move/meet.
+      - Если proposal хочет личный разговор с agent:X, но из журнала не видно shared zone, сначала short send_message к agent:X с уточнением, где пересечься, и только потом move + in_person_contact.
       - «Добавлю в work:Y заметку» → add_work_note
       - «Вынесу вопрос о повышении agent:Z» → open_vote, а не прямую смену должности.
       - Не отклоняй send_message только из-за отсутствия capability `message`.

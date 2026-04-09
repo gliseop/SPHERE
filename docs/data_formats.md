@@ -321,7 +321,7 @@ Post-worldgen теперь также может возвращать:
 | `pressure` | `str` | Какое неформальное давление или ожидание она несёт |
 | `source` | `str` | Источник (`configured`, `worldgen`, `interaction`) |
 
-Кроме конфигурации и worldgen, движок теперь может детерминированно усиливать такие связи по факту взаимодействий, например после приватных сообщений и координации по общему делу.
+Кроме конфигурации и worldgen, движок теперь может детерминированно усиливать такие связи по факту взаимодействий, например после direct/private сообщений, очных `in_person_contact`-эпизодов и координации по общему делу.
 
 ### `world.environment`
 
@@ -602,7 +602,8 @@ JSON-файлы с результатами нарративных интерв�
 ```json
 {"tick": 1, "round": 1, "event_type": "entity_created", "actor_id": null, "agent_id": "", "payload": {"entity_id": "agent:off_1", "kind": "agent", "meta": {"name": "Козлов И.М.", "internal": true, "capabilities": ["message", "work", "dao"]}}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
 {"tick": 1, "round": 1, "event_type": "reputation_snapshot", "actor_id": null, "agent_id": "agent:off_1", "payload": {"target_agent_id": "agent:off_1", "score": 0.0, "internal": true, "frozen": false, "title": "специалист"}, "audience": ["aud:internal"], "timestamp": "2026-03-05T10:30:00+00:00"}
-{"tick": 2, "round": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"to_id": "agent:off_2", "text": "..."}, "audience": ["agent:off_1", "agent:off_2"], "timestamp": "..."}
+{"tick": 2, "round": 2, "event_type": "message_sent", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"to_id": "agent:off_2", "private": true, "text": "..."}, "audience": ["agent:off_1", "agent:off_2"], "timestamp": "..."}
+{"tick": 2, "round": 2, "event_type": "narrative_action", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"description": "Провёл личный разговор с коллегой.", "action_kind": "in_person_contact", "zone_id": "zone:procurement_office", "counterparty_agent_id": "agent:off_2", "witnesses": []}, "audience": ["agent:off_1", "agent:off_2"], "timestamp": "..."}
 {"tick": 2, "round": 2, "event_type": "audit_flagged", "actor_id": null, "agent_id": "", "payload": {"finding_id": "finding:abc", "case_id": "audit_case:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_2", "counterparty_agent_id": "agent:off_2", "related_target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact", "violation_type_freeform": "координация перед голосованием после приватного контакта", "evidence_refs": [{"tick": 2, "event_type": "vote_cast", "target_agent_id": "agent:off_2"}]}, "audience": ["aud:internal"], "timestamp": "..."}
 {"tick": 2, "round": 2, "event_type": "audit_case_updated", "actor_id": null, "agent_id": "", "payload": {"case_id": "audit_case:abc", "subject_agent_id": "agent:off_1", "target_agent_id": "agent:off_2", "violation_type": "support_vote_after_private_contact", "episode_count": 2, "response_due_tick": 4, "monitoring": true}, "audience": ["aud:internal"], "timestamp": "..."}
 {"tick": 2, "round": 2, "event_type": "arbiter_approved", "actor_id": "agent:off_1", "agent_id": "agent:off_1", "payload": {"action_type": "send_message"}, "audience": ["aud:internal"], "timestamp": "..."}
@@ -617,7 +618,8 @@ JSON-файлы с результатами нарративных интерв�
 |---|---|
 | `entity_created` | Регистрация сущности (агент, канал, организация, work item) |
 | `reputation_snapshot` | Снимок стартовой репутации/статуса агента для UI и sidecar-аналитики |
-| `message_sent` | Отправка сообщения |
+| `message_sent` | Отправка удалённого сообщения |
+| `narrative_action` | Наблюдаемое физическое действие, включая перемещение и очный разговор |
 | `work_item_created` | Создание рабочего элемента |
 | `work_note_added` | Добавление заметки |
 | `work_proposal_submitted` | Подача предложения |

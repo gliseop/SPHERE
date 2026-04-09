@@ -1509,13 +1509,19 @@ class RuntimeAuditor:
         low_tick = current_tick - int(self.cfg.private_contact_window_ticks)
         pairs: dict[tuple[str, str], dict[str, Any]] = {}
         for event in recent_events:
-            if event.event_type != "message_sent" or int(event.tick) < low_tick:
+            if int(event.tick) < low_tick:
                 continue
             payload = event.payload or {}
-            if not bool(payload.get("private", True)):
-                continue
             left = str(event.actor_id or "")
-            right = str(payload.get("to_id") or "")
+            right = ""
+            if event.event_type == "message_sent":
+                if not bool(payload.get("private", True)):
+                    continue
+                right = str(payload.get("to_id") or "")
+            elif event.event_type == "narrative_action" and str(payload.get("action_kind") or "").strip() == "in_person_contact":
+                right = str(payload.get("counterparty_agent_id") or "")
+            else:
+                continue
             if not left or not right:
                 continue
             key = tuple(sorted((left, right)))
@@ -1692,12 +1698,20 @@ class RuntimeAuditor:
         low_tick = current_tick - int(self.cfg.private_contact_window_ticks)
         count = 0
         for ev in recent_events:
-            if ev.event_type != "message_sent" or int(ev.tick) < low_tick:
+            if int(ev.tick) < low_tick:
                 continue
             payload = ev.payload or {}
-            if not bool(payload.get("private", True)):
+            left = str(ev.actor_id or "")
+            right = ""
+            if ev.event_type == "message_sent":
+                if not bool(payload.get("private", True)):
+                    continue
+                right = str(payload.get("to_id") or "")
+            elif ev.event_type == "narrative_action" and str(payload.get("action_kind") or "").strip() == "in_person_contact":
+                right = str(payload.get("counterparty_agent_id") or "")
+            else:
                 continue
-            if {str(ev.actor_id or ""), str(payload.get("to_id") or "")} == {a, b}:
+            if {left, right} == {a, b}:
                 count += 1
         return count
 
