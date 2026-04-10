@@ -528,6 +528,10 @@ def _strict_match_score(*, truth: dict[str, Any], signal: dict[str, Any]) -> flo
         return 0.8
     if not truth_relaxed and not signal_relaxed:
         return 0.7
+    # Truth without evidence refs (e.g. state-based detect_contact_patterns):
+    # match on header fields alone — the TruthRecord has no specific event anchors.
+    if not truth_relaxed:
+        return 0.6
     return 0.0
 
 
