@@ -96,9 +96,12 @@ class MemoryConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Working buffer (аналог ConversationSummaryBufferMemory).
-    working_max_entries: int = 40
+    working_max_entries: int = 100
     working_summarize_batch: int = 20
     working_summary_min_overflow: int = 8
+    working_render_max_chars: int = 40_000
+    working_render_entry_max_chars: int = 3_000
+    summary_context_fraction: float = 0.30
 
     # Long-term hybrid index.
     long_term_max_docs: int = 800
@@ -106,6 +109,9 @@ class MemoryConfig(BaseModel):
     dedup_cosine_threshold: float = 0.92
     recency_decay: float = 0.995
     weights: MemoryWeights = Field(default_factory=MemoryWeights)
+    interview_render_mode: Literal["retrieval", "full"] = "full"
+    interview_retrieval_top_k: int = 6
+    interview_retrieval_max_chars: int = 500
 
     importance_default: float = 3.0
     importance_threshold: float = 5.0
@@ -129,10 +135,10 @@ class MemoryConfig(BaseModel):
             "work_proposal_submitted": 5.0,
             "artifact_created": 5.0,
             "artifact_updated": 5.0,
-            "pending_interaction_created": 4.0,
-            "pending_interaction_updated": 4.0,
+            "pending_interaction_created": 5.5,
+            "pending_interaction_updated": 5.0,
             "pending_interaction_due": 5.0,
-            "pending_interaction_completed": 4.0,
+            "pending_interaction_completed": 5.5,
             "pending_interaction_expired": 5.0,
             "narrative_action": 6.0,
             "world_event": 5.0,
@@ -140,6 +146,7 @@ class MemoryConfig(BaseModel):
             "environment_zone_updated": 5.0,
             "environment_resource_updated": 5.0,
             "environment_information_climate_updated": 5.0,
+            "environment_informal_link_updated": 5.0,
             "audit_flagged": 7.0,
             "audit_case_opened": 7.0,
             "audit_case_updated": 6.0,
@@ -160,8 +167,12 @@ class MemoryConfig(BaseModel):
         "working_max_entries",
         "working_summarize_batch",
         "working_summary_min_overflow",
+        "working_render_max_chars",
+        "working_render_entry_max_chars",
         "long_term_max_docs",
         "retrieval_top_k",
+        "interview_retrieval_top_k",
+        "interview_retrieval_max_chars",
     )
     @classmethod
     def _validate_positive_int(cls, v: int) -> int:
@@ -190,6 +201,13 @@ class MemoryConfig(BaseModel):
             raise ValueError("importance must be >= 0")
         return float(v)
 
+    @field_validator("summary_context_fraction")
+    @classmethod
+    def _validate_summary_fraction(cls, v: float) -> float:
+        if not (0.0 < v <= 1.0):
+            raise ValueError("summary_context_fraction must be in (0, 1]")
+        return float(v)
+
     @field_validator("importance_by_event")
     @classmethod
     def _validate_importance_by_event(cls, v: dict[str, float]) -> dict[str, float]:
@@ -208,6 +226,14 @@ class MemoryConfig(BaseModel):
         if not (0.0 < v <= 1.0):
             raise ValueError("recency_decay must be in (0, 1]")
         return v
+
+    @property
+    def summary_max_chars(self) -> int:
+        """Максимальный размер summary-блока в символах."""
+
+        model_context_tokens = 256_000
+        avg_chars_per_token = 4.0
+        return int(model_context_tokens * self.summary_context_fraction * avg_chars_per_token)
 
 
 class RuntimeConfig(BaseModel):

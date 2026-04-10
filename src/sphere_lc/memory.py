@@ -31,14 +31,14 @@ MemoryKind = Literal[
 
 _WS_RE = re.compile(r"\s+")
 _NOISY_WORKING_PREFIXES = (
-    "environment_informal_link_updated:",
-    "pending_interaction_due:",
-    "pending_interaction_completed:",
-    "pending_interaction_updated:",
+    "неформальная связь обновлена:",
+    "срок по обязательству наступил:",
+    "наступил срок обязательства для",
+    "обязательство выполнено",
+    "ожидается действие от тебя",
+    "ожидается действие от",
     "arbiter_approved:",
     "arbiter_rejected:",
-    "audit_flagged:",
-    "audit_case_updated:",
 )
 
 

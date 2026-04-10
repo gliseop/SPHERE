@@ -4070,6 +4070,15 @@ class WorldEngine:
                     return f"Ожидается действие от тебя ({category}): {summary}" + (f" (от {source})" if source else "")
                 return f"Ожидается действие от {target} ({category}): {summary}"
 
+            if ev.event_type == "pending_interaction_updated":
+                summary = str(ev.payload.get("summary") or "")
+                target = str(ev.payload.get("target_agent_id") or "")
+                source = str(ev.payload.get("source_agent_id") or "")
+                category = str(ev.payload.get("category") or "")
+                if target == agent_id:
+                    return f"Ожидается действие от тебя ({category}): {summary}" + (f" (от {source})" if source else "")
+                return f"Ожидается действие от {target} ({category}): {summary}"
+
             if ev.event_type == "pending_interaction_completed":
                 summary = str(ev.payload.get("summary") or "")
                 target = str(ev.payload.get("target_agent_id") or "")
@@ -4088,7 +4097,20 @@ class WorldEngine:
                 return f"Наступил срок обязательства для {target}: {summary}"
 
             if ev.event_type == "environment_informal_link_updated":
-                return ""
+                agent_a_id = str(ev.payload.get("agent_a_id") or "")
+                agent_b_id = str(ev.payload.get("agent_b_id") or "")
+                link_type = str(ev.payload.get("link_type") or "")
+                strength = ev.payload.get("strength")
+                pair_label = (
+                    f"{agent_a_id} — {agent_b_id}"
+                    if agent_a_id and agent_b_id
+                    else (agent_a_id or agent_b_id or "связь")
+                )
+                link_suffix = f" [{link_type}]" if link_type else ""
+                strength_suffix = (
+                    f" (сила {float(strength):.2f})" if isinstance(strength, (int, float)) else ""
+                )
+                return f"Неформальная связь обновлена: {pair_label}{link_suffix}{strength_suffix}"
 
             if ev.event_type == "environment_information_climate_updated":
                 signals = ev.payload.get("active_signals") or []

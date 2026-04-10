@@ -2348,14 +2348,14 @@ def test_memory_skips_summary_when_overflow_below_threshold(tmp_path: Path) -> N
 def test_memory_compacts_repeated_working_entries() -> None:
     mem = AgentMemory(agent_id="agent:off_1")
     batch = [
-        WorkingEntry(tick=1, text="environment_informal_link_updated: {'a': 1}"),
-        WorkingEntry(tick=1, text="environment_informal_link_updated: {'a': 2}"),
+        WorkingEntry(tick=1, text="Неформальная связь обновлена: agent:off_1 — agent:off_2 [private_contact] (сила 0.20)"),
+        WorkingEntry(tick=1, text="Неформальная связь обновлена: agent:off_1 — agent:off_2 [private_contact] (сила 0.45)"),
         WorkingEntry(tick=2, text="Публичное сообщение agent:off_1 -> chan:public: тест"),
     ]
 
     lines = mem._compact_working_batch(batch)
 
-    assert lines[0].startswith("- (t1, x2) environment_informal_link_updated:")
+    assert lines[0].startswith("- (t1, x2) Неформальная связь обновлена:")
     assert lines[1] == "- (t2) Публичное сообщение agent:off_1 -> chan:public: тест"
 
 
@@ -2363,6 +2363,125 @@ def test_memory_config_uses_real_embeddings_by_default() -> None:
     cfg = MemoryConfig()
 
     assert cfg.embeddings_mock is False
+
+
+def test_memory_config_validates_new_render_limits() -> None:
+    with pytest.raises(ValidationError):
+        MemoryConfig(working_render_max_chars=0)
+
+    with pytest.raises(ValidationError):
+        MemoryConfig(summary_context_fraction=1.5)
+
+
+def test_render_memory_query_keeps_informal_link_strength(tmp_path: Path) -> None:
+    class _CaptureEmbedder:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def embed_batch(self, texts: list[str]) -> list[list[float]]:
+            self.calls.append(list(texts))
+            return [[0.1, 0.2, 0.3] for _ in texts]
+
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+        embedder=_CaptureEmbedder(),
+    )
+    event = Event(
+        tick=1,
+        event_type="environment_informal_link_updated",
+        actor_id="agent:off_1",
+        payload={
+            "agent_a_id": "agent:off_1",
+            "agent_b_id": "agent:off_2",
+            "link_type": "private_contact",
+            "strength": 0.42,
+        },
+        audience=[INTERNAL_AUDIENCE],
+    )
+
+    asyncio.run(
+        runner._render_memory(
+            agent=state.agents["agent:off_1"],
+            state=state,
+            visible_events=[event],
+        )
+    )
+
+    query_text = runner.embedder.calls[0][0]
+    assert "0.42" in query_text
+    assert "<num>" not in query_text
+
+
+def test_update_agent_memory_persists_pending_and_informal_link_events(tmp_path: Path) -> None:
+    cfg = ScenarioConfig.model_validate(
+        {
+            "title": "memory-event-thresholds",
+            "ticks": 1,
+            "agents": [
+                {"agent_id": "agent:off_1", "name": "Off 1", "internal": True, "capabilities": ["message"]},
+                {"agent_id": "agent:off_2", "name": "Off 2", "internal": True, "capabilities": ["message"]},
+            ],
+            "world": {},
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+    engine = WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=MockLLMProvider())
+    event_log = EventLog(artifacts.events_path)
+    state = engine._init_state(event_log=event_log)
+    llm = LLMCaller(provider=MockLLMProvider(), trace=TraceLog(artifacts.trace_path))
+    tick_events = [
+        Event(
+            tick=1,
+            event_type="pending_interaction_completed",
+            actor_id="agent:off_1",
+            payload={
+                "interaction_id": "pending:1",
+                "target_agent_id": "agent:off_1",
+                "source_agent_id": "agent:off_2",
+                "category": "reply",
+                "summary": "Подготовить ответ по закупке",
+            },
+            audience=[INTERNAL_AUDIENCE],
+        ),
+        Event(
+            tick=1,
+            event_type="environment_informal_link_updated",
+            actor_id="agent:off_1",
+            payload={
+                "agent_a_id": "agent:off_1",
+                "agent_b_id": "agent:off_2",
+                "link_type": "private_contact",
+                "strength": 0.55,
+            },
+            audience=[INTERNAL_AUDIENCE],
+        ),
+    ]
+
+    asyncio.run(
+        engine._update_agent_memory(
+            state=state,
+            tick_events=tick_events,
+            llm=llm,
+            embedder=None,
+            embed_cache={},
+            event_log=event_log,
+        )
+    )
+
+    off_1_docs = state.agents["agent:off_1"].memory.docs
+    off_2_docs = state.agents["agent:off_2"].memory.docs
+
+    assert any(doc.kind == "result" and "Обязательство выполнено" in doc.text for doc in off_1_docs)
+    assert any(doc.kind == "observation" and "Обязательство выполнено" in doc.text for doc in off_2_docs)
+    assert any("Неформальная связь обновлена" in doc.text for doc in off_1_docs)
+    assert any("Неформальная связь обновлена" in doc.text for doc in off_2_docs)
 
 
 def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path: Path) -> None:

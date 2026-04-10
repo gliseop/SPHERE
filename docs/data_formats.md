@@ -261,6 +261,12 @@ world:
 
 | Поле | Тип | Назначение |
 |---|---|---|
+| `working_render_max_chars` | `int` | Жёсткий верхний предел на суммарный объём рабочего буфера, который рендерится в prompt |
+| `working_render_entry_max_chars` | `int` | Верхний предел на размер одной строки рабочего буфера при рендеринге |
+| `summary_context_fraction` | `float` | Какая доля контекстного окна модели отводится под `AgentMemory.summary` |
+| `interview_render_mode` | `full` / `retrieval` | Как именно интервью попадает в prompt: целиком или через retrieval по Q/A-фрагментам |
+| `interview_retrieval_top_k` | `int` | Сколько interview-фрагментов брать в retrieval-режиме |
+| `interview_retrieval_max_chars` | `int` | Максимальная длина одного interview-фрагмента в retrieval-режиме |
 | `embeddings_mock` | `bool` | При `false` движок пытается использовать реальные embeddings; при `true` берёт детерминированный mock-провайдер |
 | `embeddings_model` | `str \| null` | Явное имя embedding-модели; если не задано, используется `EMBEDDING_MODEL` или `text-embedding-3-small` |
 | `embeddings_base_url` | `str \| null` | Отдельный OpenAI-compatible endpoint для embeddings; при `null` используется `OPENAI_BASE_URL` или `llm.base_url` |

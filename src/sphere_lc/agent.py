@@ -355,7 +355,7 @@ def _format_informal_links(*, agent: AgentState, state: WorldState) -> str:
         return ""
 
     lines = [render_prompt("agent.blocks.informal_links.header")]
-    for counterpart, link in relevant[:6]:
+    for counterpart, link in relevant[:12]:
         lines.append(
             render_prompt(
                 "agent.blocks.informal_links.line",
@@ -579,6 +579,19 @@ def _event_fact_line(*, state: WorldState, event: Event) -> str:
                 "agent.blocks.event_facts.environment_information_climate_updated",
                 signals=", ".join(str(item).strip() for item in signals[:3] if str(item).strip()),
             )
+    if event_type == "environment_informal_link_updated":
+        agent_a_id = str(payload.get("agent_a_id") or "")
+        agent_b_id = str(payload.get("agent_b_id") or "")
+        link_type = str(payload.get("link_type") or "").strip()
+        strength = payload.get("strength")
+        agent_a_label = _label_for_id(state=state, entity_id=agent_a_id) or agent_a_id
+        agent_b_label = _label_for_id(state=state, entity_id=agent_b_id) or agent_b_id
+        pair_label = " — ".join([item for item in [agent_a_label, agent_b_label] if item]) or "связь"
+        strength_suffix = (
+            f" (сила {float(strength):.2f})" if isinstance(strength, (int, float)) else ""
+        )
+        link_suffix = f" [{link_type}]" if link_type else ""
+        return f"Неформальная связь: {pair_label}{link_suffix}{strength_suffix}"
 
     details = _truncate(redact_numbers(payload), 220)
     return render_prompt("agent.blocks.event_facts.fallback", text=_truncate(f"{event_type}: {details}", 220))
@@ -777,25 +790,37 @@ class AgentRunner:
         if agent.persona.summary.strip():
             parts.append(render_prompt("agent.blocks.memory.persona_summary", text=agent.persona.summary.strip()))
         if agent.persona.biography.strip():
-            parts.append(render_prompt("agent.blocks.memory.biography_excerpt", text=_truncate(agent.persona.biography, 420)))
+            parts.append(render_prompt("agent.blocks.memory.biography_excerpt", text=agent.persona.biography))
         if agent.story_state.strip():
-            parts.append(render_prompt("agent.blocks.memory.story_state", text=_truncate(agent.story_state, 320)))
+            parts.append(render_prompt("agent.blocks.memory.story_state", text=agent.story_state))
 
         if mem.summary.strip():
-            parts.append(render_prompt("agent.blocks.memory.working_summary", text=_truncate(mem.summary, 520)))
+            parts.append(
+                render_prompt(
+                    "agent.blocks.memory.working_summary",
+                    text=_truncate(mem.summary, self.memory.summary_max_chars),
+                )
+            )
 
         if mem.working:
-            recent = mem.working[-6:]
+            recent: list[tuple[int, str]] = []
+            total_chars = 0
+            for entry in reversed(mem.working):
+                chunk = _truncate(entry.text, self.memory.working_render_entry_max_chars)
+                if total_chars + len(chunk) > self.memory.working_render_max_chars:
+                    break
+                recent.append((entry.tick, chunk))
+                total_chars += len(chunk)
+            recent.reverse()
             lines = "\n".join(
-                render_prompt("agent.blocks.memory.recent_record", tick=e.tick, text=_truncate(e.text, 220))
-                for e in recent
+                render_prompt("agent.blocks.memory.recent_record", tick=tick, text=text)
+                for tick, text in recent
             )
             parts.append(render_prompt("agent.blocks.memory.recent_header", lines=lines))
 
         # Hybrid retrieval: по последним наблюдениям как query.
-        query_text = "\n".join(
-            f"{ev.event_type} {redact_numbers(ev.payload)}" for ev in visible_events[-15:]
-        )
+        fact_lines = [_event_fact_line(state=state, event=ev) for ev in visible_events[-15:]]
+        query_text = "\n".join(line for line in fact_lines if line)
         query_embedding: list[float] | None = None
         if self.embedder is not None and query_text.strip():
             started = asyncio.get_running_loop().time()
@@ -833,24 +858,32 @@ class AgentRunner:
                 )
             )
 
-        interview_fragments = mem.retrieve(
-            query_text=query_text,
-            query_embedding=query_embedding,
-            tick=state.tick,
-            cfg=self.memory,
-            allowed_kinds={"interview"},
-            top_k=4,
-        )
-        if interview_fragments:
-            parts.append(
-                render_prompt(
-                    "agent.blocks.memory.interview_header",
-                    lines="\n".join(
-                        render_prompt("agent.blocks.memory.anchor_item", text=_truncate(item.text, 180))
-                        for item in interview_fragments
-                    ),
-                )
+        if self.memory.interview_render_mode == "full":
+            interview_text = agent.persona.interview_as_text()
+            if interview_text:
+                parts.append(render_prompt("agent.blocks.memory.interview_full", text=interview_text))
+        else:
+            interview_fragments = mem.retrieve(
+                query_text=query_text,
+                query_embedding=query_embedding,
+                tick=state.tick,
+                cfg=self.memory,
+                allowed_kinds={"interview"},
+                top_k=self.memory.interview_retrieval_top_k,
             )
+            if interview_fragments:
+                parts.append(
+                    render_prompt(
+                        "agent.blocks.memory.interview_header",
+                        lines="\n".join(
+                            render_prompt(
+                                "agent.blocks.memory.anchor_item",
+                                text=_truncate(item.text, self.memory.interview_retrieval_max_chars),
+                            )
+                            for item in interview_fragments
+                        ),
+                    )
+                )
 
         reflections = mem.retrieve(
             query_text=query_text,
@@ -865,7 +898,7 @@ class AgentRunner:
                 render_prompt(
                     "agent.blocks.memory.reflections_header",
                     lines="\n".join(
-                        render_prompt("agent.blocks.memory.anchor_item", text=_truncate(item.text, 180))
+                        render_prompt("agent.blocks.memory.anchor_item", text=_truncate(item.text, 600))
                         for item in reflections
                     ),
                 )

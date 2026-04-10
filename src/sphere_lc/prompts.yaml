@@ -142,6 +142,9 @@ agent:
       interview_header: |-
         Фрагменты интервью:
         {{lines}}
+      interview_full: |-
+        Интервью (полное):
+        {{text}}
       reflections_header: |-
         Экспертная рефлексия:
         {{lines}}

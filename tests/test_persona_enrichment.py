@@ -173,10 +173,9 @@ def test_render_memory_keeps_full_summary_and_adds_biography_excerpt(tmp_path: P
     mem_text = asyncio.run(runner._render_memory(agent=agent, state=state, visible_events=[]))
     assert summary[-20:] in mem_text
     assert "Биография (начало):" in mem_text
-    assert "…" in mem_text
 
 
-def test_render_memory_surfaces_interview_and_reflection_sections(tmp_path: Path) -> None:
+def test_render_memory_surfaces_interview_and_reflection_sections_in_retrieval_mode(tmp_path: Path) -> None:
     agent = AgentState(
         agent_id="agent:off_1",
         name="Off 1",
@@ -205,12 +204,50 @@ def test_render_memory_surfaces_interview_and_reflection_sections(tmp_path: Path
     runner = AgentRunner(
         llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
         runtime=RuntimeConfig(),
-        memory=MemoryConfig(),
+        memory=MemoryConfig(interview_render_mode="retrieval"),
     )
 
     mem_text = asyncio.run(runner._render_memory(agent=agent, state=state, visible_events=[]))
 
     assert "Фрагменты интервью:" in mem_text
+    assert "Экспертная рефлексия:" in mem_text
+
+
+def test_render_memory_surfaces_full_interview_in_full_mode(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(
+            summary="Краткая персона",
+            biography="Развёрнутая биография",
+            interview=[
+                {
+                    "question": "Как вы ведёте себя под давлением?",
+                    "answer": "Сначала ищу тихий обходной путь.",
+                }
+            ],
+            reflections=[ExpertReflection(expert="psychologist", summary="Стремится избегать открытого конфликта.")],
+        ),
+    )
+    agent.memory.add_doc(
+        tick=0,
+        kind="reflection",
+        importance=8.0,
+        text="psychologist: При стрессе сохраняет внешнюю лояльность и действует непрямо.",
+        cfg=MemoryConfig(),
+    )
+    state = WorldState(tick=0, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(interview_render_mode="full"),
+    )
+
+    mem_text = asyncio.run(runner._render_memory(agent=agent, state=state, visible_events=[]))
+
+    assert "Интервью (полное):" in mem_text
+    assert "Q: Как вы ведёте себя под давлением?" in mem_text
     assert "Экспертная рефлексия:" in mem_text
 
 
