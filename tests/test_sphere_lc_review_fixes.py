@@ -597,6 +597,52 @@ def test_arbiter_recovers_canonical_agent_id_from_step_text(tmp_path: Path) -> N
     assert res.ops[0].to_id == "agent:off_2"
 
 
+def test_send_message_prefers_context_over_full_step_multi_mention(tmp_path: Path) -> None:
+    state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
+    state.agents["agent:off_3"] = AgentState(
+        agent_id="agent:off_3",
+        name="Off 3",
+        internal=True,
+        capabilities=["message"],
+    )
+    state.registry.register(
+        EntityRecord(entity_id="agent:off_3", kind=EntityKind.AGENT, created_by=None, created_tick=0, meta={"name": "Off 3"})
+    )
+    arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())
+    decision = _PerformArbiterOutput.model_validate(
+        {
+            "approved": True,
+            "reason": "approved",
+            "ops": [
+                {
+                    "op_type": "send_message",
+                    "args": {
+                        "to_id": "",
+                        "private": True,
+                        "text": "Сначала напишу коллеге по итогам шага.",
+                    },
+                }
+            ],
+        }
+    )
+
+    res, _, _ = asyncio.run(
+        arbiter._convert_perform_decision(
+            state=state,
+            agent_id="agent:off_1",
+            proposal="Сначала напишу agent:off_2, а затем отдельно сообщу agent:off_3, если понадобится.",
+            step_target_id="agent:off_2",
+            agent_caps={"message"},
+            action_index=0,
+            decision=decision,
+        )
+    )
+
+    assert res.approved is True
+    assert [op.__class__.__name__ for op in res.ops] == ["SendMessageOp"]
+    assert res.ops[0].to_id == "agent:off_2"
+
+
 def test_arbiter_resolves_exact_display_name_from_args(tmp_path: Path) -> None:
     state = _mk_state(off_1_caps=["message"], off_2_caps=["message"])
     arbiter = _mk_arbiter(tmp_path, mock=MockLLMProvider())

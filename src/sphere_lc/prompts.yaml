@@ -242,6 +242,11 @@ worldgen:
       1. Либо вернуть только те `entity_creations`, которые реально нужны, чтобы artifact стал валидным.
       2. Либо вернуть `drop_artifact_ids`, если такой artifact не должен materialize-иться в этом мире.
       Не придумывай новые artifacts и не переписывай сами artifact payload.
+      Ты обязан использовать exact missing IDs из issues.
+      Если issue требует `org:local_media`, верни именно `org:local_media`, а не новый alias вроде `org:media_local`.
+      Если issue требует `zone:media_office`, верни именно `zone:media_office`.
+      Если создаёшь missing `zone:*` и для этого issue есть missing owner org, укажи exact `primary_org_id` этого owner org.
+      Если похожая внешняя сущность уже существует в `state_snapshot`, reuse exact existing ID и не меняй naming между тиками.
       Не используй hardcoded allowlist внешних организаций. Решай по контексту мира.
       Ответ: строго JSON по схеме.
     user: |-

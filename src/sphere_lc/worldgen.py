@@ -359,6 +359,20 @@ class ArtifactDependencyRepair:
     drop_artifact_ids: set[str] = field(default_factory=set)
 
 
+def _exact_dependency_map(issues: list[ArtifactDependencyIssue]) -> dict[str, set[str]]:
+    """Карта exact missing IDs по artifact_id."""
+
+    out: dict[str, set[str]] = {}
+    for item in issues:
+        expected = {
+            dependency_id
+            for dependency_id in (item.missing_owner_org_id, item.missing_zone_id)
+            if dependency_id
+        }
+        out[item.artifact_id] = expected
+    return out
+
+
 def collect_artifact_dependency_issues(
     *,
     known_entity_ids: set[str],
@@ -699,6 +713,12 @@ class WorldGenerator:
 
         if not issues:
             return ArtifactDependencyRepair()
+        expected_dependency_map = _exact_dependency_map(issues)
+        required_entity_ids = {
+            dependency_id
+            for dependency_ids in expected_dependency_map.values()
+            for dependency_id in dependency_ids
+        }
 
         payload = {
             "tick": tick,
@@ -756,11 +776,14 @@ class WorldGenerator:
             return ArtifactDependencyRepair()
 
         entity_creations: list[EntityCreation] = []
+        returned_entity_ids: set[str] = set()
         for raw in parsed.entity_creations:
             entity_id = raw.entity_id.strip()
             kind = raw.kind.strip()
             title = raw.title.strip()
             if not entity_id or not kind or not title:
+                continue
+            if entity_id not in required_entity_ids:
                 continue
             entity_creations.append(
                 EntityCreation(
@@ -774,13 +797,30 @@ class WorldGenerator:
                     unit=(raw.unit or "").strip() or None,
                 )
             )
+            returned_entity_ids.add(entity_id)
+        issues_by_zone = {item.missing_zone_id: item for item in issues if item.missing_zone_id}
+        for item in entity_creations:
+            if item.kind != "zone":
+                continue
+            issue = issues_by_zone.get(item.entity_id)
+            if issue is None or not issue.missing_owner_org_id:
+                continue
+            if item.primary_org_id != issue.missing_owner_org_id:
+                return ArtifactDependencyRepair(drop_artifact_ids=set(expected_dependency_map.keys()))
+
+        unresolved_artifact_ids = {
+            artifact_id
+            for artifact_id, expected_ids in expected_dependency_map.items()
+            if not expected_ids.issubset(returned_entity_ids)
+        }
+        dropped_artifact_ids = {
+            normalize_worldgen_artifact_id(item)
+            for item in parsed.drop_artifact_ids
+            if normalize_worldgen_artifact_id(item)
+        }
         return ArtifactDependencyRepair(
             entity_creations=entity_creations,
-            drop_artifact_ids={
-                normalize_worldgen_artifact_id(item)
-                for item in parsed.drop_artifact_ids
-                if normalize_worldgen_artifact_id(item)
-            },
+            drop_artifact_ids=dropped_artifact_ids | unresolved_artifact_ids,
         )
 
     async def generate(

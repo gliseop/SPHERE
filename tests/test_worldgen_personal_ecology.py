@@ -450,6 +450,53 @@ class _RepairingExternalDependencyWorldgenProvider(MockLLMProvider):
         return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
 
 
+class _MismatchedRepairDependencyWorldgenProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Сделай следующий ход в этой ситуации." in user:
+            return StructuredLLMResponse(data={"actions": [{"type": "noop", "justification": "idle"}]}, model="mock")
+        if "repair-pass для worldgen artifact dependencies" in system:
+            return StructuredLLMResponse(
+                data={
+                    "entity_creations": [
+                        {
+                            "entity_id": "org:media_local",
+                            "kind": "org",
+                            "title": "Alias вместо exact ID",
+                            "description": "Неверная сущность для repair-pass.",
+                        }
+                    ],
+                    "drop_artifact_ids": [],
+                },
+                model="mock",
+            )
+        if '"phase": "post"' in user:
+            return StructuredLLMResponse(
+                data={
+                    "events": [],
+                    "spawns": [],
+                    "artifact_creations": [
+                        {
+                            "artifact_id": "art:gazette_article_conflict",
+                            "artifact_type": "news_article",
+                            "title": "Заметка о конфликте интересов",
+                            "summary": "Внешняя публикация о подозрениях в конфликте интересов.",
+                            "owner_org_id": "org:gazette",
+                            "visibility": "public",
+                            "status": "published",
+                        }
+                    ],
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"events": [], "spawns": []}, model="mock")
+
+
 class _ArtifactPrefixWorldgenProvider(MockLLMProvider):
     def generate_structured(
         self,
@@ -1633,6 +1680,49 @@ def test_post_worldgen_repairs_missing_external_owner_dependency(tmp_path: Path)
         and event["payload"].get("entity_id") == "org:gazette"
         for event in events
     )
+
+
+def test_post_worldgen_repair_requires_exact_missing_ids(tmp_path: Path) -> None:
+    provider = _MismatchedRepairDependencyWorldgenProvider()
+    cfg = ScenarioConfig.model_validate(
+        {
+            "version": 1,
+            "title": "repair-exact-id-contract",
+            "ticks": 1,
+            "runtime": {
+                "enable_worldgen": True,
+                "worldgen_every_ticks": 1,
+            },
+            "agents": [
+                {
+                    "agent_id": "agent:off_1",
+                    "name": "Off 1",
+                    "internal": True,
+                    "persona": "Чиновник",
+                    "capabilities": ["message"],
+                    "org_id": "org:city_hall",
+                }
+            ],
+            "world": {
+                "orgs": [{"org_id": "org:city_hall", "title": "Мэрия"}],
+            },
+        }
+    )
+    artifacts = RunArtifacts(
+        out_dir=tmp_path,
+        events_path=tmp_path / "events.jsonl",
+        trace_path=tmp_path / "trace.jsonl",
+    )
+
+    state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=provider).run())
+
+    assert "art:gazette_article_conflict" not in state.artifacts
+    assert "org:media_local" not in state.registry.list_ids(EntityKind.ORG)
+    events = [json.loads(line) for line in artifacts.events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    dependency_events = [event for event in events if event["event_type"] == "worldgen_artifact_dependency_missing"]
+    assert dependency_events
+    assert dependency_events[0]["payload"]["repair_attempted"] is True
+    assert dependency_events[0]["payload"]["artifact_dropped"] is True
 
 
 def test_post_worldgen_normalizes_legacy_artifact_prefix(tmp_path: Path) -> None:

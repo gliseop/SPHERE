@@ -1842,6 +1842,7 @@ class Arbiter:
                 ambiguous_reason="ambiguous_to_id",
                 action_target_id=action_target_id,
                 fallback_id=fallback_target_agent_id,
+                prefer_context=True,
             )
             temporal_error = self._validate_temporal_texts(
                 current_tick=state.tick,
