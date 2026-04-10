@@ -744,6 +744,13 @@ class WorldEngine:
             )
             if truth_records:
                 truth_log.extend(truth_records)
+            truth_contact_records = truth_detector.detect_contact_patterns(
+                state=state,
+                all_events=list(truth_recent) + list(tick_events),
+                tick=state.tick,
+            )
+            if truth_contact_records:
+                truth_log.extend(truth_contact_records)
 
             if self.cfg.governance.audit.enabled:
                 audit_window = int(self.cfg.governance.audit.lookback_events)

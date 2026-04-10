@@ -80,6 +80,69 @@ class TruthDetector:
             )
         return self._dedupe(records)
 
+    def detect_contact_patterns(
+        self,
+        *,
+        state: WorldState,
+        all_events: list[Event],
+        tick: int,
+        window_ticks: int = 5,
+        threshold: int = 4,
+    ) -> list[TruthRecord]:
+        """State-based truth: систематические private/in-person контакты internal↔external."""
+
+        low_tick = int(tick) - int(window_ticks)
+        pairs: dict[tuple[str, str], int] = {}
+        for event in all_events:
+            if int(event.tick) < low_tick:
+                continue
+            payload = event.payload or {}
+            left = ""
+            right = ""
+            if event.event_type == "message_sent" and bool(payload.get("private", True)):
+                left = str(event.actor_id or "")
+                right = str(payload.get("to_id") or "")
+            elif (
+                event.event_type == "narrative_action"
+                and str(payload.get("action_kind") or "").strip() == "in_person_contact"
+            ):
+                left = str(event.actor_id or "")
+                right = str(payload.get("counterparty_agent_id") or "")
+            if not left or not right:
+                continue
+            key = (min(left, right), max(left, right))
+            pairs[key] = pairs.get(key, 0) + 1
+
+        records: list[TruthRecord] = []
+        for (left, right), count in pairs.items():
+            if count < int(threshold):
+                continue
+            left_agent = state.agents.get(left)
+            right_agent = state.agents.get(right)
+            if left_agent is None or right_agent is None:
+                continue
+            if bool(left_agent.internal) == bool(right_agent.internal):
+                continue
+            subject_agent_id = left if left_agent.internal else right
+            target_agent_id = right if left_agent.internal else left
+            records.append(
+                TruthRecord(
+                    tick=int(tick),
+                    subject_agent_id=subject_agent_id,
+                    target_agent_id=target_agent_id,
+                    violation_type="conflict_of_interest",
+                    severity="high" if count >= 6 else "medium",
+                    confidence=min(1.0, 0.5 + count * 0.1),
+                    summary=(
+                        f"Систематические приватные контакты {subject_agent_id}↔{target_agent_id}: "
+                        f"{count} за {window_ticks} тиков."
+                    ),
+                    mechanism="private_contact_frequency",
+                    risk_tags=["external_contact", "procurement"],
+                )
+            )
+        return self._dedupe(records)
+
     def _records_for_event(
         self,
         *,

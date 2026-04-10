@@ -320,6 +320,62 @@ def test_truth_detector_counts_in_person_contact_for_vote_pattern() -> None:
     assert records[0].violation_type == "support_vote_after_private_contact"
 
 
+def test_truth_detector_detect_contact_patterns_includes_current_tick_events() -> None:
+    state = _mk_state()
+    state.agents["agent:contractor"] = AgentState(
+        agent_id="agent:contractor",
+        name="Contractor",
+        internal=False,
+        capabilities=["message"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:contractor",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "agent:contractor"},
+        )
+    )
+    detector = TruthDetector(private_contact_window_ticks=3)
+    all_events = [
+        Event(
+            tick=2,
+            event_type="message_sent",
+            actor_id="agent:off_1",
+            payload={"to_id": "agent:contractor", "private": True, "text": "one"},
+        ),
+        Event(
+            tick=3,
+            event_type="message_sent",
+            actor_id="agent:contractor",
+            payload={"to_id": "agent:off_1", "private": True, "text": "two"},
+        ),
+        Event(
+            tick=4,
+            event_type="message_sent",
+            actor_id="agent:off_1",
+            payload={"to_id": "agent:contractor", "private": True, "text": "three"},
+        ),
+        Event(
+            tick=5,
+            event_type="message_sent",
+            actor_id="agent:contractor",
+            payload={"to_id": "agent:off_1", "private": True, "text": "four"},
+        ),
+    ]
+
+    records = detector.detect_contact_patterns(
+        state=state,
+        all_events=all_events,
+        tick=5,
+    )
+
+    assert records
+    assert records[0].violation_type == "conflict_of_interest"
+    assert records[0].target_agent_id == "agent:contractor"
+
+
 def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:
     truth_log = TruthLog(tmp_path / "truth.jsonl")
     truth_log.append(

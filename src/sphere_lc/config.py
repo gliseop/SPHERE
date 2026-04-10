@@ -432,6 +432,7 @@ class AuditRuntimeConfig(BaseModel):
     response_window_ticks: int = 2
     max_findings_per_tick: int = 8
     access_policy: Literal["metadata_only", "internal", "full_internal"] = "internal"
+    redact_private_message_content: bool = True
     min_confidence_to_flag: float = 0.6
     min_confidence_to_open_case: float = 0.6
     min_confidence_to_freeze: float = 0.85

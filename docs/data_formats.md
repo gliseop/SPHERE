@@ -430,6 +430,7 @@ Runtime-аудит реализован отдельным модулем `audit
 | `response_window_ticks` | `int` | Сколько тиков даётся на объяснение/документы до follow-up escalation |
 | `max_findings_per_tick` | `int` | Лимит findings на тик |
 | `access_policy` | `metadata_only` / `internal` / `full_internal` | Какой объём private/internal данных раскрывается LLM-аудитору |
+| `redact_private_message_content` | `bool` | Если `true`, текст приватных сообщений всегда скрыт от LLM-аудитора независимо от `access_policy`; если `false`, действует legacy-логика `access_policy` |
 | `min_confidence_to_flag` | `float` | Порог эмиссии `audit_flagged` |
 | `min_confidence_to_open_case` | `float` | Порог открытия audit-case |
 | `min_confidence_to_freeze` | `float` | Порог заморозки репутации |

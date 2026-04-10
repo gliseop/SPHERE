@@ -173,6 +173,7 @@ Observation-only шаги теперь отделены от fail-path нема�
 Текущая архитектура:
 
 1. **Deterministic baseline + freeform LLM findings**: аудитор всегда строит baseline-findings только по структурным паттернам мира (self-reputation award, nomination/support vote after private contact, overdue response on open case / queue obligation), а в режимах `llm`/`hybrid` дополняет их LLM-сигналами в свободной форме. Для LLM главным когнитивным интерфейсом считаются `violation_type_freeform`, `summary` и `mechanism`, а не жёсткий выбор из фиксированного меню нарушений.
+   В privacy-layer LLM-аудитор больше не видит `environment_informal_link_updated`, текст приватных сообщений по умолчанию скрывается через `governance.audit.redact_private_message_content=true`, а закрытые `narrative_action`/`pending_interaction_*` проходят в sanitize-режиме без содержательных `description`/`summary`.
 2. **Verifier pass + policy resolution**: перед actuator-слоем LLM finding проходит отдельный verifier-pass. Он получает draft finding, candidate evidence и недавние события мира, оценивает `runtime_support_level`, при необходимости предлагает канонический `violation_type`, может уточнить `target_agent_id` и даёт мягкую рекомендацию для policy-layer. Иными словами, LLM сначала описывает риск, затем отдельный verifier проверяет его runtime-groundedness, и только после этого policy-layer решает, открывать ли кейс, запрашивать ли объяснение, включать monitoring, freeze или collegial review.
 3. **Case aggregation**: repeated findings не открывают бесконечную россыпь `audit_case:{finding_id}`, а схлопываются в стабильный `audit_case:*` по subject/type/target/beneficiary. В кейсе накапливаются `episode_count`, `updated_tick`, `response_due_tick`, `review_vote_id`, `monitoring`.
 4. **Deterministic actuator**: findings и case-policy детерминированно преобразуются в:
@@ -198,7 +199,7 @@ Baseline-эвристики аудитора теперь сфокусирова
 
 ## Truth-layer и evaluation
 
-После формирования фактических `tick_events`, но до эмиссии audit-интервенций, движок прогоняет deterministic `TruthDetector`. Он пишет sidecar `truth.jsonl` с каноническими `TruthRecord`, которые не зависят от того, сработал ли runtime-аудитор.
+После формирования фактических `tick_events`, но до эмиссии audit-интервенций, движок прогоняет deterministic `TruthDetector`. Он пишет sidecar `truth.jsonl` с каноническими `TruthRecord`, которые не зависят от того, сработал ли runtime-аудитор. Помимо event-driven правил по `vote_*`/`reputation_*`, truth-layer теперь может отдельно фиксировать state-based паттерн систематических private/in-person контактов между внутренним и внешним участником по объединённому окну `recent_events + tick_events`.
 
 Опционально (`runtime.freeform_truth_enabled=true`) движок дополнительно пишет `truth_freeform.jsonl` через `FreeformTruthRecorder`. Это LLM-based post-hoc слой, который записывает нарушения в свободной форме по unified finding schema (`summary`, `mechanism`, `beneficiary`, `risk_tags`, `evidence_refs`), не подменяя собой deterministic `truth.jsonl`.
 

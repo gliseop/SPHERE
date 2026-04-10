@@ -13,7 +13,7 @@ from sphere_lc.events import Event
 from sphere_lc.ids import EntityKind
 from sphere_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
 from sphere_lc.ops import ModifyReputationOp, OpenAuditCaseOp, OpenVoteOp, UpdateAuditCaseOp
-from sphere_lc.state import AgentState, ArtifactState, AuditCase, Vote, WorldState
+from sphere_lc.state import AgentState, ArtifactState, AuditCase, Vote, WorkItem, WorldState
 from sphere_lc.tracing import TraceLog
 
 
@@ -57,8 +57,7 @@ def test_runtime_auditor_compacts_noisy_recent_events_for_llm() -> None:
 
     compact = auditor._compact_recent_events_for_llm(events=events)
 
-    assert len(compact) == 6
-    assert compact[-1].payload["link_id"] == "link:11"
+    assert compact == []
 
 
 class _TickOneAuditorProvider(MockLLMProvider):
@@ -152,6 +151,136 @@ class _FreeformSignalAuditorProvider(MockLLMProvider):
             },
             model="mock",
         )
+
+
+class _RiskFindingsKeyAuditorProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data={
+                "risk_findings": [
+                    {
+                        "subject_agent_id": "agent:off_1",
+                        "target_agent_id": "agent:off_2",
+                        "violation_type": "support_vote_after_private_contact",
+                        "risk_family": "preferential_treatment",
+                        "confidence": 0.84,
+                        "summary": "Приватные контакты перед голосованием в пользу адресата.",
+                        "mechanism": "private contact + support vote",
+                    }
+                ]
+            },
+            model="mock",
+        )
+
+
+class _PrivatePairsCaptureProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        payload = json.loads(user)
+        pairs = payload.get("private_contact_pairs") or []
+        if any(pair.get("agents") == ["agent:contractor", "agent:head"] and pair.get("count", 0) >= 3 for pair in pairs):
+            return StructuredLLMResponse(
+                data={
+                    "findings": [
+                        {
+                            "subject_agent_id": "agent:head",
+                            "target_agent_id": "agent:contractor",
+                            "violation_type": "conflict_of_interest",
+                            "risk_family": "conflict_of_interest",
+                            "confidence": 0.75,
+                            "summary": "Есть паттерн частых приватных контактов внутреннего и внешнего участника.",
+                            "mechanism": "private_contact_frequency",
+                        }
+                    ]
+                },
+                model="mock",
+            )
+        return StructuredLLMResponse(data={"findings": []}, model="mock")
+
+
+def test_runtime_auditor_sanitize_redacts_private_internal_message_by_default() -> None:
+    state = _mk_state()
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, access_policy="full_internal"))
+    event = Event(
+        tick=1,
+        event_type="message_sent",
+        actor_id="agent:off_1",
+        payload={"to_id": "agent:off_2", "private": True, "text": "секретный текст"},
+    )
+
+    rows = auditor._sanitize_events(state=state, events=[event])
+
+    assert rows[0]["payload"].get("text_redacted") is True
+    assert rows[0]["payload"].get("text") is None
+    assert rows[0]["payload"].get("text_len") == len("секретный текст")
+
+
+def test_runtime_auditor_sanitize_can_restore_legacy_internal_private_access() -> None:
+    state = _mk_state()
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(
+            enabled=True,
+            access_policy="internal",
+            redact_private_message_content=False,
+        )
+    )
+    event = Event(
+        tick=1,
+        event_type="message_sent",
+        actor_id="agent:off_1",
+        payload={"to_id": "agent:off_2", "private": True, "text": "секретный текст"},
+    )
+
+    rows = auditor._sanitize_events(state=state, events=[event])
+
+    assert rows[0]["payload"].get("text") == "секретный текст"
+    assert "text_redacted" not in rows[0]["payload"]
+
+
+def test_runtime_auditor_sanitize_redacts_in_person_contact_and_pending_due_summary() -> None:
+    state = _mk_state()
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True))
+    events = [
+        Event(
+            tick=1,
+            event_type="narrative_action",
+            actor_id="agent:off_1",
+            payload={
+                "action_kind": "in_person_contact",
+                "description": "Подробно обсудили схему.",
+                "counterparty_agent_id": "agent:off_2",
+                "zone_id": "zone:office",
+            },
+        ),
+        Event(
+            tick=1,
+            event_type="pending_interaction_due",
+            actor_id=None,
+            payload={
+                "interaction_id": "pending:1",
+                "target_agent_id": "agent:off_1",
+                "category": "reply",
+                "summary": "Передать закрытые пояснения по тендеру",
+            },
+        ),
+    ]
+
+    rows = auditor._sanitize_events(state=state, events=events)
+
+    assert rows[0]["payload"].get("content_redacted") is True
+    assert "description" not in rows[0]["payload"]
+    assert "summary" not in rows[1]["payload"]
 
 
 def test_modify_reputation_positive_gain_blocked_while_frozen() -> None:
@@ -368,6 +497,21 @@ def test_runtime_auditor_maps_freeform_llm_signal_to_canonical_vote_pattern(tmp_
     assert any(event.event_type == "audit_flagged" for event in outcome.events)
 
 
+def test_runtime_auditor_accepts_risk_findings_key(tmp_path: Path) -> None:
+    state = _mk_state()
+    state.tick = 2
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm"),
+        llm=LLMCaller(provider=_RiskFindingsKeyAuditorProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+    )
+
+    outcome = asyncio.run(auditor.inspect_tick(state=state, tick_events=[], recent_events=[]))
+
+    assert outcome.findings
+    assert outcome.findings[0].violation_type == "support_vote_after_private_contact"
+    assert any(event.event_type == "audit_flagged" for event in outcome.events)
+
+
 def test_runtime_auditor_keeps_distinct_targets_for_same_violation_type() -> None:
     state = _mk_state()
     state.agents["agent:off_3"] = AgentState(
@@ -452,6 +596,167 @@ def test_runtime_auditor_keeps_distinct_targets_for_same_violation_type() -> Non
         finding.target_agent_id
         for finding in outcome.findings
     } == {"agent:off_2", "agent:off_3"}
+
+
+def test_runtime_auditor_counts_private_contact_pairs_with_current_tick_events(tmp_path: Path) -> None:
+    state = _mk_state()
+    state.agents["agent:head"] = AgentState(
+        agent_id="agent:head",
+        name="Head",
+        internal=True,
+        capabilities=["dao", "message"],
+    )
+    state.agents["agent:contractor"] = AgentState(
+        agent_id="agent:contractor",
+        name="Contractor",
+        internal=False,
+        capabilities=["message"],
+    )
+    for aid in ("agent:head", "agent:contractor"):
+        state.registry.register(
+            EntityRecord(
+                entity_id=aid,
+                kind=EntityKind.AGENT,
+                created_by=None,
+                created_tick=0,
+                meta={"name": aid},
+            )
+        )
+    state.tick = 4
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm"),
+        llm=LLMCaller(provider=_PrivatePairsCaptureProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+    )
+    recent_events = [
+        Event(
+            tick=2,
+            event_type="message_sent",
+            actor_id="agent:head",
+            payload={"to_id": "agent:contractor", "private": True, "text": "one"},
+        ),
+        Event(
+            tick=3,
+            event_type="message_sent",
+            actor_id="agent:contractor",
+            payload={"to_id": "agent:head", "private": True, "text": "two"},
+        ),
+    ]
+    tick_events = [
+        Event(
+            tick=4,
+            event_type="message_sent",
+            actor_id="agent:head",
+            payload={"to_id": "agent:contractor", "private": True, "text": "three"},
+        )
+    ]
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=tick_events,
+            recent_events=recent_events,
+        )
+    )
+
+    assert outcome.findings
+    assert outcome.findings[0].violation_type == "conflict_of_interest"
+
+
+def test_runtime_auditor_rule_flags_internal_external_contact_pattern() -> None:
+    state = _mk_state()
+    state.agents["agent:contractor"] = AgentState(
+        agent_id="agent:contractor",
+        name="Contractor",
+        internal=False,
+        capabilities=["message"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:contractor",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "agent:contractor"},
+        )
+    )
+    state.tick = 3
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
+    recent_events = [
+        Event(
+            tick=1,
+            event_type="message_sent",
+            actor_id="agent:off_1",
+            payload={"to_id": "agent:contractor", "private": True, "text": "one"},
+        ),
+        Event(
+            tick=2,
+            event_type="message_sent",
+            actor_id="agent:contractor",
+            payload={"to_id": "agent:off_1", "private": True, "text": "two"},
+        ),
+    ]
+    tick_events = [
+        Event(
+            tick=3,
+            event_type="message_sent",
+            actor_id="agent:off_1",
+            payload={"to_id": "agent:contractor", "private": True, "text": "three"},
+        )
+    ]
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=tick_events,
+            recent_events=recent_events,
+        )
+    )
+
+    assert outcome.findings
+    assert outcome.findings[0].violation_type == "conflict_of_interest"
+    assert outcome.findings[0].target_agent_id == "agent:contractor"
+
+
+def test_runtime_auditor_rule_flags_single_bidder_as_signal_only() -> None:
+    state = _mk_state()
+    state.agents["agent:head"] = AgentState(
+        agent_id="agent:head",
+        name="Head",
+        internal=True,
+        capabilities=["dao", "message"],
+    )
+    state.agents["agent:contractor"] = AgentState(
+        agent_id="agent:contractor",
+        name="Contractor",
+        internal=False,
+        capabilities=["message"],
+    )
+    for aid in ("agent:head", "agent:contractor"):
+        state.registry.register(
+            EntityRecord(
+                entity_id=aid,
+                kind=EntityKind.AGENT,
+                created_by=None,
+                created_tick=0,
+                meta={"name": aid},
+            )
+        )
+    state.work_items["work:T-001"] = WorkItem(
+        work_id="work:T-001",
+        work_type="procurement_tender",
+        title="Tender",
+        participants=["agent:head", "agent:contractor"],
+        status="open",
+    )
+    state.tick = 2
+    auditor = RuntimeAuditor(cfg=AuditRuntimeConfig(enabled=True, mode="rules"))
+
+    outcome = asyncio.run(auditor.inspect_tick(state=state, tick_events=[], recent_events=[]))
+
+    assert outcome.findings
+    single_bidder = next(f for f in outcome.findings if f.mechanism == "single_bidder")
+    assert single_bidder.violation_type == "other"
+    assert single_bidder.recommended_action == "signal_only"
 
 
 def test_runtime_auditor_freezes_self_reputation_award() -> None:

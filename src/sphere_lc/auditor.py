@@ -31,6 +31,7 @@ _RISK_FAMILIES = {
     "other",
 }
 _CANONICAL_VIOLATION_TYPES = {
+    "conflict_of_interest",
     "preferential_treatment_for_connected_actor",
     "non_escalation_under_pressure",
     "partial_disclosure_under_deadline_pressure",
@@ -288,6 +289,7 @@ class RuntimeAuditor:
         if self.llm is None:
             return []
         system = render_prompt("auditor.runtime_findings.system")
+        all_events = list(recent_events) + list(tick_events)
         user = json.dumps(
             {
                 "tick": current_tick,
@@ -307,7 +309,7 @@ class RuntimeAuditor:
                     ),
                 ),
                 "private_contact_pairs": self._private_contact_pairs(
-                    recent_events=recent_events,
+                    recent_events=all_events,
                     current_tick=current_tick,
                 ),
             },
@@ -324,7 +326,7 @@ class RuntimeAuditor:
         )
         raw_data = resp.data
         if isinstance(raw_data, dict):
-            raw_data = raw_data.get("findings", [])
+            raw_data = raw_data.get("findings") or raw_data.get("risk_findings") or []
         if not isinstance(raw_data, list):
             return []
 
@@ -848,7 +850,6 @@ class RuntimeAuditor:
             "pending_interaction_due": 6,
             "pending_interaction_completed": 4,
             "pending_interaction_updated": 4,
-            "environment_informal_link_updated": 6,
             "audit_case_updated": 6,
         }
         keep_all = {
@@ -875,6 +876,8 @@ class RuntimeAuditor:
         kept_reversed: list[Event] = []
         for event in reversed(events):
             event_type = str(event.event_type or "")
+            if event_type == "environment_informal_link_updated":
+                continue
             if event_type in keep_all:
                 kept_reversed.append(event)
                 continue
@@ -1474,22 +1477,42 @@ class RuntimeAuditor:
     def _sanitize_events(self, *, state: WorldState, events: list[Event]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for event in events:
+            if event.event_type == "environment_informal_link_updated":
+                continue
             payload = dict(event.payload or {})
             if event.event_type == "message_sent" and bool(payload.get("private", True)):
                 text = str(payload.get("text") or "")
                 keep_text = False
-                if self.cfg.access_policy == "full_internal":
-                    keep_text = True
-                elif self.cfg.access_policy == "internal":
-                    sender = state.agents.get(str(event.actor_id or ""))
-                    target = state.agents.get(str(payload.get("to_id") or ""))
-                    keep_text = bool(sender is not None and target is not None and sender.internal and target.internal)
+                if not self.cfg.redact_private_message_content:
+                    if self.cfg.access_policy == "full_internal":
+                        keep_text = True
+                    elif self.cfg.access_policy == "internal":
+                        sender = state.agents.get(str(event.actor_id or ""))
+                        target = state.agents.get(str(payload.get("to_id") or ""))
+                        keep_text = bool(
+                            sender is not None and target is not None and sender.internal and target.internal
+                        )
                 if keep_text:
                     payload["text"] = _truncate(text, 400)
                 else:
                     payload.pop("text", None)
                     payload["text_redacted"] = True
                     payload["text_len"] = len(text)
+            if (
+                event.event_type == "narrative_action"
+                and str(payload.get("action_kind") or "").strip() == "in_person_contact"
+            ):
+                payload.pop("description", None)
+                payload.pop("text", None)
+                payload["content_redacted"] = True
+            if event.event_type in {
+                "pending_interaction_created",
+                "pending_interaction_completed",
+                "pending_interaction_updated",
+                "pending_interaction_expired",
+                "pending_interaction_due",
+            }:
+                payload.pop("summary", None)
             elif "text" in payload:
                 payload["text"] = _truncate(str(payload.get("text") or ""), 400)
             if "description" in payload:
@@ -1548,7 +1571,125 @@ class RuntimeAuditor:
                     current_tick=current_tick,
                 )
             )
+        all_events = list(recent_events) + list(tick_events)
+        findings.extend(
+            self._rule_findings_contact_pattern(
+                state=state,
+                all_events=all_events,
+                current_tick=current_tick,
+            )
+        )
+        findings.extend(
+            self._rule_findings_single_bidder(
+                state=state,
+                current_tick=current_tick,
+            )
+        )
         return self._dedupe_findings(findings)
+
+    def _rule_findings_contact_pattern(
+        self,
+        *,
+        state: WorldState,
+        all_events: list[Event],
+        current_tick: int,
+    ) -> list[AuditFinding]:
+        """Частые приватные контакты между внутренним и внешним участником."""
+
+        window_ticks = int(self.cfg.private_contact_window_ticks)
+        low_tick = current_tick - window_ticks
+        pairs: dict[tuple[str, str], int] = {}
+        for event in all_events:
+            if int(event.tick) < low_tick:
+                continue
+            payload = event.payload or {}
+            left = ""
+            right = ""
+            if event.event_type == "message_sent" and bool(payload.get("private", True)):
+                left = str(event.actor_id or "")
+                right = str(payload.get("to_id") or "")
+            elif (
+                event.event_type == "narrative_action"
+                and str(payload.get("action_kind") or "").strip() == "in_person_contact"
+            ):
+                left = str(event.actor_id or "")
+                right = str(payload.get("counterparty_agent_id") or "")
+            if not left or not right:
+                continue
+            key = (min(left, right), max(left, right))
+            pairs[key] = pairs.get(key, 0) + 1
+
+        findings: list[AuditFinding] = []
+        for (left, right), count in pairs.items():
+            if count < 3:
+                continue
+            left_agent = state.agents.get(left)
+            right_agent = state.agents.get(right)
+            if left_agent is None or right_agent is None:
+                continue
+            if bool(left_agent.internal) == bool(right_agent.internal):
+                continue
+            subject_agent_id = left if left_agent.internal else right
+            target_agent_id = right if left_agent.internal else left
+            findings.append(
+                self._make_finding(
+                    tick=current_tick,
+                    subject_agent_id=subject_agent_id,
+                    target_agent_id=target_agent_id,
+                    violation_type="conflict_of_interest",
+                    violation_type_freeform=(
+                        f"Частые приватные контакты с внешним участником: {count} раз за {window_ticks} тиков."
+                    ),
+                    risk_family="conflict_of_interest",
+                    severity="medium" if count < 5 else "high",
+                    confidence=0.75,
+                    summary=f"Приватных контактов внутренний↔внешний: {count}",
+                    mechanism="private_contact_frequency",
+                    recommended_action="open_case" if count >= 5 else "signal_only",
+                    risk_tags=["external_contact", "procurement"],
+                    related_agent_ids=[target_agent_id],
+                )
+            )
+        return findings
+
+    def _rule_findings_single_bidder(
+        self,
+        *,
+        state: WorldState,
+        current_tick: int,
+    ) -> list[AuditFinding]:
+        """Signal-only anomaly: в открытом тендере есть только один внешний участник."""
+
+        findings: list[AuditFinding] = []
+        for work_id, work in state.work_items.items():
+            if work.work_type != "procurement_tender" or work.status != "open":
+                continue
+            participants = list(work.participants)
+            external = [aid for aid in participants if aid in state.agents and not state.agents[aid].internal]
+            internal = [aid for aid in participants if aid in state.agents and state.agents[aid].internal]
+            if len(external) != 1 or not internal:
+                continue
+            findings.append(
+                self._make_finding(
+                    tick=current_tick,
+                    subject_agent_id=internal[0],
+                    target_agent_id=external[0],
+                    violation_type="other",
+                    violation_type_freeform=(
+                        f"Единственный внешний участник тендера {work_id}: {external[0]}. "
+                        "Возможна заточенность требований под конкретного подрядчика."
+                    ),
+                    risk_family="other",
+                    severity="medium",
+                    confidence=0.6,
+                    summary=f"Единственный внешний участник тендера {work_id}: {external[0]}",
+                    mechanism="single_bidder",
+                    recommended_action="signal_only",
+                    risk_tags=["single_bidder", "procurement"],
+                    related_agent_ids=[external[0]],
+                )
+            )
+        return findings
 
     def _findings_for_event(
         self,
