@@ -110,12 +110,12 @@ class DaoEngine:
         if vote.target_agent_id and vote.target_agent_id not in state.agents:
             return VoteDecision(result="canceled", reason="subject_missing")
         voters_total = max(1, len(vote.voters))
-        cast_total = len(vote.votes)
+        cast_total = len(vote.anon_voters_cast)
         if (cast_total / voters_total) < self.cfg.quorum:
             return VoteDecision(result="failed", reason="quorum_not_reached")
 
-        yes = sum(1 for c in vote.votes.values() if c == "yes")
-        no = sum(1 for c in vote.votes.values() if c == "no")
+        yes = int(vote.anon_vote_counts.get("yes", 0))
+        no = int(vote.anon_vote_counts.get("no", 0))
         denom = max(1, yes + no)
         if (yes / denom) >= self.cfg.pass_threshold and yes > no:
             return VoteDecision(result="passed", reason="review_confirmed")

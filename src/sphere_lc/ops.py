@@ -1379,14 +1379,26 @@ class CastVoteOp:
             raise ValueError(f"Vote is not open: {self.vote_id!r}")
         if self.actor_id not in vote.voters:
             raise ValueError(f"Actor is not eligible voter: {self.actor_id!r}")
-        vote.votes[self.actor_id] = self.choice
+        actor_id = self.actor_id
+        payload = {"vote_id": self.vote_id, "choice": self.choice}
+        audience = [INTERNAL_AUDIENCE]
+        if vote.vote_type == "audit_review":
+            if self.actor_id in vote.anon_voters_cast:
+                raise ValueError("already voted")
+            vote.anon_voters_cast.add(self.actor_id)
+            vote.anon_vote_counts[self.choice] = int(vote.anon_vote_counts.get(self.choice, 0)) + 1
+            actor_id = None
+            payload = {"vote_id": self.vote_id}
+            audience = [INTERNAL_AUDIENCE]
+        else:
+            vote.votes[self.actor_id] = self.choice
         return [
             Event(
                 tick=state.tick,
                 event_type="vote_cast",
-                actor_id=self.actor_id,
-                payload={"vote_id": self.vote_id, "choice": self.choice},
-                audience=[INTERNAL_AUDIENCE],
+                actor_id=actor_id,
+                payload=payload,
+                audience=audience,
             )
         ]
 

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from sphere_lc.agent import AgentRunner
+from sphere_lc.agent import AgentRunner, event_visible_to_agent
 from sphere_lc.auditor import RuntimeAuditor
 from sphere_lc.llm import MockLLMProvider, StructuredLLMResponse
 
@@ -50,7 +50,7 @@ from sphere_lc.llm import LLMCaller
 from sphere_lc.llm.caller import create_llm_provider
 from sphere_lc.llm.providers import OpenAICompatibleProvider, create_provider
 from sphere_lc.memory import AgentMemory, WorkingEntry
-from sphere_lc.ops import CreateAgentOp, RecordNarrativeActionOp
+from sphere_lc.ops import CastVoteOp, CreateAgentOp, RecordNarrativeActionOp
 from sphere_lc.ops import CloseAuditCaseOp, OpenAuditCaseOp, OpenVoteOp, UpdateAuditCaseOp
 from sphere_lc.state import AgentState, ArtifactState, Vote, WorkItem, WorldState
 from sphere_lc.tracing import TraceLog
@@ -2054,6 +2054,96 @@ def test_engine_ignores_idempotent_runtime_audit_op_failures(tmp_path: Path) -> 
     assert any(event.event_type == "audit_case_updated" for event in events)
     assert any(event.event_type == "audit_case_closed" for event in events)
     assert sum(1 for event in events if event.event_type == "vote_opened") == 1
+
+
+def test_cast_vote_anonymizes_audit_review_choice_and_actor() -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    state.votes["vote:review_1"] = Vote(
+        vote_id="vote:review_1",
+        vote_type="audit_review",
+        created_by="agent:off_2",
+        created_tick=0,
+        closes_tick=2,
+        target_agent_id="agent:off_2",
+        new_title="",
+        reason="review",
+        voters=["agent:off_1"],
+    )
+
+    events = CastVoteOp(actor_id="agent:off_1", vote_id="vote:review_1", choice="yes").apply(state)
+
+    vote = state.votes["vote:review_1"]
+    assert vote.votes == {}
+    assert vote.anon_vote_counts == {"yes": 1}
+    assert vote.anon_voters_cast == {"agent:off_1"}
+    assert events[0].actor_id is None
+    assert events[0].payload == {"vote_id": "vote:review_1"}
+    assert events[0].audience == ["aud:internal"]
+
+    with pytest.raises(ValueError, match="already voted"):
+        CastVoteOp(actor_id="agent:off_1", vote_id="vote:review_1", choice="yes").apply(state)
+
+
+def test_journal_and_state_hide_audit_review_ballots() -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+    state.votes["vote:review_1"] = Vote(
+        vote_id="vote:review_1",
+        vote_type="audit_review",
+        created_by="agent:off_2",
+        created_tick=0,
+        closes_tick=2,
+        target_agent_id="agent:off_2",
+        new_title="",
+        reason="review",
+        voters=["agent:off_1"],
+        anon_vote_counts={"yes": 1},
+        anon_voters_cast={"agent:off_1"},
+    )
+    state.votes["vote:position_1"] = Vote(
+        vote_id="vote:position_1",
+        vote_type="position_change",
+        created_by="agent:off_1",
+        created_tick=0,
+        closes_tick=2,
+        target_agent_id="agent:off_2",
+        new_title="lead",
+        voters=["agent:off_1"],
+        votes={"agent:off_1": "yes"},
+    )
+
+    journal_votes = {item["id"]: item["votes"] for item in state.journal_dict()["votes"]}
+
+    assert journal_votes["vote:review_1"] == {}
+    assert journal_votes["vote:position_1"] == {"agent:off_1": "yes"}
+    assert WorldJournal._vote_entry(state, "vote:review_1")["votes"] == {}
+    assert WorldJournal._vote_entry(state, "vote:position_1")["votes"] == {"agent:off_1": "yes"}
+
+
+def test_audit_review_vote_opening_is_visible_only_to_reviewers() -> None:
+    state = _mk_state(off_1_caps=["dao"], off_2_caps=["dao"])
+
+    events = OpenVoteOp(
+        vote_id="vote:review_1",
+        created_by="agent:off_2",
+        created_tick=0,
+        closes_tick=2,
+        target_agent_id="agent:off_2",
+        new_title="",
+        reason="review",
+        voters=["agent:off_1"],
+        vote_type="audit_review",
+        metadata={"case_id": "audit_case:review_1"},
+    ).apply(state)
+
+    vote_opened = next(event for event in events if event.event_type == "vote_opened")
+    review_opened = next(event for event in events if event.event_type == "review_case_opened")
+
+    assert vote_opened.audience == ["agent:off_1"]
+    assert event_visible_to_agent(vote_opened, "agent:off_1", internal=True)
+    assert not event_visible_to_agent(vote_opened, "agent:off_2", internal=True)
+    assert review_opened.audience == ["aud:internal"]
+    assert event_visible_to_agent(review_opened, "agent:off_2", internal=True)
+    assert "voters" not in review_opened.payload
 
 
 def test_create_llm_provider_uses_env_base_url(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -43,3 +43,4 @@ sphere_lc = ["prompts.yaml"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = ["slow: long-running integration tests"]

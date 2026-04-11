@@ -17,6 +17,13 @@ from .utils import looks_like_machine_name, looks_like_role_label, normalize_age
 
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _DOTTED_DATE_RE = re.compile(r"\b(\d{2}\.\d{2}\.\d{4})\b")
+_SEMANTIC_REALISM_CATEGORIES: tuple[str, ...] = (
+    "narrating_leakage",
+    "documentary_overclaim",
+    "followup_gap",
+    "external_pressure_unresolved",
+    "institutional_register_failure",
+)
 
 
 class FidelitySummary(BaseModel):
@@ -116,7 +123,10 @@ def _semantic_realism_schema() -> dict[str, Any]:
                     "type": "object",
                     "additionalProperties": False,
                     "properties": {
-                        "category": {"type": "string"},
+                        "category": {
+                            "type": "string",
+                            "enum": list(_SEMANTIC_REALISM_CATEGORIES),
+                        },
                         "severity": {"type": "string"},
                         "summary": {"type": "string"},
                         "evidence_refs": {
@@ -214,9 +224,12 @@ async def augment_fidelity_with_semantic_judge(
         return summary
 
     metrics = dict(summary.by_metric)
+    leakage_count = sum(1 for item in findings if item["category"] == "narrating_leakage")
+    metrics["narrating_leakage_total"] = leakage_count
     metrics["semantic_realism_findings_total"] = len(findings)
     return summary.model_copy(
         update={
+            "narrating_leakage_total": leakage_count,
             "semantic_realism_findings_total": len(findings),
             "semantic_realism_by_category": by_category,
             "semantic_realism_findings": findings,

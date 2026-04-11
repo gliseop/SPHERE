@@ -137,7 +137,9 @@ SPHERE/
 │   ├── test_sphere_lc_smoke.py
 │   ├── test_sphere_lc_cli.py
 │   ├── test_sphere_lc_review_fixes.py
+│   ├── test_persona_behavioral_fidelity.py # Влияние persona/motivation на proposals агента
 │   ├── test_persona_enrichment.py
+│   ├── test_governance_progression.py # Интеграционный smoke G0 vs G1 для audit/truth
 │   ├── test_worldgen_personal_ecology.py
 │   ├── test_truth_evaluation.py
 │   ├── test_auditor.py
@@ -233,6 +235,7 @@ pytest
 pytest tests/test_web_runner.py
 pytest tests/test_persona_enrichment.py -k worldgen
 pytest tests/test_worldgen_personal_ecology.py
+pytest -m slow
 
 # SPHERE-LC
 sphere-lc run --scenario scenarios/lc_minimal.json --out results/lc_minimal_run

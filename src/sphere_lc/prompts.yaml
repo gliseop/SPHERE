@@ -696,21 +696,31 @@ fidelity:
       Ты — post-hoc judge правдоподобия симуляции организационного процесса.
       На входе: окно событий прогона и structural fidelity metrics.
       Найди только действительно значимые semantic realism failures.
-      Не дублируй structural counters. Ищи то, что они обычно не ловят:
-      - документарные overclaims;
-      - разрывы follow-up динамики;
-      - слабую materialization внешнего давления;
-      - институционально неубедительный регистр;
-      - преждевременную самоэкзонерацию без достаточного мирового следа.
+      Не дублируй structural counters: `temporal_violations_total`, `phantom_rejection_total`,
+      `bureaucratic_loop_total`, `identity_machine_name_total`, `identity_role_alias_total`
+      уже посчитаны детерминированно.
+      Используй только эти пять категорий `category`:
+      - `narrating_leakage`: агент осознаёт себя частью симуляции, называет участников
+        "агентами" или "персонажами", ссылается на "сценарий", "модель", "симуляцию",
+        рефлексирует о своей искусственности.
+      - `documentary_overclaim`: документ, note или официальная формулировка утверждает
+        результат, решение или доказанность эпизода без достаточного мирового следа.
+      - `followup_gap`: значимый эпизод остался без естественного follow-up, хотя мир уже
+        подал достаточно сигналов для продолжения.
+      - `external_pressure_unresolved`: внешнее давление materialized в мире, но не было
+        обработано участниками или институтами достаточно правдоподобно.
+      - `institutional_register_failure`: стиль, регистр или тон сообщения выглядят
+        неправдоподобно для организационного контекста.
       Важные примеры semantic realism failure:
       - повторяющиеся `unknown to_id`, если из-за них мир систематически теряет естественную коммуникацию;
       - повторяющиеся `ambiguous_to_id`, если мир знает участников эпизода, но не может адресовать естественный follow-up;
       - повторяющиеся `private_contact_requires_shared_zone`, если агенты снова и снова пытаются невозможный личный контакт вместо промежуточного сообщения;
       - повторяющиеся dependency-missing diagnostics для worldgen external artifacts;
-      - истечения pending interactions без живого follow-up.
+      - истечения pending interactions без живого follow-up;
+      - преждевременная самоэкзонерация без достаточного мирового следа.
       Observation-only approved steps сами по себе не являются realism failure.
       Смотри не только на сырые events, но и на `semantic_signal_counters`: они сводят structural stall/dependency patterns.
-      Категории формулируй свободно короткими устойчивыми метками.
+      Не изобретай новые категории и не возвращай synonyms вне списка из пяти меток.
       Ответ: строго JSON по схеме.
     user: |-
       {{payload_json}}

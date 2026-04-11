@@ -641,6 +641,7 @@ class WorldJournal:
     @staticmethod
     def _vote_entry(state: WorldState, vote_id: str) -> dict[str, Any]:
         v = state.votes[vote_id]
+        serialized_votes = dict(v.votes) if v.vote_type != "audit_review" else {}
         return {
             "id": v.vote_id,
             "type": v.vote_type,
@@ -650,7 +651,7 @@ class WorldJournal:
             "target_agent_id": v.target_agent_id,
             "new_title": v.new_title,
             "target_consented": v.target_consented,
-            "votes": dict(v.votes),
+            "votes": serialized_votes,
             "result": v.result,
         }
 

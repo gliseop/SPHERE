@@ -1087,7 +1087,8 @@ def test_dao_closes_audit_review_and_freezes_subject() -> None:
         new_title="",
         reason="summary",
         voters=["agent:off_2", "agent:off_3"],
-        votes={"agent:off_2": "yes", "agent:off_3": "yes"},
+        anon_vote_counts={"yes": 2},
+        anon_voters_cast={"agent:off_2", "agent:off_3"},
         metadata={
             "case_id": "audit_case:f1",
             "review_action": "freeze_reputation_growth",

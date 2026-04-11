@@ -276,7 +276,9 @@ class Vote:
     reason: str = ""
 
     voters: list[str] = field(default_factory=list)
-    votes: dict[str, str] = field(default_factory=dict)  # agent_id -> yes/no/abstain
+    votes: dict[str, str] = field(default_factory=dict)  # agent_id -> yes/no/abstain (non-anonymous votes)
+    anon_vote_counts: dict[str, int] = field(default_factory=dict)  # choice -> count (audit_review)
+    anon_voters_cast: set[str] = field(default_factory=set)  # who already voted in audit_review
 
     target_consented: bool | None = None
     status: str = "open"  # open|closed
@@ -387,6 +389,7 @@ class WorldState:
         votes = []
         for vid in sorted(self.votes.keys())[:max_votes]:
             v = self.votes[vid]
+            serialized_votes = dict(v.votes) if v.vote_type != "audit_review" else {}
             votes.append(
                 {
                     "id": v.vote_id,
@@ -397,7 +400,7 @@ class WorldState:
                     "target_agent_id": v.target_agent_id,
                     "new_title": v.new_title,
                     "target_consented": v.target_consented,
-                    "votes": dict(v.votes),
+                    "votes": serialized_votes,
                     "result": v.result,
                     "result_reason": v.result_reason,
                     "metadata": dict(v.metadata),

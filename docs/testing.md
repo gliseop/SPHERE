@@ -16,6 +16,8 @@ tests/
 │                                       # DAO, composer, oracle, worldgen, память
 ├── test_sphere_lc_review_fixes.py    # Регрессионные тесты: journal history, persona retry,
 │                                       # ID-нормализация, action schema
+├── test_persona_behavioral_fidelity.py # Влияние motivation/persona на proposals агента
+├── test_governance_progression.py     # Интеграционный smoke G0 vs G1 по audit/truth
 ├── test_embedding.py                   # Провайдеры эмбеддингов (Mock + интеграция)
 │
 │  # Веб-интерфейс
@@ -34,9 +36,12 @@ tests/
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = ["slow: long-running integration tests"]
 ```
 
 Параметр `asyncio_mode = "auto"` означает, что все асинхронные тестовые функции (`async def test_...`) автоматически распознаются и запускаются через `pytest-asyncio` без необходимости явно проставлять `@pytest.mark.asyncio`.
+
+Маркер `slow` используется для многотиковых интеграционных smoke-тестов, которые прогоняют полноценный `WorldEngine` и проверяют сквозной контракт нескольких подсистем сразу.
 
 Глобальный `conftest.py` устанавливает переменную окружения `JWT_SECRET` для тестов веб-модуля.
 
@@ -60,6 +65,9 @@ pytest tests/test_sphere_lc_smoke.py tests/test_sphere_lc_review_fixes.py tests/
 
 # Быстрая проверка
 pytest -x -q
+
+# Только slow-интеграции
+pytest -m slow
 ```
 
 Зависимости для тестов устанавливаются отдельно:
@@ -109,12 +117,25 @@ r = client.post("/api/auth/login", data={"username": "admin", "password": "secre
 assert r.status_code == 200
 ```
 
+### Slow-интеграции и baseline-серия
+
+`tests/test_governance_progression.py` — минимальный автоматический smoke, который проверяет базовый разрыв между `G0` и `G1`: при одинаковом сценарии truth-layer фиксирует нарушение в обоих прогонах, но runtime-аудит должен сработать только когда governance-контур включён. В качестве supported-сигнала используется `self_nomination`, чтобы тест не зависел от уже удалённой narrative-capability `audit`.
+
+Полная ручная серия для главы 2 запускается отдельно через `scripts/run_chapter2_baseline.py`. Скрипт создаёт `comparative_report.json`, где:
+
+- `runs` содержит результаты отдельных прогонов;
+- `by_mode` содержит усреднённые метрики по каждому governance-режиму;
+- `precision` / `recall` / `f1` относятся к эффективности управленческого контура;
+- блок `fidelity` нужен для проверки, не куплено ли улучшение за счёт деградации правдоподобия.
+
 ## Таблица покрытия
 
 | Модуль | Тестовый файл |
 |---|---|
 | `sphere_lc` (конфигурация, движок, агент, арбитр, DAO, composer, oracle, worldgen, память) | `test_sphere_lc_smoke.py` |
 | `sphere_lc` (journal history, persona retry, ID-нормализация, action schema) | `test_sphere_lc_review_fixes.py` |
+| `sphere_lc` (влияние persona/motivation на prompt и proposals) | `test_persona_behavioral_fidelity.py` |
+| `sphere_lc` (интеграционный smoke G0 vs G1) | `test_governance_progression.py` |
 | `sphere_lc.llm.embeddings` | `test_embedding.py` |
 | `web/backend/graph_state.py` | `test_graph_state.py` |
 | `web/backend/auth.py` | `test_web_auth.py` |

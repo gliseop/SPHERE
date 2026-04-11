@@ -60,7 +60,7 @@ class _SemanticRealismCounterProvider(MockLLMProvider):
                 data={
                     "findings": [
                         {
-                            "category": "stall_from_identity_and_external_surface",
+                            "category": "followup_gap",
                             "severity": "high",
                             "summary": "Симуляция теряет коммуникацию и внешнее давление из-за повторяющихся identity/dependency failures.",
                             "evidence_refs": [
@@ -956,7 +956,7 @@ def test_fidelity_semantic_judge_augments_summary(tmp_path: Path) -> None:
                 '"scenario_description": "test semantic realism"': {
                     "findings": [
                         {
-                            "category": "document_grounding",
+                            "category": "documentary_overclaim",
                             "severity": "high",
                             "summary": "Документ утверждает финальный результат без достаточного мирового следа.",
                             "evidence_refs": [{"tick": 0, "event_type": "work_note_added", "actor_id": "agent:off_1"}],
@@ -978,8 +978,8 @@ def test_fidelity_semantic_judge_augments_summary(tmp_path: Path) -> None:
     )
 
     assert augmented.semantic_realism_findings_total == 1
-    assert augmented.semantic_realism_by_category["document_grounding"] == 1
-    assert augmented.semantic_realism_findings[0]["category"] == "document_grounding"
+    assert augmented.semantic_realism_by_category["documentary_overclaim"] == 1
+    assert augmented.semantic_realism_findings[0]["category"] == "documentary_overclaim"
 
 
 def test_fidelity_semantic_judge_uses_structural_stall_counters(tmp_path: Path) -> None:
