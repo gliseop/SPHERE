@@ -1063,7 +1063,7 @@ class Arbiter:
             )
 
         if isinstance(action, PerformAction):
-            return await self._arbitrate_perform(
+            result, _alloc = await self._arbitrate_perform(
                 state=state,
                 agent_id=agent_id,
                 agent_caps=set(agent.capabilities),
@@ -1071,6 +1071,7 @@ class Arbiter:
                 action=action,
                 journal_yaml=journal_yaml,
             )
+            return result
 
         return ActionResult(action_index, False, f"unsupported action: {action.type}", [])
 

@@ -266,7 +266,7 @@ class RuntimeConfig(BaseModel):
     request_entity_internal_only: bool = True
     ecology_activation_window_ticks: int = 2
     worldgen_allow_internal_spawns: bool = False
-    freeform_truth_enabled: bool = True
+    freeform_truth_enabled: bool = False
     freeform_truth_window_ticks: int = 5
     micro_reaction_rounds: int = 0
     micro_reaction_max_agents_per_round: int = 6

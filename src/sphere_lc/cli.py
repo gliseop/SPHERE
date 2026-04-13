@@ -83,7 +83,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
                 stats += f"  [{tp.simulated_date}]"
             progress.update(task_id, completed=tp.tick + 1, stats=stats)
 
-        engine = WorldEngine(cfg=cfg, artifacts=artifacts, on_tick_done=_on_tick)
+        engine = WorldEngine(cfg=cfg, artifacts=artifacts)
+        engine.on_tick_done = _on_tick
         asyncio.run(engine.run())
 
     console.print(
