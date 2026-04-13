@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -167,6 +168,7 @@ class FreeformTruthRecorder:
     llm: LLMCaller
     window_ticks: int = 5
     temperature: float = 0.0
+    max_parallel_windows: int = 4
 
     async def analyze_events(
         self,
@@ -196,41 +198,51 @@ class FreeformTruthRecorder:
         records: list[FreeformTruthRecord] = []
         schema = _freeform_truth_schema()
 
-        for i in range(0, len(ticks_sorted), self.window_ticks):
-            window = ticks_sorted[i : i + self.window_ticks]
-            window_events = []
-            for t in window:
-                window_events.append({"tick": t, "events": by_tick.get(t, [])})
+        sem = asyncio.Semaphore(max(1, self.max_parallel_windows))
 
-            system = render_prompt("oracle.truth_recorder.system")
-            user = render_prompt(
-                "oracle.truth_recorder.user",
-                payload_json=json.dumps(
-                    {
-                        "scenario_description": scenario_description,
-                        "window_ticks": window,
-                        "events": window_events,
-                    },
-                    ensure_ascii=False,
-                ),
-            )
-
-            resp = await self.llm.generate_structured(
-                role="oracle",
-                name="freeform_truth_recorder",
-                tick=max(window),
-                system=system,
-                user=user,
-                schema=schema,
-                temperature=self.temperature,
-            )
-            if not isinstance(resp.data, list):
-                continue
-            for item in resp.data:
+        async def _analyze_window(window: list[int]) -> list[FreeformTruthRecord]:
+            async with sem:
+                window_events = [{"tick": t, "events": by_tick.get(t, [])} for t in window]
+                system = render_prompt("oracle.truth_recorder.system")
+                user = render_prompt(
+                    "oracle.truth_recorder.user",
+                    payload_json=json.dumps(
+                        {
+                            "scenario_description": scenario_description,
+                            "window_ticks": window,
+                            "events": window_events,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
                 try:
-                    records.append(FreeformTruthRecord.model_validate(item))
+                    resp = await self.llm.generate_structured(
+                        role="oracle",
+                        name="freeform_truth_recorder",
+                        tick=max(window),
+                        system=system,
+                        user=user,
+                        schema=schema,
+                        temperature=self.temperature,
+                    )
                 except Exception:
-                    continue
+                    return []
+                result: list[FreeformTruthRecord] = []
+                if isinstance(resp.data, list):
+                    for item in resp.data:
+                        try:
+                            result.append(FreeformTruthRecord.model_validate(item))
+                        except Exception:
+                            continue
+                return result
+
+        windows = [
+            ticks_sorted[i : i + self.window_ticks]
+            for i in range(0, len(ticks_sorted), self.window_ticks)
+        ]
+        window_results = await asyncio.gather(*[_analyze_window(w) for w in windows])
+        for result in window_results:
+            records.extend(result)
 
         uniq: dict[tuple[int, str | None, str, str], FreeformTruthRecord] = {}
         for record in records:

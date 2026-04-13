@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
@@ -654,7 +655,7 @@ class PersonaGenerator:
         while queue:
             qs = queue.pop(0)
             if structured_calls >= max_structured_calls:
-                out.extend([await _answer_one(q) for q in qs])
+                out.extend(await asyncio.gather(*[_answer_one(q) for q in qs]))
                 continue
             try:
                 out.extend(await _try_batch(qs))

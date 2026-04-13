@@ -10,7 +10,10 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-from sphere_lc.engine import WorldEngine, default_artifacts
+from rich.console import Console
+from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, MofNCompleteColumn
+
+from sphere_lc.engine import WorldEngine, TickProgress, default_artifacts
 from sphere_lc.governance_modes import BUILTIN_GOVERNANCE_MODES, apply_builtin_governance_mode
 from sphere_lc.scenario import load_scenario
 
@@ -123,36 +126,64 @@ async def _run_series(
 
     results: list[dict[str, Any]] = []
     by_mode: dict[str, list[dict[str, Any]]] = {mode: [] for mode in governance_modes}
+    total_runs = len(governance_modes) * max(1, int(repeats))
+    run_console = Console(stderr=True)
 
-    for mode in governance_modes:
-        normalized = str(mode).strip().upper()
-        if normalized not in BUILTIN_GOVERNANCE_MODES:
-            raise ValueError(f"Unsupported built-in governance mode: {mode!r}")
-        for run_index in range(max(1, int(repeats))):
-            cfg = load_scenario(scenario_path)
-            apply_builtin_governance_mode(cfg, normalized)
-            if ticks_override is not None:
-                cfg.ticks = int(ticks_override)
+    with Progress(
+        TextColumn("[bold]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeRemainingColumn(),
+        TextColumn("{task.fields[info]}"),
+        console=run_console,
+    ) as progress:
+        series_task = progress.add_task("Series", total=total_runs, info="")
+        tick_task = progress.add_task("Ticks", total=0, info="", visible=False)
+        run_count = 0
 
-            run_name = f"{scenario_path.stem}_{normalized}_run{run_index + 1}"
-            run_dir = out_dir / run_name
-            artifacts = default_artifacts(run_dir)
-            await WorldEngine(cfg=cfg, artifacts=artifacts).run()
+        for mode in governance_modes:
+            normalized = str(mode).strip().upper()
+            if normalized not in BUILTIN_GOVERNANCE_MODES:
+                raise ValueError(f"Unsupported built-in governance mode: {mode!r}")
+            for run_index in range(max(1, int(repeats))):
+                cfg = load_scenario(scenario_path)
+                apply_builtin_governance_mode(cfg, normalized)
+                if ticks_override is not None:
+                    cfg.ticks = int(ticks_override)
 
-            evaluation = _load_json(run_dir / "evaluation.json") or {}
-            fidelity = _load_json(run_dir / "fidelity.json") or {}
-            summary = _load_json(run_dir / "summary.json") or {}
-            item = {
-                "run_name": run_name,
-                "governance": normalized,
-                "run_index": run_index + 1,
-                "out_dir": str(run_dir),
-                "evaluation": evaluation,
-                "fidelity": fidelity,
-                "summary": summary,
-            }
-            results.append(item)
-            by_mode[normalized].append(item)
+                run_name = f"{scenario_path.stem}_{normalized}_run{run_index + 1}"
+                run_dir = out_dir / run_name
+                artifacts = default_artifacts(run_dir)
+
+                progress.update(series_task, info=f"{normalized} run {run_index + 1}/{repeats}")
+                progress.update(tick_task, completed=0, total=cfg.ticks, visible=True, info="")
+
+                def _on_tick(tp: TickProgress) -> None:
+                    parts = [f"{tp.events_count} ev"]
+                    if tp.audit_events_count:
+                        parts.append(f"{tp.audit_events_count} audit")
+                    progress.update(tick_task, completed=tp.tick + 1, info=", ".join(parts))
+
+                await WorldEngine(cfg=cfg, artifacts=artifacts, on_tick_done=_on_tick).run()
+
+                run_count += 1
+                progress.update(series_task, completed=run_count)
+                progress.update(tick_task, visible=False)
+
+                evaluation = _load_json(run_dir / "evaluation.json") or {}
+                fidelity = _load_json(run_dir / "fidelity.json") or {}
+                summary = _load_json(run_dir / "summary.json") or {}
+                item = {
+                    "run_name": run_name,
+                    "governance": normalized,
+                    "run_index": run_index + 1,
+                    "out_dir": str(run_dir),
+                    "evaluation": evaluation,
+                    "fidelity": fidelity,
+                    "summary": summary,
+                }
+                results.append(item)
+                by_mode[normalized].append(item)
 
     report = {
         "scenario": str(scenario_path),

@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import TextIO
 
 from rich.console import Console
+from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, MofNCompleteColumn
 
 from .composer import WorldComposer
 from .config import LLMConfig
-from .engine import WorldEngine, default_artifacts
+from .engine import WorldEngine, TickProgress, default_artifacts
+from .governance_modes import BUILTIN_GOVERNANCE_MODES, apply_builtin_governance_mode
 from .llm import LLMCaller, create_llm_provider
 from .oracle import ViolationOracle, save_violations
 from .scenario import load_scenario
@@ -53,11 +55,37 @@ def _cmd_run(args: argparse.Namespace) -> None:
         cfg.runtime.enrich_personas = True
     if getattr(args, "persona_enrich_mode", None):
         cfg.runtime.persona_enrich_mode = str(args.persona_enrich_mode)
+    if getattr(args, "governance", None):
+        apply_builtin_governance_mode(cfg, args.governance)
     out_dir = Path(args.out) if args.out else Path("results") / datetime.now().strftime("%Y%m%d_%H%M%S")
     artifacts = default_artifacts(out_dir)
-    engine = WorldEngine(cfg=cfg, artifacts=artifacts)
+
     console.print(f"[bold]SPHERE-LC run[/bold] scenario={args.scenario} ticks={cfg.ticks} out={out_dir}")
-    asyncio.run(engine.run())
+
+    with Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeRemainingColumn(),
+        TextColumn("{task.fields[stats]}"),
+        console=console,
+    ) as progress:
+        task_id = progress.add_task("Simulating", total=cfg.ticks, stats="")
+
+        def _on_tick(tp: TickProgress) -> None:
+            parts = [f"{tp.events_count} ev", f"{tp.agents_acted} agents"]
+            if tp.audit_events_count:
+                parts.append(f"{tp.audit_events_count} audit")
+            if tp.truth_records_count:
+                parts.append(f"{tp.truth_records_count} truth")
+            stats = ", ".join(parts)
+            if tp.simulated_date:
+                stats += f"  [{tp.simulated_date}]"
+            progress.update(task_id, completed=tp.tick + 1, stats=stats)
+
+        engine = WorldEngine(cfg=cfg, artifacts=artifacts, on_tick_done=_on_tick)
+        asyncio.run(engine.run())
+
     console.print(
         f"[green]Done[/green] events={artifacts.events_path} trace={artifacts.trace_path} "
         f"truth={artifacts.truth_path} evaluation={artifacts.evaluation_path}"
@@ -136,6 +164,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("full", "core"),
         default=None,
         help="Режим обогащения персон: full (summary+biography+interview) или core (summary+biography)",
+    )
+    p_run.add_argument(
+        "--governance",
+        type=str,
+        choices=list(BUILTIN_GOVERNANCE_MODES),
+        default=None,
+        help="Применить built-in governance mode (G0, G1, G2, G3)",
     )
     p_run.set_defaults(fn=_cmd_run)
 

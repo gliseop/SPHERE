@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .actions import Action, SendMessageAction
 from .agent import AgentRunner, event_visible_to_agent
@@ -112,6 +112,19 @@ _SAME_TICK_PENDING_CATEGORIES = frozenset(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class TickProgress:
+    """Per-tick progress snapshot passed to the on_tick_done callback."""
+
+    tick: int
+    total_ticks: int
+    events_count: int
+    agents_acted: int
+    audit_events_count: int
+    truth_records_count: int
+    simulated_date: str | None = None
+
+
 @dataclass(slots=True)
 class RunArtifacts:
     """Пути к артефактам прогона."""
@@ -140,6 +153,7 @@ class WorldEngine:
     cfg: ScenarioConfig
     artifacts: RunArtifacts
     provider_override: LLMProvider | None = None
+    on_tick_done: Callable[[TickProgress], None] | None = None
     _local_perf_events: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -819,6 +833,22 @@ class WorldEngine:
             self._append_environment_timeline(state=state, tick_events=tick_events)
 
             events_history.extend(tick_events)
+
+            if self.on_tick_done is not None:
+                _audit_count = sum(
+                    1 for ev in tick_events
+                    if str(ev.event_type or "").startswith("audit_")
+                )
+                self.on_tick_done(TickProgress(
+                    tick=tick,
+                    total_ticks=self.cfg.ticks,
+                    events_count=len(tick_events),
+                    agents_acted=len(agent_order),
+                    audit_events_count=_audit_count,
+                    truth_records_count=len(truth_records) + len(truth_contact_records),
+                    simulated_date=current_date,
+                ))
+
             # Ограничиваем историю для памяти.
             if len(events_history) > self.cfg.runtime.tick_events_history:
                 events_history = events_history[-self.cfg.runtime.tick_events_history :]
@@ -844,23 +874,18 @@ class WorldEngine:
                 freeform_truth_path_for_eval = self.artifacts.truth_freeform_path
             except Exception as exc:
                 logger.warning("Freeform truth recorder failed: %s", exc)
-        if self.artifacts.truth_path is not None and self.artifacts.evaluation_path is not None:
+        # Evaluation + fidelity: deterministic фазы последовательно,
+        # LLM-augment фазы — параллельно.
+        run_eval = self.artifacts.truth_path is not None and self.artifacts.evaluation_path is not None
+        run_fidelity = self.artifacts.fidelity_path is not None
+
+        if run_eval:
             governance_summary = evaluate_run(
                 events_path=self.artifacts.events_path,
                 truth_path=self.artifacts.truth_path,
                 truth_freeform_path=freeform_truth_path_for_eval,
             )
-            governance_summary = await augment_evaluation_with_semantic_judge(
-                summary=governance_summary,
-                llm=llm,
-                events_path=self.artifacts.events_path,
-                truth_path=self.artifacts.truth_path,
-                truth_freeform_path=freeform_truth_path_for_eval,
-                scenario_description=self.cfg.description,
-                temperature=self.cfg.llm.temperature,
-            )
-            save_evaluation(governance_summary, self.artifacts.evaluation_path)
-        if self.artifacts.fidelity_path is not None:
+        if run_fidelity:
             fidelity_summary = evaluate_fidelity(
                 events_path=self.artifacts.events_path,
                 start_date=self.cfg.runtime.start_date,
@@ -868,13 +893,39 @@ class WorldEngine:
                 temporal_past_slack_days=self.cfg.runtime.temporal_past_slack_days,
                 temporal_future_horizon_days=self.cfg.runtime.temporal_future_horizon_days,
             )
-            fidelity_summary = await augment_fidelity_with_semantic_judge(
+
+        # Параллельные LLM-augment вызовы.
+        augment_tasks: list[asyncio.Task] = []
+        if run_eval:
+            augment_tasks.append(asyncio.ensure_future(augment_evaluation_with_semantic_judge(
+                summary=governance_summary,
+                llm=llm,
+                events_path=self.artifacts.events_path,
+                truth_path=self.artifacts.truth_path,
+                truth_freeform_path=freeform_truth_path_for_eval,
+                scenario_description=self.cfg.description,
+                temperature=self.cfg.llm.temperature,
+            )))
+        if run_fidelity:
+            augment_tasks.append(asyncio.ensure_future(augment_fidelity_with_semantic_judge(
                 summary=fidelity_summary,
                 llm=llm,
                 events_path=self.artifacts.events_path,
                 scenario_description=self.cfg.description,
                 temperature=self.cfg.llm.temperature,
-            )
+            )))
+        if augment_tasks:
+            augment_results = await asyncio.gather(*augment_tasks)
+            idx = 0
+            if run_eval:
+                governance_summary = augment_results[idx]
+                idx += 1
+            if run_fidelity:
+                fidelity_summary = augment_results[idx]
+
+        if run_eval:
+            save_evaluation(governance_summary, self.artifacts.evaluation_path)
+        if run_fidelity:
             save_fidelity(fidelity_summary, self.artifacts.fidelity_path)
         if self.artifacts.summary_path is not None:
             payload = {

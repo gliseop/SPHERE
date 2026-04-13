@@ -696,10 +696,11 @@ class Arbiter:
                     if isinstance(act, SpawnAgentAction) and reserved_res.approved:
                         spawn_used = True
 
-        # Perform-actions проходят через единый pipeline decomposition/materialization/grounding.
+        # Perform-actions: последовательно (ID-аллокатор требует детерминированного
+        # порядка — параллельные scratch_alloc порождают коллизии ID).
         for aid, idx, act, caps in perform_meta:
             try:
-                res = await self._arbitrate_perform(
+                res, _alloc = await self._arbitrate_perform(
                     state=state,
                     agent_id=aid,
                     agent_caps=caps,
@@ -1463,7 +1464,14 @@ class Arbiter:
         action_index: int,
         action: PerformAction,
         journal_yaml: str,
-    ) -> ActionResult:
+        commit_alloc: bool = True,
+    ) -> tuple[ActionResult, IdAllocator]:
+        """Арбитраж PerformAction. Возвращает (result, scratch_alloc).
+
+        Если *commit_alloc* = True (по умолчанию), счётчики сразу
+        записываются в ``self.id_alloc``; если False — вызывающий код
+        мержит их вручную (нужно для параллельного арбитража).
+        """
         steps = await self._plan_perform_steps(
             state=state,
             agent_id=agent_id,
@@ -1505,18 +1513,19 @@ class Arbiter:
                 commit_ids=False,
             )
             if not step_result.approved:
-                return step_result
+                return step_result, scratch_alloc
             aggregated_ops.extend(step_result.ops)
             if step_result.reason and step_result.reason != "approved":
                 reasons.append(step_result.reason)
 
-        self.id_alloc.counters = dict(scratch_alloc.counters or {})
+        if commit_alloc:
+            self.id_alloc.counters = dict(scratch_alloc.counters or {})
         return ActionResult(
             action_index,
             True,
             " | ".join(reasons) if reasons else "approved",
             aggregated_ops,
-        )
+        ), scratch_alloc
 
     @staticmethod
     def _missing_capability_for_op(op: StateOp, caps: set[str]) -> str | None:
