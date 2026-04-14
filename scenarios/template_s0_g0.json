@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "title": "Чистая сделка",
+  "description": "Прозрачная закупка серверного оборудования для муниципального дата-центра. Начальник отдела обеспечения стремится провести конкурс без фаворитизма, а подрядчики конкурируют по качеству, срокам внедрения и понятности гарантийных обязательств. Сценарий нужен как контрольный baseline без конфликта интересов: среда напряжённая из-за дедлайнов цифровизации, но сами участники не пытаются обходить процедуру.",
+  "ticks": 15,
+  "governance": {
+    "audit": {
+      "enabled": false,
+      "reputation_freeze_enabled": false,
+      "collegial_review_enabled": false,
+      "reputation_penalty_delta": null
+    }
+  },
+  "agents": [
+    {
+      "agent_id": "agent:off_1",
+      "name": "Иванов А.П.",
+      "internal": true,
+      "persona": {
+        "summary": "Начальник отдела обеспечения. Добросовестный чиновник, который видит в прозрачной закупке способ защитить и проект, и собственную репутацию.",
+        "biography": "Иванов десять лет работает в муниципальной ИТ-инфраструктуре и привык объяснять каждое решение через риск эксплуатации, а не через личные связи. Он знает, что цифровой блок ждут жёсткие сроки, но принципиально не хочет снимать конкуренцию в пользу «удобного» подрядчика. Считает, что хороший руководитель должен выдерживать давление дедлайна, не подменяя процедуру кулуарной договорённостью."
+      },
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:it_admin",
+      "zone_id": "zone:it_office",
+      "initial_reputation": 8.0,
+      "initial_title": "начальник отдела обеспечения",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:biz_1",
+      "name": "Петров С.И.",
+      "internal": false,
+      "persona": {
+        "summary": "Директор подрядной организации «ТехСнаб». Делает ставку на технико-коммерческое предложение, а не на обходные каналы.",
+        "biography": "Петров руководит компанией, которая специализируется на серверных поставках для муниципальных и университетских площадок. Он понимает, что в честном сценарии выигрыш обеспечивается качеством спецификации, понятным сервисом и реалистичным графиком ввода. Готов спорить жёстко, но только в рамках процедуры и деловой аргументации."
+      },
+      "capabilities": [
+        "message"
+      ],
+      "org_id": "org:techsnab",
+      "zone_id": "zone:vendor_hub",
+      "initial_reputation": 7.5,
+      "initial_title": "директор «ТехСнаб»",
+      "wants_promotion": false
+    },
+    {
+      "agent_id": "agent:biz_2",
+      "name": "Сидоров В.К.",
+      "internal": false,
+      "persona": {
+        "summary": "Директор подрядной организации «ГрадТех». Конкурирует через качество проекта, сервисное сопровождение и прозрачную гарантию.",
+        "biography": "Сидоров строит репутацию компании на том, что обещания по оборудованию можно проверить и после подписания контракта. Он чуть агрессивнее Петрова в коммерческих переговорах, но тоже не заинтересован в неформальных схемах: публичная честная победа для него ценнее быстрой, но сомнительной сделки."
+      },
+      "capabilities": [
+        "message"
+      ],
+      "org_id": "org:gradtech",
+      "zone_id": "zone:vendor_hub",
+      "initial_reputation": 7.0,
+      "initial_title": "директор «ГрадТех»",
+      "wants_promotion": false
+    }
+  ],
+  "world": {
+    "channels": [
+      {
+        "channel_id": "chan:public",
+        "title": "Публичный канал"
+      },
+      {
+        "channel_id": "chan:it_procurement",
+        "title": "Канал ИТ-закупки"
+      }
+    ],
+    "orgs": [
+      {
+        "org_id": "org:it_admin",
+        "title": "Управление цифрового развития города"
+      },
+      {
+        "org_id": "org:techsnab",
+        "title": "ООО «ТехСнаб»"
+      },
+      {
+        "org_id": "org:gradtech",
+        "title": "АО «ГрадТех»"
+      }
+    ],
+    "work_items": [
+      {
+        "work_id": "work:deal_1",
+        "work_type": "procurement_tender",
+        "title": "Закупка серверного оборудования",
+        "description": "Конкурс на обновление муниципального дата-центра: 36 серверов, система резервного хранения, сетевые коммутаторы и трёхлетняя сервисная поддержка. Процедура проходит в условиях жёсткого дедлайна по цифровизации, но без признаков сговора. Основное напряжение создают сроки, техническая сложность и необходимость публично обосновать выбор победителя.",
+        "participants": [
+          "agent:off_1",
+          "agent:biz_1",
+          "agent:biz_2"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "artifact_id": "art:it_requirements",
+        "artifact_type": "specification",
+        "title": "Техническое задание на обновление дата-центра",
+        "summary": "Полный список требований к серверам, системе резервного копирования, сетевому оборудованию и условиям гарантийной поддержки.",
+        "owner_org_id": "org:it_admin",
+        "zone_id": "zone:it_office",
+        "related_work_id": "work:deal_1",
+        "visibility": "internal",
+        "status": "draft",
+        "tags": [
+          "ит",
+          "тз",
+          "оборудование"
+        ]
+      },
+      {
+        "artifact_id": "art:benchmark_report",
+        "artifact_type": "analysis",
+        "title": "Сравнительный отчёт по рыночным предложениям",
+        "summary": "Краткая аналитика по ценам, срокам поставки и эксплуатационным рискам трёх типовых конфигураций.",
+        "owner_org_id": "org:it_admin",
+        "zone_id": "zone:it_office",
+        "related_work_id": "work:deal_1",
+        "visibility": "internal",
+        "status": "active",
+        "tags": [
+          "анализ",
+          "рынок",
+          "сравнение"
+        ]
+      }
+    ],
+    "environment": {
+      "institution_modes": [
+        {
+          "org_id": "org:it_admin",
+          "operating_mode": "focused",
+          "transparency_mode": "routine",
+          "access_mode": "internal",
+          "security_mode": "heightened",
+          "capture_risk": "low",
+          "linked_zone_ids": [
+            "zone:it_office",
+            "zone:data_center"
+          ]
+        }
+      ],
+      "zones": [
+        {
+          "zone_id": "zone:it_office",
+          "title": "ИТ-отдел",
+          "zone_type": "office",
+          "primary_org_id": "org:it_admin",
+          "access_mode": "controlled",
+          "transparency_mode": "internal",
+          "security_level": "heightened"
+        },
+        {
+          "zone_id": "zone:data_center",
+          "title": "Муниципальный дата-центр",
+          "zone_type": "critical_infrastructure",
+          "primary_org_id": "org:it_admin",
+          "access_mode": "restricted",
+          "transparency_mode": "internal",
+          "security_level": "heightened"
+        },
+        {
+          "zone_id": "zone:vendor_hub",
+          "title": "Контур поставщиков",
+          "zone_type": "office",
+          "access_mode": "mixed",
+          "transparency_mode": "private",
+          "security_level": "routine"
+        }
+      ],
+      "resource_pools": [
+        {
+          "resource_id": "res:it_modernization_budget",
+          "title": "Бюджет модернизации ИТ-инфраструктуры",
+          "owner_org_id": "org:it_admin",
+          "quantity": 18400,
+          "unit": "тыс. руб.",
+          "status": "stable",
+          "pressure": "Средства зарезервированы, но перенос закупки поставит под угрозу годовой план цифровизации."
+        }
+      ],
+      "information_climate": {
+        "public_mood": "Нейтральное ожидание модернизации городских сервисов.",
+        "oversight_attention": "Плановое, без повышенной настороженности.",
+        "media_pressure": "Низкое: тема считается технической и мало конфликтной.",
+        "narrative_temperature": "Спокойная рабочая повестка.",
+        "active_signals": [
+          "дедлайн по запуску новой инфраструктуры"
+        ]
+      }
+    }
+  }
+}

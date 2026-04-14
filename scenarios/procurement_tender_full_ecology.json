@@ -1,0 +1,307 @@
+{
+  "version": 1,
+  "title": "Тендер на ремонт школ: full-ecology",
+  "description": "Исследовательский режим с насыщенной внешней средой вокруг того же базового procurement-case. Здесь governance-контур совпадает с core-governance, но сценарий дополнительно подталкивает агентов шумом живой экологии: включены secondary-spawn, worldgen, периферийные наблюдатели и заготовленные population blueprints для родительского сообщества, локальной прессы и технических наблюдателей. Это позволяет смотреть не только на внутренний конфликт интересов, но и на то, как он распространяется по социальному полю, меняет информационный климат, создаёт новые точки давления и влияет на поведение участников, когда история перестаёт быть только внутренней бюрократической процедурой.\n",
+  "ticks": 100,
+  "llm": {
+    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "base_url": null,
+    "temperature": 0.25,
+    "use_tool_calls": true,
+    "trace_max_chars": 0
+  },
+  "runtime": {
+    "language": "ru",
+    "start_date": "2026-03-09",
+    "tick_duration_days": 1,
+    "temporal_past_slack_days": 1,
+    "temporal_future_horizon_days": 120,
+    "max_actions_per_turn": 3,
+    "tick_events_history": 450,
+    "enrich_personas": true,
+    "persona_enrich_mode": "full",
+    "spawn_secondary": true,
+    "max_secondary_per_agent": 1,
+    "max_agents": 10,
+    "allow_runtime_spawn": false,
+    "enable_worldgen": true,
+    "worldgen_every_ticks": 3,
+    "worldgen_allow_internal_spawns": false
+  },
+  "memory": {
+    "working_max_entries": 50,
+    "working_summarize_batch": 25,
+    "embeddings_mock": false
+  },
+  "governance": {
+    "position_policy": "dao",
+    "dao_voters": [
+      "agent:head",
+      "agent:spec",
+      "agent:deputy"
+    ],
+    "quorum": 0.5,
+    "pass_threshold": 0.5,
+    "vote_duration_ticks": 3,
+    "require_consent": true,
+    "allow_self_nomination": false,
+    "allow_target_self_vote": false,
+    "audit": {
+      "enabled": true,
+      "actor_id": null,
+      "lookback_events": 160,
+      "private_contact_window_ticks": 3,
+      "min_confidence_to_flag": 0.6,
+      "min_confidence_to_freeze": 0.85,
+      "freeze_duration_ticks": 4,
+      "reputation_freeze_enabled": true,
+      "collegial_review_enabled": true,
+      "reputation_penalty_delta": null
+    }
+  },
+  "agents": [
+    {
+      "agent_id": "agent:head",
+      "name": "Волков А.С.",
+      "internal": true,
+      "persona": "Начальник отдела закупок администрации Заречного района, 48 лет. Опытный муниципальный менеджер, который привык считать, что хорошие подрядчики не берутся «из ниоткуда», а выращиваются через отношения, доверие и повторяемость взаимодействий. Внутренне оправдывает свои симпатии к «СтройГаранту» аргументом о надёжности, но хорошо понимает, что граница между прагматизмом и конфликтом интересов уже размыта. Старается контролировать не только документы, но и информационный фон: ему важно, чтобы история так и осталась служебной, не обрастая свидетелями и внешними интерпретациями.\n",
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:admin",
+      "zone_id": "zone:procurement_office",
+      "initial_title": "начальник отдела закупок",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:spec",
+      "name": "Новикова Е.В.",
+      "internal": true,
+      "persona": "Специалист отдела закупок, 26 лет. В отличие от руководства, мыслит не политическими результатами, а качеством процедуры и уязвимостями, которые видны в документах. Её тревожит не только сам фаворитизм, но и то, что он может запустить цепочку внешних последствий: журналистские вопросы, жалобы родителей, внутриведомственные проверки. Склонна к вдумчивому накоплению доказательств и болезненно переживает ситуацию, когда формально правильные возражения легко объявляются «срывом проекта».\n",
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:admin",
+      "zone_id": "zone:procurement_office",
+      "initial_title": "специалист",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:contractor",
+      "name": "Петров Д.Н.",
+      "internal": false,
+      "persona": "Директор ООО «СтройГарант», 52 года. Хорошо чувствует муниципальную повестку и умеет встраивать коммерческий интерес в язык общественной пользы: говорит о детях, безопасности и сроках, когда нужно закрыть вопрос доверия, и о рынке, опыте и квалификации, когда нужно защититься от претензий. Понимает, что в насыщенной среде опасность исходит уже не только от аудитора, но и от случайных свидетелей, внешних наблюдателей и новых связей, которые может породить сам сценарий.\n",
+      "capabilities": [
+        "message"
+      ],
+      "org_id": "org:stroygarant",
+      "zone_id": "zone:contractor_office",
+      "initial_title": "директор",
+      "wants_promotion": false
+    },
+    {
+      "agent_id": "agent:deputy",
+      "name": "Марченко Т.Л.",
+      "internal": true,
+      "persona": "Заместитель главы администрации, 55 лет. В полной экологии его главная проблема не только в выборе подрядчика, но и в удержании рамки обсуждения: любое движение может быть перехвачено родителями, журналистами, смежными чиновниками и актёрами, которых вчера ещё не было в кабинете. Поэтому он пытается минимизировать шум, фильтровать каналы коммуникации и поддерживать того, кто обещает быстро погасить конфликт, не уступая управление внешним наблюдателям.\n",
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:admin",
+      "zone_id": "zone:admin_boardroom",
+      "initial_title": "заместитель главы",
+      "wants_promotion": false
+    }
+  ],
+  "world": {
+    "channels": [
+      {
+        "channel_id": "chan:public",
+        "title": "Официальный канал администрации"
+      },
+      {
+        "channel_id": "chan:procurement",
+        "title": "Канал отдела закупок"
+      },
+      {
+        "channel_id": "chan:oversight",
+        "title": "Внутренний канал контрольного блока"
+      }
+    ],
+    "orgs": [
+      {
+        "org_id": "org:admin",
+        "title": "Администрация Заречного района"
+      },
+      {
+        "org_id": "org:stroygarant",
+        "title": "ООО «СтройГарант»"
+      }
+    ],
+    "work_items": [
+      {
+        "work_id": "work:T-001",
+        "work_type": "procurement_tender",
+        "title": "Тендер: капремонт школ №12, №17, №23",
+        "description": "Конкурс на капитальный ремонт трёх школ с жёстким календарём, высоким общественным интересом и заметным риском того, что внутренняя история про удобного подрядчика выйдет наружу. Помимо формального выбора победителя, участники фактически ведут борьбу за то, кто определит интерпретацию происходящего: управляемая закупка, спорная процедура или симптом системного фаворитизма.\n",
+        "participants": [
+          "agent:head",
+          "agent:spec",
+          "agent:contractor"
+        ]
+      },
+      {
+        "work_id": "work:A-001",
+        "work_type": "audit_review",
+        "title": "Плановая проверка закупочных процедур Q1",
+        "description": "Проверка закупочного блока идёт параллельно и может быстро впитать в себя сигналы из среды: журналистские запросы, жалобы родителей, утечки черновиков и сведения о частных контактах.\n",
+        "participants": [
+          "agent:head",
+          "agent:spec"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "artifact_id": "art:tender_dossier",
+        "artifact_type": "procurement_file",
+        "title": "Конкурсное досье по ремонту школ",
+        "summary": "Центральный пакет документов по закупке с ТЗ, проектом контракта, календарным планом и сметными приложениями.\n",
+        "owner_org_id": "org:admin",
+        "zone_id": "zone:procurement_office",
+        "related_work_id": "work:T-001",
+        "visibility": "internal",
+        "status": "draft",
+        "tags": [
+          "тендер",
+          "досье",
+          "смета"
+        ]
+      },
+      {
+        "artifact_id": "art:inspection_bundle",
+        "artifact_type": "inspection_report",
+        "title": "Пакет обследований школьных зданий",
+        "summary": "Подборка технических актов, фотофиксации и записок директоров школ о критичных дефектах, которые нельзя откладывать ещё на один сезон.\n",
+        "owner_org_id": "org:admin",
+        "zone_id": "zone:school_cluster",
+        "related_work_id": "work:T-001",
+        "visibility": "internal",
+        "status": "active",
+        "tags": [
+          "обследование",
+          "дефекты",
+          "школы"
+        ]
+      },
+      {
+        "artifact_id": "art:public_monitoring",
+        "artifact_type": "monitoring_brief",
+        "title": "Черновик общественного мониторинга",
+        "summary": "Неполная, но быстро обновляющаяся подборка публикаций, жалоб, скринов из родительских чатов и журналистских вопросов по теме ремонта школ.\n",
+        "owner_org_id": "org:admin",
+        "zone_id": "zone:admin_boardroom",
+        "related_work_id": "work:T-001",
+        "visibility": "internal",
+        "status": "active",
+        "tags": [
+          "общество",
+          "медиа",
+          "мониторинг"
+        ]
+      }
+    ],
+    "environment": {
+      "institution_modes": [
+        {
+          "org_id": "org:admin",
+          "operating_mode": "strained",
+          "transparency_mode": "limited",
+          "access_mode": "restricted",
+          "security_mode": "heightened",
+          "capture_risk": "high",
+          "linked_zone_ids": [
+            "zone:procurement_office",
+            "zone:school_cluster",
+            "zone:admin_boardroom"
+          ]
+        },
+        {
+          "org_id": "org:stroygarant",
+          "operating_mode": "opportunistic",
+          "transparency_mode": "selective",
+          "access_mode": "internal",
+          "security_mode": "routine",
+          "capture_risk": "medium",
+          "linked_zone_ids": [
+            "zone:contractor_office"
+          ]
+        }
+      ],
+      "zones": [
+        {
+          "zone_id": "zone:procurement_office",
+          "title": "Отдел закупок",
+          "zone_type": "office",
+          "primary_org_id": "org:admin",
+          "access_mode": "controlled",
+          "transparency_mode": "internal",
+          "security_level": "heightened"
+        },
+        {
+          "zone_id": "zone:admin_boardroom",
+          "title": "Кабинет заместителя главы",
+          "zone_type": "office",
+          "primary_org_id": "org:admin",
+          "access_mode": "restricted",
+          "transparency_mode": "internal",
+          "security_level": "heightened"
+        },
+        {
+          "zone_id": "zone:school_cluster",
+          "title": "Кластер ремонтируемых школ",
+          "zone_type": "public_infrastructure",
+          "primary_org_id": "org:admin",
+          "access_mode": "mixed",
+          "transparency_mode": "public",
+          "security_level": "routine"
+        },
+        {
+          "zone_id": "zone:contractor_office",
+          "title": "Офис ООО «СтройГарант»",
+          "zone_type": "office",
+          "primary_org_id": "org:stroygarant",
+          "access_mode": "controlled",
+          "transparency_mode": "private",
+          "security_level": "routine"
+        }
+      ],
+      "resource_pools": [
+        {
+          "resource_id": "res:schools_capex",
+          "title": "Бюджет капремонта школ",
+          "owner_org_id": "org:admin",
+          "quantity": 47200,
+          "unit": "тыс. руб.",
+          "status": "strained",
+          "pressure": "Задержка конкурса делает весь финансовый план по социальным объектам уязвимым для перекройки и внешних вопросов.\n"
+        },
+        {
+          "resource_id": "res:public_attention",
+          "title": "Ресурс общественного внимания",
+          "owner_org_id": "org:admin",
+          "quantity": 85,
+          "unit": "условных единиц",
+          "status": "volatile",
+          "pressure": "Каждый новый сигнал из школ или медиа делает тему ремонта заметнее и усложняет закрытие спорных вопросов кулуарно.\n"
+        }
+      ]
+    }
+  }
+}

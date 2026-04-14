@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "magistry-sim"
+name = "sphere-sim"
 version = "0.3.0"
 description = "Мета-двигатель управления: симуляция организационных процессов с AI-агентами"
 requires-python = ">=3.12"
@@ -13,6 +13,7 @@ dependencies = [
     "rich>=13.7",
     "python-dotenv>=1.0",
     "openai>=1.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -28,14 +29,18 @@ dev = [
     "PyJWT>=2.7.0",
     "bcrypt>=4.0.0",
 ]
-lc = ["langgraph>=0.2", "langchain-core>=0.2", "pyyaml>=6.0"]
+lc = ["langgraph>=0.2", "langchain-core>=0.2"]
 
 [project.scripts]
-magistry-lc = "magistry_lc.cli:main"
+sphere-lc = "sphere_lc.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+sphere_lc = ["prompts.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = ["slow: long-running integration tests"]

@@ -187,7 +187,7 @@ def main():
     lines: list[str] = []
 
     lines.append("=" * 80)
-    lines.append("MAGISTRY — Собранный код и документация для ChatGPT")
+    lines.append("SPHERE — Собранный код и документация для ChatGPT")
     lines.append("=" * 80)
     lines.append("")
 

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from magistry_lc.llm import (
+from sphere_lc.llm import (
     EmbeddingProvider,
     MockEmbeddingProvider,
     OpenAIEmbeddingProvider,
@@ -47,7 +47,7 @@ class TestCreateEmbeddingProvider:
                 self._client_kwargs = {"api_key": api_key, "base_url": base_url}
 
         monkeypatch.setattr(
-            "magistry_lc.llm.embeddings.OpenAIEmbeddingProvider",
+            "sphere_lc.llm.embeddings.OpenAIEmbeddingProvider",
             _FakeOpenAIEmbeddingProvider,
         )
         provider = create_embedding_provider(mock=False)
@@ -60,7 +60,7 @@ class TestCreateEmbeddingProvider:
                 self._client_kwargs = {"api_key": api_key, "base_url": base_url}
 
         monkeypatch.setattr(
-            "magistry_lc.llm.embeddings.OpenAIEmbeddingProvider",
+            "sphere_lc.llm.embeddings.OpenAIEmbeddingProvider",
             _FakeOpenAIEmbeddingProvider,
         )
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)

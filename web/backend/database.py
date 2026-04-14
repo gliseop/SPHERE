@@ -1,4 +1,4 @@
-"""SQLite-хранилище учётных записей пользователей MAGISTRY."""
+"""SQLite-хранилище учётных записей пользователей SPHERE."""
 from __future__ import annotations
 
 import os
@@ -55,7 +55,7 @@ def _resolve_db_path() -> Path:
     if DB_PATH is not None:
         return Path(DB_PATH)
     _load_dotenv_if_available()
-    raw = (os.environ.get("MAGISTRY_USERS_DB") or "").strip()
+    raw = (os.environ.get("SPHERE_USERS_DB") or "").strip()
     return Path(raw) if raw else _DEFAULT_DB_PATH
 
 

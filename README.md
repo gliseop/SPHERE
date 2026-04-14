@@ -1,21 +1,21 @@
-# MAGISTRY — мета-двигатель управления
+# SPHERE — мета-двигатель управления
 
-MAGISTRY (Multi-Agent Governance and Institutional Simulation for Testing and Research Yield) — исследовательская платформа для агентной симуляции организационных процессов. Система моделирует деятельность муниципальных и государственных организаций с помощью когнитивных LLM-агентов, действующих автономно в рамках заданных полномочий и ресурсов. Каждый агент обладает уникальной личностью, заданной текстовой биографией и нарративным интервью, потоком памяти с гибридным поиском и способностью к адаптивному поведению.
+SPHERE — исследовательская платформа для агентной симуляции организационных процессов. Система моделирует деятельность муниципальных и государственных организаций с помощью когнитивных LLM-агентов, действующих автономно в рамках заданных полномочий и ресурсов. Каждый агент обладает уникальной личностью, заданной текстовой биографией и нарративным интервью, потоком памяти с гибридным поиском и способностью к адаптивному поведению.
 
 Платформа создана для магистерской диссертации, посвящённой оценке гибридных управленческих систем (AI + DAO) в контексте противодействия коррупции. Ключевая гипотеза: сочетание AI-аудита, репутационного механизма и децентрализованного голосования снижает уровень нарушений по сравнению с традиционным контролем или его отсутствием. Теоретические основания и обзор литературы — в [chapter_1.md](chapter_1.md).
 
 ## Возможности
 
-Движок симуляции не привязан к конкретной предметной области — он оперирует универсальными абстракциями: действие, полномочие (`message`, `work`, `dao`, `audit`, `spawn`), сущность (агент, канал, организация, рабочий элемент). Конкретные сценарии — закупки, найм, согласование бюджета — задаются конфигурацией в YAML, а не кодом.
+Движок симуляции не привязан к конкретной предметной области — он оперирует универсальными абстракциями: свободное действие, полномочие (`work`, `dao`, `audit`, `spawn` как legacy/runtime-слой), сущность (агент, канал, организация, рабочий элемент). Конкретные сценарии — закупки, найм, согласование бюджета — задаются конфигурацией в YAML, а не кодом.
 
-Агенты формируют структурированные действия (отправка сообщений, рабочие заметки, предложения, голосования, `spawn_agent`), которые проходят через гибридный арбитр: проверка полномочий, антифантомная валидация через `EntityRegistry`, temporal-validation по канонической дате и YAML-журнал мира. Отдельный `RuntimeAuditor` в governance-слое анализирует уже совершённые события, эмитит audit-сигналы и может запускать заморозку и штрафы репутации. Перед первым тиком движок может обогащать персоны в режиме `full` (биография + интервью + expert reflection), извлекать вторичных агентов из социального графа и в ходе симуляции добавлять новых участников через `spawn_agent` или worldgen, но только с человеко-читаемыми именами и без role-alias дублей. Веб-интерфейс (FastAPI + React 19 + D3.js) обеспечивает визуализацию социального графа, ленту событий и управление симуляциями.
+Когнитивные агенты больше не выбирают typed action menu: они формулируют один свободный `proposal` на тик, а гибридный арбитр переводит этот proposal во внутренние детерминированные операции: сообщения, рабочие изменения, DAO-голосования, создание сущностей и другие последствия мира. Отдельный `RuntimeAuditor` в governance-слое анализирует уже совершённые события, эмитит audit-сигналы и может запускать заморозку роста репутации и коллегиальное review. Перед первым тиком движок может обогащать персоны в режиме `full` (биография + интервью + expert reflection), извлекать вторичных агентов из социального графа и в ходе симуляции добавлять новых участников через worldgen и системные runtime-контуры, но только с человеко-читаемыми именами и без machine-like display-name. Веб-интерфейс (FastAPI + React 19 + D3.js) обеспечивает визуализацию социального графа, ленту событий и управление симуляциями.
 
 ## Быстрый старт
 
 ### Установка
 
 ```bash
-git clone <repository-url> && cd MAGISTRY
+git clone <repository-url> && cd SPHERE
 python -m venv .venv
 # Linux/macOS: source .venv/bin/activate
 # Windows (PowerShell): .\.venv\Scripts\Activate.ps1
@@ -28,35 +28,61 @@ pip install -e ".[lc,dev]"
 
 ```bash
 cp .env.example .env
-# Отредактировать .env: указать OPENAI_API_KEY; при OpenRouter/OpenAI-compatible
-# можно также задать OPENAI_BASE_URL, и runtime подхватит его по умолчанию
+# Отредактировать .env: указать OPENAI_API_KEY.
+# Для OpenRouter задайте OPENAI_BASE_URL=https://openrouter.ai/api/v1
+# и при необходимости OPENROUTER_PROVIDER_ORDER=Groq
 ```
 
 ### Запуск симуляции
 
 ```bash
 # Минимальный сценарий
-magistry-lc run --scenario scenarios/lc_minimal.yaml --out results/lc_minimal_run
+sphere-lc run --scenario scenarios/lc_minimal.json --out results/lc_minimal_run
 
 # Богатый demo-сценарий
-magistry-lc run --scenario scenarios/procurement_tender.yaml --out results/procurement_tender_run
+sphere-lc run --scenario scenarios/procurement_tender.json --out results/procurement_tender_run
 
 # Исследовательский core-governance run: без worldgen, без secondary-spawn
-magistry-lc run --scenario scenarios/procurement_tender_core_governance.yaml --out results/procurement_tender_core_run
+sphere-lc run --scenario scenarios/procurement_tender_core_governance.json --out results/procurement_tender_core_run
 
 # Исследовательский full-ecology run: full-persona + secondary-spawn + worldgen
-magistry-lc run --scenario scenarios/procurement_tender_full_ecology.yaml --out results/procurement_tender_full_run
+sphere-lc run --scenario scenarios/procurement_tender_full_ecology.json --out results/procurement_tender_full_run
+
+# Baseline-серия для главы 2: один procurement-сценарий в режимах G0-G3
+python scripts/run_chapter2_baseline.py --scenario scenarios/procurement_tender_core_governance.json --out results/chapter2_procurement_baseline --repeats 3
 
 # Генерация сценария из текстового описания (LLM)
-magistry-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" --out scenarios/composed.yaml
+sphere-lc compose --description "Тендер на ремонт дорог, 4 агента, конфликт интересов" --out scenarios/composed.json
 
 # Пост-фактум анализ нарушений (LLM-оракул, чанкинг по events.jsonl)
-magistry-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
+sphere-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
 ```
 
-При запуске `magistry-lc run` движок пишет `events.jsonl`, `trace.jsonl`, `truth.jsonl`, `evaluation.json`, `fidelity.json` и `summary.json` в директорию прогона. Если `--out` не указан, используется `results/<timestamp>`, поэтому прогон сразу доступен web-интерфейсу.
+При запуске `sphere-lc run` движок пишет `events.jsonl`, `trace.jsonl`, `truth.jsonl`, `evaluation.json`, `fidelity.json` и `summary.json` в директорию прогона. Если `--out` не указан, используется `results/<timestamp>`, поэтому прогон сразу доступен web-интерфейсу.
+
+PowerShell может подтянуть `.env` в текущий process без ручного `set`:
+
+```powershell
+. .\scripts\Import-DotEnv.ps1
+python -m sphere_lc.cli run --scenario scenarios/procurement_tender.json --out results/procurement_tender_run
+```
 
 ### Запуск веб-интерфейса
+
+Предпочтительный путь для этой среды:
+
+```bash
+docker compose up --build -d web
+```
+
+После старта UI доступен по адресу `http://localhost:8765`. По умолчанию контейнер создаёт dev-пользователя:
+
+- логин: `sphere_admin`
+- пароль: `SphereDocker123!`
+
+При необходимости переопределите `SPHERE_ADMIN_USERNAME` и `SPHERE_ADMIN_PASSWORD` через окружение или `.env` до запуска `docker compose`.
+
+Локальный fallback без Docker:
 
 ```bash
 cd web && bash start.sh
@@ -70,7 +96,7 @@ cd web && bash start.sh
 
 ```mermaid
 graph TB
-    subgraph Движок["Движок симуляции (magistry_lc)"]
+    subgraph Движок["Движок симуляции (sphere_lc)"]
         ENGINE[WorldEngine]
         AGENT[AgentRunner]
         ARB[Arbiter]

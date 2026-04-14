@@ -297,7 +297,7 @@ class _FakePopen:
 
 
 class TestLaunchSimulation:
-    """Тесты для запуска MAGISTRY-LC через subprocess."""
+    """Тесты для запуска SPHERE-LC через subprocess."""
 
     def test_launch_simulation_from_config_writes_input_and_registers_process(self, results_dir: Path):
         """launch_simulation_from_config создаёт input-config и регистрирует процесс."""
@@ -305,7 +305,6 @@ class TestLaunchSimulation:
             result = runner.launch_simulation_from_config(
                 scenario_config={"id": "S1", "agents": []},
                 governance="G1",
-                seed=7,
                 rounds=5,
             )
 
@@ -314,9 +313,17 @@ class TestLaunchSimulation:
         run_dir = results_dir / run_name
         assert run_dir.exists()
         assert (run_dir / "_input_scenario.json").exists()
+        assert (run_dir / "run.json").exists()
+        run_meta = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+        assert run_meta["run_name"] == run_name
+        assert run_meta["governance"] == "G1"
+        assert run_meta["status"] in {"running", "finished"}
+        if run_meta["status"] == "finished":
+            assert run_meta["returncode"] == 0
+            assert run_meta["finished_at"] is not None
         assert run_name in runner._active
         proc = runner._active[run_name]
-        assert proc.cmd[:3] == [runner.sys.executable, "-m", "magistry_lc.cli"]
+        assert proc.cmd[:3] == [runner.sys.executable, "-m", "sphere_lc.cli"]
 
     def test_launch_simulation_from_config_applies_parallel_runtime_overrides(self, results_dir: Path):
         """Параллельные параметры попадают и в input-config, и в env subprocess."""
@@ -324,7 +331,6 @@ class TestLaunchSimulation:
             result = runner.launch_simulation_from_config(
                 scenario_config={"id": "S1", "agents": []},
                 governance="G1",
-                seed=7,
                 rounds=5,
                 parallel_agents=False,
                 parallel_workers=3,
@@ -338,16 +344,15 @@ class TestLaunchSimulation:
         assert payload["runtime"]["parallel_agents"] is False
         assert payload["runtime"]["parallel_workers"] == 3
         assert payload["runtime"]["parallel_window_seconds"] == 90.0
-        assert proc.env["MAGISTRY_PARALLEL_AGENTS"] == "0"
-        assert proc.env["MAGISTRY_PARALLEL_WORKERS"] == "3"
-        assert proc.env["MAGISTRY_PARALLEL_WINDOW"] == "90.0"
+        assert proc.env["SPHERE_PARALLEL_AGENTS"] == "0"
+        assert proc.env["SPHERE_PARALLEL_WORKERS"] == "3"
+        assert proc.env["SPHERE_PARALLEL_WINDOW"] == "90.0"
 
     def test_launch_simulation_uses_template_loader(self, results_dir: Path):
         """launch_simulation загружает template-конфиг и делегирует в config-launcher."""
         cfg = {
             "title": "S1 template",
             "ticks": 4,
-            "seed": 42,
             "agents": [],
             "world": {},
             "llm": {},
@@ -364,12 +369,11 @@ class TestLaunchSimulation:
                 result = runner.launch_simulation(
                     scenario="S1",
                     governance="G1",
-                    seed=11,
                     rounds=6,
                 )
 
         assert result["pid"] == 4321
-        assert result["run_name"].startswith("S1_G1_seed11")
+        assert result["run_name"].startswith("S1_G1_cognitive")
 
     def test_launch_simulation_respects_limit(self, results_dir: Path, monkeypatch: pytest.MonkeyPatch):
         """При превышении лимита concurrent-runs выбрасывается TooManyRunsError."""
@@ -385,17 +389,16 @@ class TestLaunchSimulation:
 
     def test_launch_simulation_skips_reserved_run_name(self, results_dir: Path):
         """Зарезервированное имя не должно переиспользоваться вторым запуском."""
-        runner._reserved_run_names.add("S1_G1_seed7_cognitive")
+        runner._reserved_run_names.add("S1_G1_cognitive")
 
         with patch("web.backend.runner.subprocess.Popen", side_effect=_FakePopen):
             result = runner.launch_simulation_from_config(
                 scenario_config={"id": "S1", "agents": []},
                 governance="G1",
-                seed=7,
                 rounds=5,
             )
 
-        assert result["run_name"] == "S1_G1_seed7_cognitive_2"
+        assert result["run_name"] == "S1_G1_cognitive_2"
 
     def test_launch_simulation_releases_reservation_on_popen_failure(self, results_dir: Path):
         """При ошибке старта резервирование и временные артефакты удаляются."""
@@ -404,13 +407,12 @@ class TestLaunchSimulation:
                 runner.launch_simulation_from_config(
                     scenario_config={"id": "S1", "agents": []},
                     governance="G1",
-                    seed=7,
                 )
 
         assert runner._reserved_run_names == set()
-        assert not (results_dir / "S1_G1_seed7_cognitive").exists()
-        assert not (results_dir / "S1_G1_seed7_cognitive_stdout.log").exists()
-        assert not (results_dir / "S1_G1_seed7_cognitive_stderr.log").exists()
+        assert not (results_dir / "S1_G1_cognitive").exists()
+        assert not (results_dir / "S1_G1_cognitive_stdout.log").exists()
+        assert not (results_dir / "S1_G1_cognitive_stderr.log").exists()
 
 
 def test_parse_run_name_uses_rightmost_governance_suffix():
@@ -419,6 +421,5 @@ def test_parse_run_name_uses_rightmost_governance_suffix():
     assert meta == {
         "scenario": "My_G2_experiment",
         "governance": "G1",
-        "seed": 42,
-        "variant": "web",
+        "variant": "seed42_web",
     }

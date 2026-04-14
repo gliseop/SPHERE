@@ -1,5 +1,5 @@
 #!/bin/bash
-# Запуск MAGISTRY Graph UI.
+# Запуск SPHERE Graph UI.
 # Собирает фронтенд и запускает FastAPI-сервер, который раздаёт как API,
 # так и статику фронтенда по единому адресу.
 #
@@ -52,7 +52,7 @@ elif [[ "${1:-}" =~ ^[0-9]+$ ]]; then
     PORT="$1"
 fi
 
-echo "=== MAGISTRY Graph UI ==="
+echo "=== SPHERE Graph UI ==="
 echo "Сборка фронтенда..."
 cd "$SCRIPT_DIR/frontend"
 npm run build

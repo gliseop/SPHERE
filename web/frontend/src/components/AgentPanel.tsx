@@ -61,7 +61,7 @@ export function AgentPanel({ nodeId, nodes, edges, events }: Props) {
               {connections.length}
               {suspiciousCount > 0 && (
                 <span className="stat-unit" style={{ color: '#ef4444', fontSize: '0.5rem' }}>
-                  {' '}⚠{suspiciousCount}
+                  {' '}risk:{suspiciousCount}
                 </span>
               )}
             </div>
@@ -84,7 +84,7 @@ export function AgentPanel({ nodeId, nodes, edges, events }: Props) {
                   <span className={`conn-item-strength ${sus ? 'suspicious' : ''}`}>
                     {c.strength.toFixed(1)}
                   </span>
-                  {sus && <span className="badge danger" style={{ fontSize: '0.45rem' }}>⚠</span>}
+                  {sus && <span className="badge danger" style={{ fontSize: '0.45rem' }}>risk</span>}
                 </div>
               </div>
             )
@@ -115,7 +115,7 @@ export function AgentPanel({ nodeId, nodes, edges, events }: Props) {
                         return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
                       })()}
                 </span>
-                <span className="msg-item-dir">{isFrom ? '→' : '←'}</span>
+                <span className="msg-item-dir">{isFrom ? 'исх' : 'вх'}</span>
                 <span className="msg-item-agent">{String(other)}</span>
                 {getBool(e.payload, 'private') && (
                   <span className="badge violet" style={{ fontSize: '0.45rem', marginLeft: 'auto' }}>PRIV</span>

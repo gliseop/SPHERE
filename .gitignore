@@ -9,3 +9,11 @@ results/
 screenshots/
 test-screenshots
 lc_results
+.tmp_pytest/
+pytest_tmp/
+pytest_temp_run_*/
+tmp_artifact_run/
+tmp_*_run/
+tmp_bp*/
+tmp_*_trace.jsonl
+docs/Prokofev_R._Igrakota1._Igra_Kota_Kniga_Pervaya.txt

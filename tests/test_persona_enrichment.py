@@ -4,16 +4,16 @@ import asyncio
 import json
 from pathlib import Path
 
-from magistry_lc.events import Event
-from magistry_lc.agent import AgentRunner
-from magistry_lc.config import MemoryConfig, RuntimeConfig, ScenarioConfig
-from magistry_lc.engine import RunArtifacts, WorldEngine
-from magistry_lc.entities import EntityRegistry
-from magistry_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
-from magistry_lc.persona import ExpertReflection, PersonaArtifact
-from magistry_lc.state import AgentState, WorkItem, WorldState
-from magistry_lc.tracing import TraceLog
-from magistry_lc.worldgen import WorldGenerator
+from sphere_lc.events import Event
+from sphere_lc.agent import AgentRunner
+from sphere_lc.config import MemoryConfig, RuntimeConfig, ScenarioConfig
+from sphere_lc.engine import RunArtifacts, WorldEngine
+from sphere_lc.entities import EntityRegistry
+from sphere_lc.llm import LLMCaller, MockLLMProvider, StructuredLLMResponse
+from sphere_lc.persona import ExpertReflection, INTERVIEW_QUESTIONS_V2, MotivationDigest, PersonaArtifact, PersonaGenerator
+from sphere_lc.state import AgentState, WorkItem, WorldState
+from sphere_lc.tracing import TraceLog
+from sphere_lc.worldgen import WorldGenerator
 
 
 def _mk_cfg(
@@ -110,6 +110,39 @@ def test_engine_uses_persona_cache_without_persona_llm_calls(tmp_path: Path) -> 
     assert not any(span.get("role") == "persona" for span in spans)
 
 
+def test_engine_uses_global_persona_cache_across_run_directories(tmp_path: Path) -> None:
+    cfg = _mk_cfg(enrich_personas=True)
+    first_dir = tmp_path / "run_a"
+    second_dir = tmp_path / "run_b"
+    first_artifacts = RunArtifacts(
+        out_dir=first_dir,
+        events_path=first_dir / "events.jsonl",
+        trace_path=first_dir / "trace.jsonl",
+    )
+    asyncio.run(WorldEngine(cfg=cfg, artifacts=first_artifacts, provider_override=MockLLMProvider()).run())
+
+    second_artifacts = RunArtifacts(
+        out_dir=second_dir,
+        events_path=second_dir / "events.jsonl",
+        trace_path=second_dir / "trace.jsonl",
+    )
+    state = asyncio.run(
+        WorldEngine(
+            cfg=cfg,
+            artifacts=second_artifacts,
+            provider_override=_FailOnPersonaCallsProvider(),
+        ).run()
+    )
+
+    assert state.agents["agent:off_1"].persona.biography.strip()
+    spans = [
+        json.loads(line)
+        for line in second_artifacts.trace_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert not any(span.get("role") == "persona" for span in spans)
+
+
 def test_engine_without_enrich_keeps_empty_biography(tmp_path: Path) -> None:
     cfg = _mk_cfg(enrich_personas=False)
     artifacts = RunArtifacts(
@@ -140,10 +173,9 @@ def test_render_memory_keeps_full_summary_and_adds_biography_excerpt(tmp_path: P
     mem_text = asyncio.run(runner._render_memory(agent=agent, state=state, visible_events=[]))
     assert summary[-20:] in mem_text
     assert "Биография (начало):" in mem_text
-    assert "…" in mem_text
 
 
-def test_render_memory_surfaces_interview_and_reflection_sections(tmp_path: Path) -> None:
+def test_render_memory_surfaces_interview_and_reflection_sections_in_retrieval_mode(tmp_path: Path) -> None:
     agent = AgentState(
         agent_id="agent:off_1",
         name="Off 1",
@@ -172,12 +204,50 @@ def test_render_memory_surfaces_interview_and_reflection_sections(tmp_path: Path
     runner = AgentRunner(
         llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
         runtime=RuntimeConfig(),
-        memory=MemoryConfig(),
+        memory=MemoryConfig(interview_render_mode="retrieval"),
     )
 
     mem_text = asyncio.run(runner._render_memory(agent=agent, state=state, visible_events=[]))
 
     assert "Фрагменты интервью:" in mem_text
+    assert "Экспертная рефлексия:" in mem_text
+
+
+def test_render_memory_surfaces_full_interview_in_full_mode(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(
+            summary="Краткая персона",
+            biography="Развёрнутая биография",
+            interview=[
+                {
+                    "question": "Как вы ведёте себя под давлением?",
+                    "answer": "Сначала ищу тихий обходной путь.",
+                }
+            ],
+            reflections=[ExpertReflection(expert="psychologist", summary="Стремится избегать открытого конфликта.")],
+        ),
+    )
+    agent.memory.add_doc(
+        tick=0,
+        kind="reflection",
+        importance=8.0,
+        text="psychologist: При стрессе сохраняет внешнюю лояльность и действует непрямо.",
+        cfg=MemoryConfig(),
+    )
+    state = WorldState(tick=0, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(interview_render_mode="full"),
+    )
+
+    mem_text = asyncio.run(runner._render_memory(agent=agent, state=state, visible_events=[]))
+
+    assert "Интервью (полное):" in mem_text
+    assert "Q: Как вы ведёте себя под давлением?" in mem_text
     assert "Экспертная рефлексия:" in mem_text
 
 
@@ -213,11 +283,49 @@ def test_build_user_surfaces_recent_invalid_work_id(tmp_path: Path) -> None:
         mem_text="(пусто)",
     )
 
-    assert "Недавние недопустимые действия / ID:" in user
+    assert "Во что ты уже упирался и чего лучше не повторять дословно:" in user
     assert "work_id work:ghost не существует" in user
 
 
-def test_build_user_includes_canonical_date(tmp_path: Path) -> None:
+def test_build_user_does_not_backfill_core_motivation_from_name_or_story_state(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:volkov",
+        name="Волков А.С.",
+        internal=True,
+        persona=PersonaArtifact(
+            summary="Краткая персона",
+            biography="Развёрнутая биография",
+            motivation=MotivationDigest(),
+        ),
+        capabilities=["message"],
+        story_state="story_state: нельзя подставлять имя или личную линию",
+    )
+    state = WorldState(tick=1, registry=EntityRegistry(), agents={agent.agent_id: agent})
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    user = runner._build_user(
+        agent=agent,
+        state=state,
+        visible_events=[],
+        mem_text="(пусто)",
+    )
+
+    motivation_section = user.split("Что для тебя сейчас действительно поставлено на карту:")[1].split(
+        "Если пишешь или ссылаешься на людей, дела и площадки, можешь прямо использовать такие служебные обозначения:"
+    )[0]
+
+    assert "Чего ты добиваешься: Волков А.С." not in motivation_section
+    assert "Что для тебя выглядит выгодой: Волков А.С." not in motivation_section
+    assert "story_state: нельзя подставлять имя или личную линию" not in motivation_section
+    assert "Чего ты добиваешься:" in motivation_section
+    assert "Что для тебя выглядит выгодой:" in motivation_section
+
+
+def test_build_user_includes_current_world_time(tmp_path: Path) -> None:
     agent = AgentState(
         agent_id="agent:off_1",
         name="Off 1",
@@ -239,7 +347,27 @@ def test_build_user_includes_canonical_date(tmp_path: Path) -> None:
         mem_text="(пусто)",
     )
 
-    assert "Каноническая дата мира: 2026-03-11" in user
+    assert "Сегодня 2026-03-11." in user
+
+
+def test_build_system_does_not_expose_simulation_framing(tmp_path: Path) -> None:
+    agent = AgentState(
+        agent_id="agent:off_1",
+        name="Off 1",
+        internal=True,
+        persona=PersonaArtifact(summary="Краткая персона"),
+        capabilities=["message"],
+    )
+    runner = AgentRunner(
+        llm=LLMCaller(provider=MockLLMProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+        runtime=RuntimeConfig(),
+        memory=MemoryConfig(),
+    )
+
+    system = runner._build_system(agent)
+
+    assert "симуляц" not in system.casefold()
+    assert "обычного рабочего дня" in system
 
 
 def test_build_user_includes_work_item_titles(tmp_path: Path) -> None:
@@ -270,7 +398,7 @@ def test_build_user_includes_work_item_titles(tmp_path: Path) -> None:
         mem_text="(пусто)",
     )
 
-    assert "Открытые/известные дела (кратко):" in user
+    assert "Что сейчас лежит на столе:" in user
     assert "work:alpha: Проверка документации тендера [open]" in user
 
 
@@ -315,8 +443,8 @@ class _RuntimeSpawnProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
-            if "agent:spawner" in user and "Раунд (tick): 0" in user:
+        if "Сделай следующий ход в этой ситуации." in user:
+            if "agent:spawner" in user and "Сегодняшний рабочий день: 0." in user:
                 return StructuredLLMResponse(
                     data={
                         "actions": [
@@ -347,7 +475,7 @@ class _DoubleRuntimeSpawnProvider(_RuntimeSpawnProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user and "agent:spawner" in user and "Раунд (tick): 0" in user:
+        if "Сделай следующий ход в этой ситуации." in user and "agent:spawner" in user and "Сегодняшний рабочий день: 0." in user:
             return StructuredLLMResponse(
                 data={
                     "actions": [
@@ -386,7 +514,7 @@ class _WorldgenSpawnProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             if "agent:journalist" in user:
                 self.spawned_agent_acted = True
             return StructuredLLMResponse(data={"actions": []}, model="mock")
@@ -419,7 +547,7 @@ class _DuplicateNameWorldgenProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
-        if "Сгенерируй действия на этот тик." in user:
+        if "Сделай следующий ход в этой ситуации." in user:
             return StructuredLLMResponse(data={"actions": []}, model="mock")
         if "\"tick\": 0" in user:
             return StructuredLLMResponse(
@@ -471,6 +599,7 @@ class _OptionalSpawnsWorldgenProvider(MockLLMProvider):
 class _CaptureWorldgenPromptProvider(MockLLMProvider):
     def __init__(self) -> None:
         super().__init__()
+        self.last_system = ""
         self.last_user = ""
 
     def generate_structured(
@@ -480,8 +609,90 @@ class _CaptureWorldgenPromptProvider(MockLLMProvider):
         schema: dict,
         temperature: float = 0.0,
     ):
+        self.last_system = system
         self.last_user = user
         return StructuredLLMResponse(data={"events": []}, model="mock")
+
+
+class _MotivationDigestProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Построй короткий мотивационный digest" in user:
+            return StructuredLLMResponse(
+                data={
+                    "goal": "Сохранить управляемость тендера и не отдать инициативу наружу.",
+                    "fear": "Боится публичного скандала и потери контроля над трактовкой событий.",
+                    "obligation": "Считает, что должен удержать подразделение от открытого срыва процесса.",
+                    "gain": "Видит выгоду в тихом урегулировании без формальной эскалации.",
+                    "pressure": "Испытывает давление сроков, статуса и ожиданий руководства.",
+                    "threat": "Опасается внешнего шума и проверки, если ситуация выйдет из-под контроля.",
+                },
+                model="mock",
+            )
+        if "Подсказка/черновик персоны" in user:
+            return StructuredLLMResponse(
+                data={
+                    "summary": "Опытный муниципальный руководитель, избегающий открытого конфликта.",
+                    "biography": "Долго работал в районной администрации, привык сначала стабилизировать процесс, а уже потом выносить проблему наружу.",
+                    "interview": [
+                        {
+                            "question": question,
+                            "answer": "Сначала стараюсь удержать процесс под контролем и не допускать публичной эскалации.",
+                        }
+                        for question in INTERVIEW_QUESTIONS_V2
+                    ],
+                    "reflections": [
+                        {
+                            "expert": "psychologist",
+                            "summary": "Под давлением предпочитает непрямое снижение риска вместо открытого столкновения.",
+                            "evidence_indices": [0, 1],
+                        },
+                        {
+                            "expert": "economist",
+                            "summary": "Сильно реагирует на угрозу внешнего контроля и потерю управляемости процесса.",
+                            "evidence_indices": [2, 3],
+                        },
+                    ],
+                },
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
+
+
+class _CoreMotivationProvider(MockLLMProvider):
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        if "Построй очень лёгкий core-mode digest" in user:
+            return StructuredLLMResponse(
+                data={
+                    "goal": "Удержать рабочий процесс в тихом, управляемом коридоре.",
+                    "fear": "Опасается лишнего шума и преждевременной публичной эскалации.",
+                    "obligation": "Считает, что сначала нужно сохранить рабочую управляемость и связи.",
+                    "gain": "Выгода в том, чтобы выиграть время без открытого конфликта.",
+                    "pressure": "Чувствует давление сроков и ожиданий от ближайшего окружения.",
+                    "threat": "Боится потерять контроль над трактовкой происходящего.",
+                },
+                model="mock",
+            )
+        if "Подсказка/черновик персоны" in user:
+            return StructuredLLMResponse(
+                data={
+                    "summary": "Опытный муниципальный руководитель, предпочитающий не выносить напряжение наружу.",
+                    "biography": "Работает в системе, где ценит управляемость процесса и не любит лишнюю публичность.",
+                },
+                model="mock",
+            )
+        return super().generate_structured(system, user, schema, temperature)
 
 
 def test_engine_spawns_secondary_agents_before_first_tick(tmp_path: Path) -> None:
@@ -589,7 +800,9 @@ def test_engine_rejects_role_based_secondary_spawn(tmp_path: Path) -> None:
     )
     state = asyncio.run(WorldEngine(cfg=cfg, artifacts=artifacts, provider_override=_RoleAliasProvider()).run())
 
-    assert [aid for aid in state.agents if aid.startswith("agent:sec_")] == []
+    secondary_ids = [aid for aid in state.agents if aid.startswith("agent:sec_")]
+    assert len(secondary_ids) == 1
+    assert state.agents[secondary_ids[0]].name == "начальник отдела закупок"
 
 
 def test_engine_limits_secondary_agents_by_max_agents(tmp_path: Path) -> None:
@@ -1046,6 +1259,53 @@ def test_engine_full_persona_bootstraps_interview_and_reflection_memory(tmp_path
     assert any(doc.kind == "reflection" for doc in state.agents["agent:off_1"].memory.docs)
 
 
+def test_persona_generator_builds_interview_grounded_motivation_digest(tmp_path: Path) -> None:
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    llm = LLMCaller(provider=_MotivationDigestProvider(), trace=trace)
+    generator = PersonaGenerator(llm=llm, temperature=0.0)
+
+    persona = asyncio.run(
+        generator.generate(
+            agent_id="agent:off_1",
+            name="Новикова Е.В.",
+            internal=True,
+            persona_hint="Руководитель закупок, старается не выносить напряжение наружу раньше времени.",
+            scenario_description="Муниципальный тендер с подозрением на конфликт интересов.",
+            language="ru",
+        )
+    )
+
+    assert persona.interview
+    assert persona.reflections
+    assert persona.motivation is not None
+    assert persona.motivation.goal == "Сохранить управляемость тендера и не отдать инициативу наружу."
+    assert "внешнего шума" in persona.motivation.threat
+
+
+def test_persona_generator_builds_core_mode_lightweight_motivation_digest(tmp_path: Path) -> None:
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    llm = LLMCaller(provider=_CoreMotivationProvider(), trace=trace)
+    generator = PersonaGenerator(llm=llm, temperature=0.0)
+
+    persona = asyncio.run(
+        generator.generate_core(
+            agent_id="agent:off_1",
+            name="Волков А.С.",
+            internal=True,
+            persona_hint="Руководитель закупок, старается не выносить напряжение наружу раньше времени.",
+            scenario_description="Муниципальный тендер с подозрением на конфликт интересов.",
+            language="ru",
+        )
+    )
+
+    assert persona.summary.startswith("Опытный муниципальный руководитель")
+    assert persona.biography.startswith("Работает в системе")
+    assert persona.motivation is not None
+    assert persona.motivation.goal == "Удержать рабочий процесс в тихом, управляемом коридоре."
+    assert "Волков" not in persona.motivation.goal
+    assert "story_state" not in persona.motivation.goal
+
+
 def test_worldgen_accepts_legacy_list_response(tmp_path: Path) -> None:
     trace = TraceLog(tmp_path / "trace.jsonl")
     llm = LLMCaller(provider=_LegacyWorldgenProvider(), trace=trace)
@@ -1096,3 +1356,23 @@ def test_worldgen_prompt_includes_canonical_date(tmp_path: Path) -> None:
     )
 
     assert '"current_date": "2026-03-12"' in provider.last_user
+
+
+def test_worldgen_prompt_requires_entity_creations_before_external_artifacts(tmp_path: Path) -> None:
+    trace = TraceLog(tmp_path / "trace.jsonl")
+    provider = _CaptureWorldgenPromptProvider()
+    llm = LLMCaller(provider=provider, trace=trace)
+    wg = WorldGenerator(llm=llm, temperature=0.0)
+
+    _ = asyncio.run(
+        wg.generate(
+            tick=4,
+            recent_events=[],
+            language="ru",
+            phase="post",
+            scenario_description="test external artifact dependency contract",
+        )
+    )
+
+    assert "Не возвращай artifact с `owner_org_id` или `zone_id`" in provider.last_system
+

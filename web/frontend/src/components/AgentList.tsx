@@ -7,6 +7,7 @@ import {
   isGovernanceAgentId,
 } from '../constants'
 import { getNumber } from '../utils/payload'
+import { Icon } from './Icons'
 
 interface Props {
   nodes: GraphNode[]
@@ -257,7 +258,7 @@ export function AgentList({ nodes, edges, events, selectedNode, names, onSelect,
                     }}
                     title="История репутации"
                   >
-                    {isExpanded ? '▲' : '▼'}
+                    <Icon name={isExpanded ? 'chevronUp' : 'chevronDown'} size={12} />
                   </button>
                 )}
               </div>

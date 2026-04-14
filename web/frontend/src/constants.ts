@@ -2,7 +2,7 @@
 export const SUSPICIOUS_THRESHOLD = 3.0
 
 /** Название приложения (для ребрендинга через VITE_APP_NAME). */
-export const APP_NAME = import.meta.env.VITE_APP_NAME || 'MAGISTRY'
+export const APP_NAME = import.meta.env.VITE_APP_NAME || 'SPHERE'
 
 function agentSlug(id: string): string {
   return id.startsWith('agent:') ? id.slice('agent:'.length) : id

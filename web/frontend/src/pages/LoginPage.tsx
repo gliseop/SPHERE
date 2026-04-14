@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { DysonSphereAsciiBg } from '../components/DysonSphereAsciiBg'
 import { APP_NAME } from '../constants'
 
 interface Props {
@@ -22,10 +23,12 @@ export function LoginPage({ onLogin }: Props) {
 
   return (
     <div className="login-page">
+      <DysonSphereAsciiBg />
+      <div className="scanlines" aria-hidden />
       <div className="login-card hud-panel">
         <div className="corner tl accent" />
-        <div className="corner tr" />
-        <div className="corner bl" />
+        <div className="corner tr accent" />
+        <div className="corner bl accent" />
         <div className="corner br accent" />
         <h1 className="login-title">{APP_NAME}</h1>
         <form onSubmit={handleSubmit} className="login-form">
@@ -58,11 +61,11 @@ export function LoginPage({ onLogin }: Props) {
             </div>
           )}
           <button
-            className="btn-clipped primary full-width"
+            className="btn-clipped primary full-width login-submit-btn"
             type="submit"
             disabled={loading || !username || !password}
           >
-            {loading ? 'Вход...' : 'Войти'}
+            {loading ? 'Вход...' : 'Инициализация'}
           </button>
         </form>
       </div>

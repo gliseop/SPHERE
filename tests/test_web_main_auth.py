@@ -53,7 +53,6 @@ def _template_config(
     *,
     title: str,
     ticks: int = 6,
-    seed: int = 42,
     description: str = "",
     agents: list[dict] | None = None,
 ) -> dict:
@@ -61,7 +60,6 @@ def _template_config(
         "version": 1,
         "title": title,
         "description": description,
-        "seed": seed,
         "ticks": ticks,
         "agents": list(agents or []),
         "world": {
@@ -143,6 +141,7 @@ def test_get_run_reads_directory_events(tmp_path: Path):
         '{"event_type":"message_sent","payload":{"to_id":"chan:public","text":"x"}}\n',
         encoding="utf-8",
     )
+    (run_dir / "environment_summary.json").write_text('{"environment":{"counts":{"queues":1}}}\n', encoding="utf-8")
 
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
@@ -156,6 +155,7 @@ def test_get_run_reads_directory_events(tmp_path: Path):
     assert payload["name"] == "lc_run"
     assert payload["total_events"] == 1
     assert isinstance(payload["events"], list) and len(payload["events"]) == 1
+    assert payload["environment"] == {"environment": {"counts": {"queues": 1}}}
 
 
 def test_get_run_hides_private_events_for_viewer(tmp_path: Path):
@@ -271,7 +271,6 @@ def test_list_scenarios_includes_yaml_scenario_config(tmp_path: Path):
             "title: YAML scenario\n"
             "description: YAML description\n"
             "ticks: 7\n"
-            "seed: 11\n"
             "agents:\n"
             "  - agent_id: agent:off_1\n"
             "    name: Off 1\n"
@@ -351,13 +350,11 @@ def test_update_yaml_scenario_preserves_extension_and_saves_sim_config(tmp_path:
         "scenario": "S1",
         "governance": "G1",
         "rounds": 9,
-        "seed": 99,
         "agents": [{"id": "off_1", "name": "Off 1", "role": "official", "initial_reputation": 7.0}],
         "sim_config": {
             "version": 1,
             "title": "Ignored title",
             "ticks": 1,
-            "seed": 42,
             "agents": [{"agent_id": "agent:off_1", "name": "Off 1", "internal": True}],
             "world": {},
         },
@@ -377,10 +374,10 @@ def test_update_yaml_scenario_preserves_extension_and_saves_sim_config(tmp_path:
     saved = scenario_path.read_text(encoding="utf-8")
     assert "After update" in saved
     assert "ticks: 9" in saved
-    assert "seed: 99" in saved
+    assert "seed:" not in saved
 
 
-def test_create_yaml_scenario_uses_next_number_across_yaml_files(tmp_path: Path):
+def test_create_scenario_uses_next_number_across_existing_yaml_files(tmp_path: Path):
     (tmp_path / "S7.yaml").write_text(
         "version: 1\ntitle: Existing\nticks: 1\nagents: []\nworld: {}\n",
         encoding="utf-8",
@@ -391,13 +388,11 @@ def test_create_yaml_scenario_uses_next_number_across_yaml_files(tmp_path: Path)
         "scenario": "S1",
         "governance": "G1",
         "rounds": 4,
-        "seed": 13,
         "agents": [],
         "sim_config": {
             "version": 1,
             "title": "Created from sim_config",
             "ticks": 4,
-            "seed": 13,
             "agents": [],
             "world": {},
         },
@@ -414,7 +409,7 @@ def test_create_yaml_scenario_uses_next_number_across_yaml_files(tmp_path: Path)
 
     assert r.status_code == 201
     assert r.json()["id"] == "S8"
-    assert (tmp_path / "S8.yaml").exists()
+    assert (tmp_path / "S8.json").exists()
 
 
 def test_get_run_normalizes_lc_events_for_frontend_compat(tmp_path: Path):
@@ -449,6 +444,8 @@ def test_export_run_reads_directory_sidecars(tmp_path: Path):
     (run_dir / "scenario.json").write_text('{"title":"demo"}\n', encoding="utf-8")
     (run_dir / "names.json").write_text('{"agent:1":"Alice"}\n', encoding="utf-8")
     (run_dir / "summary.json").write_text('{"score":1}\n', encoding="utf-8")
+    (run_dir / "environment_summary.json").write_text('{"environment":{"counts":{"queues":1}}}\n', encoding="utf-8")
+    (run_dir / "environment_timeline.jsonl").write_text('{"tick":0,"environment":{"counts":{"queues":1}}}\n', encoding="utf-8")
 
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
@@ -463,6 +460,8 @@ def test_export_run_reads_directory_sidecars(tmp_path: Path):
     assert payload["scenario"] == {"title": "demo"}
     assert payload["names"] == {"agent:1": "Alice"}
     assert payload["summary"] == {"score": 1}
+    assert payload["environment"] == {"environment": {"counts": {"queues": 1}}}
+    assert payload["environment_timeline"] == [{"tick": 0, "environment": {"counts": {"queues": 1}}}]
 
 
 def test_export_run_falls_back_to_input_sidecar_for_live_run(tmp_path: Path):
@@ -522,7 +521,6 @@ def test_get_run_scenario_normalizes_lc_config_for_frontend(tmp_path: Path):
             '"title":"LC Scenario",'
             '"description":"demo",'
             '"ticks":4,'
-            '"seed":11,'
             '"agents":[{"agent_id":"agent:off_1","name":"Off 1","internal":true,"persona":{},"capabilities":["message","spawn"],"initial_reputation":7.0,"initial_title":"специалист"}],'
             '"world":{"channels":[{"channel_id":"chan:public","title":"Public"}],"orgs":[],"work_items":[]}'
             '}'
@@ -560,7 +558,6 @@ def test_get_run_scenario_falls_back_to_input_sidecar_for_live_run(tmp_path: Pat
             '"title":"Live Input Scenario",'
             '"description":"demo",'
             '"ticks":6,'
-            '"seed":13,'
             '"agents":[{"agent_id":"agent:off_1","name":"Off 1","internal":true,"persona":{},"capabilities":["message"],"initial_reputation":3.0,"initial_title":"специалист"}],'
             '"world":{"channels":[{"channel_id":"chan:public","title":"Public"}],"orgs":[],"work_items":[]}'
             '}'
@@ -580,7 +577,7 @@ def test_get_run_scenario_falls_back_to_input_sidecar_for_live_run(tmp_path: Pat
     payload = r.json()
     assert payload["name"] == "Live Input Scenario"
     assert payload["rounds"] == 6
-    assert payload["seed"] == 13
+    assert "seed" not in payload
 
 
 def test_get_interview_rejects_backslash_path_traversal():
@@ -682,6 +679,104 @@ def test_prompts_endpoint_returns_empty_list_for_zero_limit(tmp_path: Path):
     assert r.json() == []
 
 
+def test_ai_prompt_templates_endpoint_requires_admin():
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        r = client.get(
+            "/api/ai/prompt-templates",
+            headers={"Authorization": f"Bearer {viewer_token()}"},
+        )
+    assert r.status_code == 403
+
+
+def test_ai_prompt_templates_endpoint_returns_yaml_defaults():
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        r = client.get(
+            "/api/ai/prompt-templates",
+            headers={"Authorization": f"Bearer {admin_token()}"},
+        )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["generate_personality"]["system_default"].startswith("Ты — эксперт по организационной психологии")
+    assert "{{description}}" in payload["generate_personality"]["user_default"]
+    assert payload["generate_agent_type"]["system_default"].startswith("Ты — сценарист и организационный психолог")
+    assert "{{personality_json}}" in payload["generate_agent_type"]["user_default"]
+
+
+def test_trace_markdown_endpoint_reads_trace_sidecar(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text('{"event_type":"noop"}\n', encoding="utf-8")
+    (run_dir / "trace.jsonl").write_text(
+        (
+            '{"role":"agent","name":"agent:off_1","tick":2,'
+            '"system":"SYS","user":"USER","response":"RESP",'
+            '"timestamp":"2026-03-06T10:00:00+00:00"}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/trace.md?agent_id=agent:off_1",
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+    assert r.status_code == 200
+    assert "# Трейс прогона `lc_run`" in r.text
+    assert "## 1. agent:off_1" in r.text
+    assert "SYS" in r.text
+    assert "RESP" in r.text
+
+
+def test_snapshot_endpoint_returns_simulated_time_and_meta(tmp_path: Path):
+    run_dir = tmp_path / "lc_run"
+    run_dir.mkdir()
+    (run_dir / "events.jsonl").write_text(
+        (
+            '{"tick":0,"event_type":"message_sent","actor_id":"agent:off_1","payload":{"to_id":"agent:off_2","private":true,"text":"ping"},"audience":["aud:internal"],"timestamp":"2026-03-24T16:00:00Z"}\n'
+            '{"tick":1,"event_type":"message_sent","actor_id":"agent:off_2","payload":{"to_id":"agent:off_1","private":true,"text":"pong"},"audience":["aud:internal"],"timestamp":"2026-03-24T16:01:00Z"}\n'
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_name": "lc_run",
+                "display_name": "Полный ecology run",
+                "scenario_title": "Полный ecology run",
+                "governance": "G2",
+                "governance_label": "Аудитор (санкции по репутации)",
+                "ticks_total": 2,
+                "runtime": {
+                    "start_date": "2026-03-09",
+                    "tick_granularity": "day",
+                    "tick_duration_days": 1,
+                },
+                "simulated_start_date": "2026-03-09",
+                "simulated_end_date": "2026-03-10",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "names.json").write_text('{"agent:off_1":"Alice","agent:off_2":"Bob"}\n', encoding="utf-8")
+
+    with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
+        with patch("web.backend.routes.runs.RESULTS_DIR", tmp_path):
+            with patch("web.backend.run_artifacts.RESULTS_DIR", tmp_path):
+                r = client.get(
+                    "/api/run/lc_run/snapshot",
+                    headers={"Authorization": f"Bearer {admin_token()}"},
+                )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["meta"]["display_name"] == "Полный ecology run"
+    assert payload["meta"]["simulated_start_date"] == "2026-03-09"
+    assert payload["events"][-1]["simulated_date"] == "2026-03-10"
+    assert payload["events"][-1]["simulated_time"] == "09:00"
+
+
 def test_create_scenario_viewer_gets_403():
     with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
         r = client.post(
@@ -693,7 +788,7 @@ def test_create_scenario_viewer_gets_403():
 
 
 def test_create_scenario_admin_gets_201(tmp_path: Path):
-    (tmp_path / "seed_s1_g1.json").write_text(
+    (tmp_path / "template_s1_g1.json").write_text(
         json.dumps(_template_config(title="Template S1"), ensure_ascii=False),
         encoding="utf-8",
     )
@@ -706,7 +801,7 @@ def test_create_scenario_admin_gets_201(tmp_path: Path):
                     headers={"Authorization": f"Bearer {admin_token()}"},
                 )
     assert r.status_code == 201
-    saved_files = [path for path in tmp_path.iterdir() if path.name != "seed_s1_g1.json"]
+    saved_files = [path for path in tmp_path.iterdir() if path.name != "template_s1_g1.json"]
     assert len(saved_files) == 1
     saved_payload = json.loads(saved_files[0].read_text(encoding="utf-8"))
     assert saved_payload["version"] == 1
@@ -775,12 +870,12 @@ def test_launch_run_admin_rejects_invalid_scenario_id():
 
 
 def test_template_scenarios_available_from_seed_files(tmp_path: Path):
-    (tmp_path / "seed_s0_g0.json").write_text(
-        json.dumps(_template_config(title="Чистая сделка", ticks=5, seed=1), ensure_ascii=False),
+    (tmp_path / "template_s0_g0.json").write_text(
+        json.dumps(_template_config(title="Чистая сделка", ticks=5), ensure_ascii=False),
         encoding="utf-8",
     )
-    (tmp_path / "seed_s1_g1.json").write_text(
-        json.dumps(_template_config(title="Прямой сговор", ticks=6, seed=2), ensure_ascii=False),
+    (tmp_path / "template_s1_g1.json").write_text(
+        json.dumps(_template_config(title="Прямой сговор", ticks=6), ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -797,8 +892,8 @@ def test_template_scenarios_available_from_seed_files(tmp_path: Path):
     assert payload["S1"]["title"] == "Прямой сговор"
 
 
-def test_saved_scenarios_list_excludes_builtin_seed_files(tmp_path: Path):
-    (tmp_path / "seed_s1_g1.json").write_text(
+def test_saved_scenarios_list_excludes_builtin_template_files(tmp_path: Path):
+    (tmp_path / "template_s1_g1.json").write_text(
         json.dumps(_template_config(title="Builtin"), ensure_ascii=False),
         encoding="utf-8",
     )
@@ -824,17 +919,16 @@ def test_saved_scenarios_list_excludes_builtin_seed_files(tmp_path: Path):
     assert r.status_code == 200
     payload = {item["id"] for item in r.json()}
     assert "custom_lc" in payload
-    assert "seed_s1_g1" not in payload
+    assert "template_s1_g1" not in payload
 
 
 def test_template_scenario_returns_normalized_config(tmp_path: Path):
-    (tmp_path / "seed_s1_g1.json").write_text(
+    (tmp_path / "template_s1_g1.json").write_text(
         json.dumps(
             _template_config(
                 title="Прямой сговор",
                 description="demo",
                 ticks=6,
-                seed=2,
                 agents=[_template_agent(initial_reputation=5.0)],
             ),
             ensure_ascii=False,
@@ -855,10 +949,33 @@ def test_template_scenario_returns_normalized_config(tmp_path: Path):
     assert payload["ticks"] == 6
     assert payload["governance"]["audit"]["enabled"] is True
     assert payload["governance"]["audit"]["reputation_freeze_enabled"] is True
+    assert payload["governance"]["audit"]["collegial_review_enabled"] is False
+
+
+def test_template_scenario_maps_g3_to_collegial_review(tmp_path: Path):
+    (tmp_path / "template_s1_g1.json").write_text(
+        json.dumps(_template_config(title="Прямой сговор", ticks=4), ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    with patch("web.backend.auth.get_user_by_username", return_value=VIEWER):
+        with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
+            r = client.get(
+                "/api/templates/scenarios/S1?governance=G3",
+                headers={"Authorization": f"Bearer {viewer_token()}"},
+            )
+
+    assert r.status_code == 200
+    payload = r.json()
+    audit = payload["governance"]["audit"]
+    assert audit["enabled"] is True
+    assert audit["reputation_freeze_enabled"] is True
+    assert audit["collegial_review_enabled"] is True
+    assert audit["reputation_penalty_delta"] is None
 
 
 def test_template_scenario_applies_custom_governance_mode(tmp_path: Path):
-    (tmp_path / "seed_s1_g1.json").write_text(
+    (tmp_path / "template_s1_g1.json").write_text(
         json.dumps(_template_config(title="Прямой сговор", ticks=4), ensure_ascii=False),
         encoding="utf-8",
     )
@@ -904,7 +1021,7 @@ def test_template_scenario_applies_custom_governance_mode(tmp_path: Path):
 
 
 def test_template_scenario_rejects_governance_path_traversal(tmp_path: Path):
-    (tmp_path / "seed_s1_g1.json").write_text(
+    (tmp_path / "template_s1_g1.json").write_text(
         json.dumps(_template_config(title="Прямой сговор", ticks=4), ensure_ascii=False),
         encoding="utf-8",
     )
@@ -915,7 +1032,7 @@ def test_template_scenario_rejects_governance_path_traversal(tmp_path: Path):
         with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
             with patch("web.backend.routes.scenarios.GOVERNANCE_MODES_DIR", governance_dir):
                 r = client.get(
-                    "/api/templates/scenarios/S1?governance=..%5C..%5Cscenarios%5Cseed_s1_g1",
+                    "/api/templates/scenarios/S1?governance=..%5C..%5Cscenarios%5Ctemplate_s1_g1",
                     headers={"Authorization": f"Bearer {viewer_token()}"},
                 )
 
@@ -926,30 +1043,29 @@ def test_launch_run_admin_starts_template_process():
     with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
         with patch(
             "web.backend.runner.launch_simulation",
-            return_value={"run_name": "S1_G1_seed42_web", "pid": 1234},
+            return_value={"run_name": "S1_G1_web", "pid": 1234},
         ):
             r = client.post(
                 "/api/runs/launch",
-                json={"scenario": "S1", "governance": "G1", "seed": 42, "rounds": 8},
+                json={"scenario": "S1", "governance": "G1", "rounds": 8},
                 headers={"Authorization": f"Bearer {admin_token()}"},
             )
 
     assert r.status_code == 202
-    assert r.json()["run_name"] == "S1_G1_seed42_web"
+    assert r.json()["run_name"] == "S1_G1_web"
 
 
 def test_launch_run_admin_passes_parallel_settings():
     with patch("web.backend.auth.get_user_by_username", return_value=ADMIN):
         with patch(
             "web.backend.runner.launch_simulation",
-            return_value={"run_name": "S1_G1_seed42_web", "pid": 1234},
+            return_value={"run_name": "S1_G1_web", "pid": 1234},
         ) as mocked:
             r = client.post(
                 "/api/runs/launch",
                 json={
                     "scenario": "S1",
                     "governance": "G1",
-                    "seed": 42,
                     "rounds": 8,
                     "parallel_agents": True,
                     "parallel_workers": 6,
@@ -984,7 +1100,7 @@ def test_run_scenario_admin_launches_saved_yaml(tmp_path: Path):
             with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
                 with patch(
                     "web.backend.runner.launch_simulation_from_config",
-                    return_value={"run_name": "custom_lc_G0_seed42_web", "pid": 555},
+                    return_value={"run_name": "custom_lc_G0_web", "pid": 555},
                 ):
                     r = client.post(
                         "/api/scenarios/custom_lc/run",
@@ -992,7 +1108,7 @@ def test_run_scenario_admin_launches_saved_yaml(tmp_path: Path):
                     )
 
     assert r.status_code == 202
-    assert r.json()["run_name"] == "custom_lc_G0_seed42_web"
+    assert r.json()["run_name"] == "custom_lc_G0_web"
 
 
 def test_run_scenario_rejects_legacy_json_without_sim_config(tmp_path: Path):
@@ -1001,11 +1117,10 @@ def test_run_scenario_rejects_legacy_json_without_sim_config(tmp_path: Path):
             {
                 "name": "Saved legacy",
                 "scenario": "S1",
-                "governance": "G2",
-                "rounds": 9,
-                "seed": 13,
-                "agents": [],
-            },
+                    "governance": "G2",
+                    "rounds": 9,
+                    "agents": [],
+                },
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -1020,7 +1135,7 @@ def test_run_scenario_rejects_legacy_json_without_sim_config(tmp_path: Path):
                 )
 
     assert r.status_code == 400
-    assert "Legacy web-scenario format is no longer supported" in r.text
+    assert "Scenario file must be a full ScenarioConfig" in r.text
 
 
 def test_run_scenario_passes_parallel_settings_from_runtime_config(tmp_path: Path):
@@ -1047,7 +1162,7 @@ def test_run_scenario_passes_parallel_settings_from_runtime_config(tmp_path: Pat
             with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
                 with patch(
                     "web.backend.runner.launch_simulation_from_config",
-                    return_value={"run_name": "custom_lc_G0_seed42_web", "pid": 555},
+                    return_value={"run_name": "custom_lc_G0_web", "pid": 555},
                 ) as mocked:
                     r = client.post(
                         "/api/scenarios/custom_lc/run",
@@ -1061,7 +1176,7 @@ def test_run_scenario_passes_parallel_settings_from_runtime_config(tmp_path: Pat
 
 
 def test_delete_builtin_template_scenario_is_forbidden(tmp_path: Path):
-    (tmp_path / "seed_s1_g1.json").write_text(
+    (tmp_path / "template_s1_g1.json").write_text(
         json.dumps({"name": "Builtin", "scenario": "S1", "governance": "G1", "rounds": 6, "agents": []}),
         encoding="utf-8",
     )
@@ -1070,7 +1185,7 @@ def test_delete_builtin_template_scenario_is_forbidden(tmp_path: Path):
         with patch("web.backend.routes.scenarios.SCENARIOS_DIR", tmp_path):
             with patch("web.backend.validators.SCENARIOS_DIR", tmp_path):
                 r = client.delete(
-                    "/api/scenarios/seed_s1_g1",
+                    "/api/scenarios/template_s1_g1",
                     headers={"Authorization": f"Bearer {admin_token()}"},
                 )
 

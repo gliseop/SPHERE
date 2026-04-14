@@ -1,4 +1,4 @@
-"""Скрипт обогащения тестовых данных S1_G1_seed42.
+"""Скрипт обогащения тестовых данных S1_G1_web_sample.
 
 Заменяет заглушки ``content: "msg"`` на осмысленные русскоязычные реплики,
 добавляет поле ``reason`` к ``reputation_modified``, вводит дополнительных
@@ -13,8 +13,8 @@ from pathlib import Path
 
 RESULTS_DIR = Path(__file__).resolve().parent.parent.parent / "results"
 
-EVENTS_FILE = RESULTS_DIR / "S1_G1_seed42_events.jsonl"
-NAMES_FILE = RESULTS_DIR / "S1_G1_seed42_names.json"
+EVENTS_FILE = RESULTS_DIR / "S1_G1_web_sample_events.jsonl"
+NAMES_FILE = RESULTS_DIR / "S1_G1_web_sample_names.json"
 
 # ---------- Новые агенты ----------
 

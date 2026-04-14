@@ -78,7 +78,7 @@ export function NodeTooltip({ node, edges, events, names, x, y }: Props) {
             {connections.length}
             {suspiciousCount > 0 && (
               <span className="stat-unit" style={{ color: '#ef4444', fontSize: '0.5rem' }}>
-                {' '}⚠{suspiciousCount}
+                {' '}risk:{suspiciousCount}
               </span>
             )}
           </div>

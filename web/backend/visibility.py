@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from magistry_lc.ids import INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
+from sphere_lc.ids import INTERNAL_AUDIENCE, PUBLIC_AUDIENCE
 
 
 def event_visible_to_role(event: dict[str, Any], *, role: str) -> bool:

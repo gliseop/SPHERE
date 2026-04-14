@@ -19,7 +19,7 @@ async function apiLogin(request: APIRequestContext): Promise<string> {
 
 async function openAuthedApp(page, request: APIRequestContext): Promise<string> {
   const token = await apiLogin(request)
-  await page.addInitScript((t) => localStorage.setItem('magistry_token', t), token)
+  await page.addInitScript((t) => localStorage.setItem('sphere_token', t), token)
   await page.goto('/')
   await expect(page.locator('.hud-header')).toBeVisible()
   return token
@@ -28,7 +28,7 @@ async function openAuthedApp(page, request: APIRequestContext): Promise<string> 
 test('login UI: success + error', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { name: 'MAGISTRY' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'SPHERE' })).toBeVisible()
 
   // wrong password
   await page.locator('input[autocomplete="username"]').fill(ADMIN_USER)
@@ -67,8 +67,8 @@ test('delete run via UI (runner not selectable)', async ({ page, request }) => {
   await expect(launchPanel.getByText('Mock')).toHaveCount(0)
 
   // Arrange: create a tiny run artifact directly in results/ (no LLM dependency).
-  const seed = Date.now() % 1_000_000_000
-  const run_name = `S1_G1_seed${seed}_cognitive`
+  const stamp = Date.now() % 1_000_000_000
+  const run_name = `S1_G1_cognitive_${stamp}`
   const eventsPath = path.join(RESULTS_DIR, `${run_name}_events.jsonl`)
   await fs.writeFile(eventsPath, '', 'utf8')
 
@@ -87,8 +87,8 @@ test('playback websocket closes and UI returns to idle', async ({ page, request 
   const token = await apiLogin(request)
 
   // Arrange: create a tiny playbackable run without launching a simulation.
-  const seed = 314159
-  const run_name = `S1_G1_seed${seed}_cognitive`
+  const stamp = 314159
+  const run_name = `S1_G1_cognitive_${stamp}`
   const eventsPath = path.join(RESULTS_DIR, `${run_name}_events.jsonl`)
   const namesPath = path.join(RESULTS_DIR, `${run_name}_names.json`)
   await fs.writeFile(
@@ -109,7 +109,7 @@ test('playback websocket closes and UI returns to idle', async ({ page, request 
   )
 
   // Open app with token
-  await page.addInitScript((t) => localStorage.setItem('magistry_token', t), token)
+  await page.addInitScript((t) => localStorage.setItem('sphere_token', t), token)
   await page.goto('/')
   await expect(page.locator('.hud-header')).toBeVisible()
 

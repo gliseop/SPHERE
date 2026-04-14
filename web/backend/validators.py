@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import secrets
 from pathlib import Path
 
 from fastapi import HTTPException
 
 from .settings import (
     MAX_ROUNDS,
-    MAX_SEED,
     RUN_NAME_RE,
     RESULTS_DIR,
     SCENARIOS_DIR,
@@ -124,60 +122,6 @@ def next_g_number() -> str:
             max_num = max(max_num, int(m.group(1)))
 
     return f"G{max_num + 1}"
-
-
-def resolve_seed(value: object | None) -> int:
-    """Преобразовать seed из запроса/сценария в int.
-
-    Если seed не задан (None) — генерируется случайный seed.
-
-    Args:
-        value: seed (int/str/None).
-
-    Returns:
-        seed как неотрицательный int.
-
-    Raises:
-        HTTPException 400: Если seed имеет неверный формат.
-    """
-    if value is None:
-        return secrets.randbelow(1_000_000_000)
-
-    if isinstance(value, bool):
-        raise HTTPException(status_code=400, detail="Invalid seed")
-
-    if isinstance(value, int):
-        if value < 0:
-            raise HTTPException(status_code=400, detail="Invalid seed")
-        if value > MAX_SEED:
-            raise HTTPException(status_code=400, detail="Invalid seed")
-        return value
-
-    if isinstance(value, float):
-        if not value.is_integer():
-            raise HTTPException(status_code=400, detail="Invalid seed")
-        seed = int(value)
-        if seed < 0:
-            raise HTTPException(status_code=400, detail="Invalid seed")
-        if seed > MAX_SEED:
-            raise HTTPException(status_code=400, detail="Invalid seed")
-        return seed
-
-    if isinstance(value, str):
-        s = value.strip()
-        if not s:
-            return secrets.randbelow(1_000_000_000)
-        try:
-            seed = int(s)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid seed") from exc
-        if seed < 0:
-            raise HTTPException(status_code=400, detail="Invalid seed")
-        if seed > MAX_SEED:
-            raise HTTPException(status_code=400, detail="Invalid seed")
-        return seed
-
-    raise HTTPException(status_code=400, detail="Invalid seed")
 
 
 def resolve_rounds(value: object | None, *, default: int = 10) -> int:

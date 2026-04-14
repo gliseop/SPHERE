@@ -22,6 +22,7 @@ from .run_artifacts import (
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _RESULTS_DIR = _PROJECT_ROOT / "results"
+_RUN_METADATA_FILENAME = "run.json"
 
 # Хранилище активных процессов: run_name -> subprocess.Popen
 _active: dict[str, subprocess.Popen] = {}
@@ -32,12 +33,12 @@ _active_lock = threading.Lock()
 _logger = logging.getLogger(__name__)
 
 try:
-    _MAX_RUNNING = max(1, int(os.environ.get("MAGISTRY_MAX_RUNNING", "5")))
+    _MAX_RUNNING = max(1, int(os.environ.get("SPHERE_MAX_RUNNING", "5")))
 except ValueError:
     _MAX_RUNNING = 5
 
 try:
-    _EXTERNAL_ALIVE_THRESHOLD = max(60, int(os.environ.get("MAGISTRY_EXTERNAL_ALIVE_THRESHOLD", "300")))
+    _EXTERNAL_ALIVE_THRESHOLD = max(60, int(os.environ.get("SPHERE_EXTERNAL_ALIVE_THRESHOLD", "300")))
 except ValueError:
     _EXTERNAL_ALIVE_THRESHOLD = 300
 
@@ -57,11 +58,11 @@ def _env_truthy(name: str) -> bool:
 
 def _maybe_add_parallel_flags(cmd: list[str]) -> None:
     """Добавить флаги параллельной симуляции из env (best-effort)."""
-    if not _env_truthy("MAGISTRY_PARALLEL_AGENTS"):
+    if not _env_truthy("SPHERE_PARALLEL_AGENTS"):
         return
     cmd.append("--parallel-agents")
 
-    raw_workers = os.environ.get("MAGISTRY_PARALLEL_WORKERS")
+    raw_workers = os.environ.get("SPHERE_PARALLEL_WORKERS")
     if raw_workers:
         try:
             workers = int(raw_workers)
@@ -70,7 +71,7 @@ def _maybe_add_parallel_flags(cmd: list[str]) -> None:
         if workers > 0:
             cmd.extend(["--parallel-workers", str(workers)])
 
-    raw_window = os.environ.get("MAGISTRY_PARALLEL_WINDOW")
+    raw_window = os.environ.get("SPHERE_PARALLEL_WINDOW")
     if raw_window:
         try:
             window = float(raw_window)
@@ -96,12 +97,12 @@ def _write_names_json(run_name: str, scenario_id: str, governance: str) -> None:
     режимов управления, чтобы они отображались на графе с именами.
 
     Args:
-        run_name: Имя прогона (S1_G1_seed42).
+        run_name: Имя прогона (например, S1_G1_web).
         scenario_id: Идентификатор сценария (S0, S1, S2).
         governance: Идентификатор режима управления (G0-G3).
     """
     _logger.warning(
-        "Cannot write names JSON for run %s: magistry_sim removed", run_name
+        "Cannot write names JSON for run %s: legacy names export path removed", run_name
     )
 
 
@@ -168,10 +169,133 @@ def _apply_parallel_runtime_overrides(
     )
 
 
+def _run_metadata_path(out_dir: Path) -> Path:
+    return out_dir / _RUN_METADATA_FILENAME
+
+
+def _build_run_metadata(
+    *,
+    run_name: str,
+    scenario_config: dict,
+    governance: str,
+    runner_type: str,
+    variant: str | None,
+    started_at: datetime,
+) -> dict[str, object]:
+    """Собрать sidecar-метаданные прогона для web UI."""
+    title = str(
+        scenario_config.get("title")
+        or scenario_config.get("name")
+        or scenario_config.get("scenario_id")
+        or scenario_config.get("id")
+        or run_name
+    ).strip() or run_name
+    runtime_raw = scenario_config.get("runtime")
+    runtime = runtime_raw if isinstance(runtime_raw, dict) else {}
+    ticks_total = max(0, int(scenario_config.get("ticks") or 0))
+    start_date_raw = runtime.get("start_date")
+    tick_granularity = str(runtime.get("tick_granularity") or "day")
+    tick_duration_days = max(1, int(runtime.get("tick_duration_days") or 1))
+    simulated_start_date = None
+    simulated_end_date = None
+
+    try:
+        from sphere_lc.config import RuntimeConfig
+
+        runtime_cfg = RuntimeConfig.model_validate(
+            {
+                "start_date": start_date_raw,
+                "tick_granularity": tick_granularity,
+                "tick_duration_days": tick_duration_days,
+            }
+        )
+        if runtime_cfg.start_date is not None:
+            simulated_start_date = runtime_cfg.start_date.isoformat()
+            last_tick = max(0, ticks_total - 1)
+            end_date = runtime_cfg.simulated_date(last_tick)
+            simulated_end_date = end_date.isoformat() if end_date is not None else simulated_start_date
+    except Exception:
+        simulated_start_date = str(start_date_raw).strip() or None
+        simulated_end_date = simulated_start_date
+
+    return {
+        "run_name": run_name,
+        "display_name": title,
+        "scenario_id": str(scenario_config.get("scenario_id") or "").strip() or None,
+        "scenario_title": title,
+        "governance": str(governance or "").strip(),
+        "runner_type": runner_type,
+        "variant": variant or runner_type,
+        "ticks_total": ticks_total,
+        "runtime": {
+            "start_date": str(start_date_raw).strip() or None,
+            "tick_granularity": tick_granularity,
+            "tick_duration_days": tick_duration_days,
+        },
+        "simulated_start_date": simulated_start_date,
+        "simulated_end_date": simulated_end_date,
+        "started_at": started_at.isoformat(),
+        "finished_at": None,
+        "status": "running",
+        "returncode": None,
+    }
+
+
+def _write_run_metadata(out_dir: Path, metadata: dict[str, object]) -> None:
+    _run_metadata_path(out_dir).write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _update_run_metadata(
+    out_dir: Path,
+    *,
+    status: str,
+    finished_at: datetime | None = None,
+    returncode: int | None = None,
+) -> None:
+    path = _run_metadata_path(out_dir)
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict):
+        return
+    payload["status"] = status
+    payload["finished_at"] = finished_at.isoformat() if finished_at is not None else payload.get("finished_at")
+    payload["returncode"] = int(returncode) if returncode is not None else payload.get("returncode")
+    try:
+        _write_run_metadata(out_dir, payload)
+    except OSError:
+        _logger.exception("Failed to update run metadata for %s", out_dir)
+
+
+def _read_run_metadata_for_name(run_name: str) -> dict[str, object]:
+    ref = resolve_run_artifact(run_name, results_dir=_RESULTS_DIR)
+    if ref is None:
+        return {}
+    candidates = [
+        ref.events_path.parent / _RUN_METADATA_FILENAME,
+        _RESULTS_DIR / f"{run_name}_run.json",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
 def launch_simulation_from_config(
     scenario_config: dict,
     governance: str,
-    seed: int = 42,
     runner_type: str = "cognitive",
     rounds: int = 10,
     variant: str | None = None,
@@ -192,7 +316,6 @@ def launch_simulation_from_config(
             None = определить из env.
     """
     config = dict(scenario_config or {})
-    config["seed"] = int(seed)
     if rounds is not None:
         config["ticks"] = int(rounds)
     resolved_parallel_agents, resolved_parallel_workers, resolved_parallel_window = (
@@ -207,7 +330,6 @@ def launch_simulation_from_config(
     base_name = _make_run_name(
         scenario=str(config.get("scenario_id") or config.get("id") or config.get("title") or "scenario"),
         governance=governance,
-        seed=seed,
         variant=variant or runner_type,
     )
     run_name, out_dir = _reserve_run_dir(base_name)
@@ -217,10 +339,22 @@ def launch_simulation_from_config(
     stderr_path = _RESULTS_DIR / f"{run_name}_stderr.log"
     stdout_handle = None
     stderr_handle = None
+    started_at = datetime.now(timezone.utc)
     try:
         scenario_path.write_text(
             json.dumps(config, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
+        )
+        _write_run_metadata(
+            out_dir,
+            _build_run_metadata(
+                run_name=run_name,
+                scenario_config=config,
+                governance=governance,
+                runner_type=runner_type,
+                variant=variant or runner_type,
+                started_at=started_at,
+            ),
         )
 
         stdout_handle = stdout_path.open("a", encoding="utf-8")
@@ -229,7 +363,7 @@ def launch_simulation_from_config(
         cmd = [
             sys.executable,
             "-m",
-            "magistry_lc.cli",
+            "sphere_lc.cli",
             "run",
             "--scenario",
             str(scenario_path),
@@ -240,13 +374,13 @@ def launch_simulation_from_config(
         env = os.environ.copy()
         env.setdefault("PYTHONUNBUFFERED", "1")
         if resolved_parallel_agents is True:
-            env["MAGISTRY_PARALLEL_AGENTS"] = "1"
+            env["SPHERE_PARALLEL_AGENTS"] = "1"
         elif resolved_parallel_agents is False:
-            env["MAGISTRY_PARALLEL_AGENTS"] = "0"
+            env["SPHERE_PARALLEL_AGENTS"] = "0"
         if resolved_parallel_workers is not None:
-            env["MAGISTRY_PARALLEL_WORKERS"] = str(int(resolved_parallel_workers))
+            env["SPHERE_PARALLEL_WORKERS"] = str(int(resolved_parallel_workers))
         if resolved_parallel_window is not None:
-            env["MAGISTRY_PARALLEL_WINDOW"] = str(float(resolved_parallel_window))
+            env["SPHERE_PARALLEL_WINDOW"] = str(float(resolved_parallel_window))
 
         proc = subprocess.Popen(
             cmd,
@@ -279,21 +413,20 @@ def launch_simulation_from_config(
 
     threading.Thread(
         target=_close_logs_when_done,
-        args=(proc, stdout_handle, stderr_handle),
+        args=(proc, stdout_handle, stderr_handle, out_dir),
         daemon=True,
     ).start()
 
     with _active_lock:
         _reserved_run_names.discard(run_name)
         _active[run_name] = proc
-        _active_started_at[run_name] = time.time()
+        _active_started_at[run_name] = started_at.timestamp()
     return {"run_name": run_name, "pid": proc.pid}
 
 
 def launch_simulation(
     scenario: str,
     governance: str,
-    seed: int = 42,
     runner_type: str = "cognitive",
     rounds: int = 10,
     *,
@@ -308,7 +441,6 @@ def launch_simulation(
     Args:
         scenario: Идентификатор сценария (S0, S1, S2).
         governance: Идентификатор режима управления (G0-G3).
-        seed: Начальное значение для генератора случайных чисел.
         runner_type: Тип раннера (mock или cognitive).
         rounds: Количество раундов.
 
@@ -326,7 +458,6 @@ def launch_simulation(
     return launch_simulation_from_config(
         scenario_config=payload,
         governance=governance,
-        seed=seed,
         runner_type=runner_type,
         rounds=rounds,
         variant=runner_type,
@@ -342,12 +473,11 @@ def _make_run_name(
     *,
     scenario: str,
     governance: str,
-    seed: int,
     variant: str | None,
 ) -> str:
     scenario_slug = _safe_run_part(str(scenario or "scenario"))
     governance_slug = _safe_run_part(str(governance or "G0"))
-    parts = [scenario_slug, governance_slug, f"seed{int(seed)}"]
+    parts = [scenario_slug, governance_slug]
     if variant:
         parts.append(_safe_run_part(variant))
     return "_".join(part for part in parts if part)
@@ -426,12 +556,20 @@ def _close_logs_when_done(
     proc: subprocess.Popen,
     stdout_handle,
     stderr_handle,
+    out_dir: Path,
 ) -> None:
+    returncode: int | None = None
     try:
-        proc.wait()
+        returncode = proc.wait()
     except Exception:
         return
     finally:
+        _update_run_metadata(
+            out_dir,
+            status="finished",
+            finished_at=datetime.now(timezone.utc),
+            returncode=returncode,
+        )
         try:
             stdout_handle.close()
         except Exception:
@@ -530,6 +668,9 @@ def _discover_external_runs(*, exclude_names: set[str] | None = None) -> list[di
                 "activity_at": activity_at,
             }
         )
+        meta = _read_run_metadata_for_name(run_name)
+        if meta.get("display_name"):
+            external[-1]["display_name"] = meta.get("display_name")
 
     return external
 
@@ -550,33 +691,36 @@ def list_active() -> list[dict]:
         for name, proc in _active.items():
             poll = proc.poll()
             activity_at = _run_activity_at(name=name, fallback=_active_started_at.get(name, 0.0))
+            meta = _read_run_metadata_for_name(name)
             if poll is None:
-                result.append(
-                    {
-                        "run_name": name,
-                        "pid": proc.pid,
-                        "status": "running",
-                        "external": False,
-                        "stop_supported": True,
-                        "stdout_log": f"{name}_stdout.log",
-                        "stderr_log": f"{name}_stderr.log",
-                        "activity_at": activity_at,
-                    }
-                )
+                item = {
+                    "run_name": name,
+                    "pid": proc.pid,
+                    "status": "running",
+                    "external": False,
+                    "stop_supported": True,
+                    "stdout_log": f"{name}_stdout.log",
+                    "stderr_log": f"{name}_stderr.log",
+                    "activity_at": activity_at,
+                }
+                if meta.get("display_name"):
+                    item["display_name"] = meta.get("display_name")
+                result.append(item)
             else:
-                result.append(
-                    {
-                        "run_name": name,
-                        "pid": proc.pid,
-                        "status": "finished",
-                        "external": False,
-                        "stop_supported": True,
-                        "returncode": poll,
-                        "stdout_log": f"{name}_stdout.log",
-                        "stderr_log": f"{name}_stderr.log",
-                        "activity_at": activity_at,
-                    }
-                )
+                item = {
+                    "run_name": name,
+                    "pid": proc.pid,
+                    "status": "finished",
+                    "external": False,
+                    "stop_supported": True,
+                    "returncode": poll,
+                    "stdout_log": f"{name}_stdout.log",
+                    "stderr_log": f"{name}_stderr.log",
+                    "activity_at": activity_at,
+                }
+                if meta.get("display_name"):
+                    item["display_name"] = meta.get("display_name")
+                result.append(item)
                 finished.append(name)
         # Очистить завершённые
         for name in finished:

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient } from '../utils/apiClient'
+import { fetchPromptTemplates, renderPromptTemplate, type PromptTemplateBundle } from '../utils/promptTemplates'
 import type { AuthUser } from '../hooks/useAuth'
 
-const ACTIVE_PERSONALITY_STORAGE_KEY = 'magistry-active-personality-id'
+const ACTIVE_PERSONALITY_STORAGE_KEY = 'sphere-active-personality-id'
 
 interface AgentType {
   id?: string
@@ -29,14 +30,6 @@ const EMPTY_AGENT_TYPE: AgentType = {
   personality_archetype: '',
 }
 
-const DEFAULT_GENERATE_AGENT_TYPE_SYSTEM_PROMPT = (
-  'Ты — сценарист и организационный психолог. '
-  + 'Нужно описать тип агента для симуляции MAGISTRY. '
-  + 'На входе: выбранная личность (HEXACO + тёмная триада + биография + техники) и описание роли/контекста. '
-  + 'На выходе: JSON с полями name, description, id_prefix. '
-  + 'Важно: НЕ добавляй бюджет/персонал/полномочия/контракты — это генерирует движок мира.'
-)
-
 function safeJson(value: unknown, maxLen: number = 4000): string {
   try {
     const text = JSON.stringify(value, null, 2)
@@ -47,7 +40,11 @@ function safeJson(value: unknown, maxLen: number = 4000): string {
   }
 }
 
-function defaultGenerateAgentTypeUserPrompt(personality: PersonalityOption | null, description: string): string {
+function defaultGenerateAgentTypeUserPrompt(
+  templates: PromptTemplateBundle | null,
+  personality: PersonalityOption | null,
+  description: string,
+): string {
   const personalityBlock = personality
     ? safeJson({
         id: personality.id,
@@ -60,15 +57,11 @@ function defaultGenerateAgentTypeUserPrompt(personality: PersonalityOption | nul
       })
     : '(личность не выбрана)'
 
-  return (
-    '## Выбранная личность\n'
-    + `${personalityBlock}\n\n`
-    + '## Описание типа/роли (пожелание пользователя)\n'
-    + `${description}\n\n`
-    + 'Сгенерируй тип агента. description — на русском, 3–7 предложений, '
-    + 'включи мотивацию/риски/поведенческие паттерны. '
-    + 'id_prefix — короткий латинский префикс (например off/biz/aud/hr).'
-  ).trim()
+  const template = templates?.generate_agent_type?.user_default ?? ''
+  return renderPromptTemplate(template, {
+    personality_json: personalityBlock,
+    description,
+  }).trim()
 }
 
 export function AgentTypesView({ user }: { user: AuthUser | null }) {
@@ -77,6 +70,7 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
   const [showJson, setShowJson] = useState(false)
   const [saving, setSaving] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [promptTemplates, setPromptTemplates] = useState<PromptTemplateBundle | null>(null)
 
   const [personalities, setPersonalities] = useState<PersonalityOption[] | null>(null)
   const [activePersonalityId, setActivePersonalityId] = useState<string>(() => {
@@ -87,8 +81,8 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
     }
   })
 
-  const [genSystemPrompt, setGenSystemPrompt] = useState(DEFAULT_GENERATE_AGENT_TYPE_SYSTEM_PROMPT)
-  const [genUserPrompt, setGenUserPrompt] = useState(defaultGenerateAgentTypeUserPrompt(null, ''))
+  const [genSystemPrompt, setGenSystemPrompt] = useState('')
+  const [genUserPrompt, setGenUserPrompt] = useState('')
   const [genSystemDirty, setGenSystemDirty] = useState(false)
   const [genUserDirty, setGenUserDirty] = useState(false)
   const prevEditingKeyRef = useRef<string | null>(null)
@@ -105,6 +99,10 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
       .then((r) => r.ok ? r.json() : [])
       .then((data) => setPersonalities(Array.isArray(data) ? data : []))
       .catch(() => setPersonalities([]))
+  }, [])
+
+  useEffect(() => {
+    fetchPromptTemplates().then((data) => setPromptTemplates(data))
   }, [])
 
   useEffect(() => {
@@ -128,18 +126,23 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
       return
     }
     if (prevEditingKeyRef.current === editingKey) return
-    setGenSystemPrompt(DEFAULT_GENERATE_AGENT_TYPE_SYSTEM_PROMPT)
-    setGenUserPrompt(defaultGenerateAgentTypeUserPrompt(effectivePersonality, editing.description ?? ''))
+    setGenSystemPrompt(promptTemplates?.generate_agent_type?.system_default ?? '')
+    setGenUserPrompt(defaultGenerateAgentTypeUserPrompt(promptTemplates, effectivePersonality, editing.description ?? ''))
     setGenSystemDirty(false)
     setGenUserDirty(false)
     prevEditingKeyRef.current = editingKey
-  }, [editing, editingKey, effectivePersonality])
+  }, [editing, editingKey, effectivePersonality, promptTemplates])
 
   useEffect(() => {
     if (!editingKey) return
     if (genUserDirty) return
-    setGenUserPrompt(defaultGenerateAgentTypeUserPrompt(effectivePersonality, editing?.description ?? ''))
-  }, [editingKey, editing?.description, genUserDirty, effectivePersonality])
+    setGenUserPrompt(defaultGenerateAgentTypeUserPrompt(promptTemplates, effectivePersonality, editing?.description ?? ''))
+  }, [editingKey, editing?.description, genUserDirty, effectivePersonality, promptTemplates])
+
+  useEffect(() => {
+    if (genSystemDirty) return
+    setGenSystemPrompt(promptTemplates?.generate_agent_type?.system_default ?? '')
+  }, [genSystemDirty, promptTemplates])
 
   async function handleSave() {
     if (!editing) return
@@ -228,7 +231,7 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
       <div className="library-editor">
         <div className="library-editor-header">
           <span>{editing.id ? 'Редактировать тип агента' : 'Новый тип агента'}</span>
-          <button className="btn-clipped small" onClick={() => setEditing(null)}>✕ Отмена</button>
+          <button className="btn-clipped small" onClick={() => setEditing(null)}>Отмена</button>
         </div>
 
         <div className="scenarios-form">
@@ -274,8 +277,8 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
                       <button
                         className="btn-clipped small"
                         onClick={() => {
-                          setGenSystemPrompt(DEFAULT_GENERATE_AGENT_TYPE_SYSTEM_PROMPT)
-                          setGenUserPrompt(defaultGenerateAgentTypeUserPrompt(effectivePersonality, editing.description ?? ''))
+                          setGenSystemPrompt(promptTemplates?.generate_agent_type?.system_default ?? '')
+                          setGenUserPrompt(defaultGenerateAgentTypeUserPrompt(promptTemplates, effectivePersonality, editing.description ?? ''))
                           setGenSystemDirty(false)
                           setGenUserDirty(false)
                         }}
@@ -352,11 +355,11 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
           <div className="form-field">
             <button
               className="btn-clipped small"
-              onClick={() => setShowJson(!showJson)}
-              style={{ marginBottom: '0.5rem', width: 'fit-content' }}
-              type="button"
-            >
-              {showJson ? '▲ Скрыть JSON' : '▼ JSON-превью'}
+            onClick={() => setShowJson(!showJson)}
+            style={{ marginBottom: '0.5rem', width: 'fit-content' }}
+            type="button"
+          >
+              {showJson ? 'Скрыть JSON' : 'JSON-превью'}
             </button>
             {showJson && (
               <pre className="json-preview">{safeJson(editing, 20_000)}</pre>
@@ -436,10 +439,10 @@ export function AgentTypesView({ user }: { user: AuthUser | null }) {
                       title="Редактировать"
                       type="button"
                     >
-                      ✎
+                      Ред.
                     </button>
                     {t.id && (
-                      <button className="btn-clipped danger small" onClick={() => handleDelete(t.id!)} title="Удалить" type="button">✕</button>
+                      <button className="btn-clipped danger small" onClick={() => handleDelete(t.id!)} title="Удалить" type="button">Удалить</button>
                     )}
                   </>
                 )}

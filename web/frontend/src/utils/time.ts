@@ -2,7 +2,10 @@
  * Extract a day key from an event for grouping.
  * Returns ISO date string (YYYY-MM-DD) or `round-{N}` for old format.
  */
-export function toDayKey(event: { timestamp?: string; round?: number | null }): string {
+export function toDayKey(event: { timestamp?: string; round?: number | null; simulated_date?: string }): string {
+  if (event.simulated_date) {
+    return event.simulated_date
+  }
   if (event.timestamp) {
     try {
       // Prefer the original timestamp's date component to avoid UTC shifting.

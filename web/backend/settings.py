@@ -39,7 +39,6 @@ G_NUM_RE = re.compile(r"^G(\d+)$")
 # ---------------------------------------------------------------------------
 # Числовые ограничения
 # ---------------------------------------------------------------------------
-MAX_SEED = 2_147_483_647
 MAX_ROUNDS = 1_000
 
 # ---------------------------------------------------------------------------
@@ -48,7 +47,7 @@ MAX_ROUNDS = 1_000
 try:
     MAX_BODY_BYTES = max(
         1,
-        int(_os.environ.get("MAGISTRY_MAX_BODY_BYTES", str(2 * 1024 * 1024))),
+        int(_os.environ.get("SPHERE_MAX_BODY_BYTES", str(2 * 1024 * 1024))),
     )
 except ValueError:
     MAX_BODY_BYTES = 2 * 1024 * 1024
@@ -59,36 +58,36 @@ ALLOWED_ORIGIN = _os.environ.get("ALLOWED_ORIGIN", "http://localhost:5173")
 # WebSocket
 # ---------------------------------------------------------------------------
 try:
-    WS_MAX_STR_CHARS = max(200, int(_os.environ.get("MAGISTRY_WS_MAX_STR_CHARS", "2500")))
+    WS_MAX_STR_CHARS = max(200, int(_os.environ.get("SPHERE_WS_MAX_STR_CHARS", "2500")))
 except ValueError:
     WS_MAX_STR_CHARS = 2500
 
 try:
-    WS_PING_INTERVAL_S = max(2.0, float(_os.environ.get("MAGISTRY_WS_PING_INTERVAL_S", "15")))
+    WS_PING_INTERVAL_S = max(2.0, float(_os.environ.get("SPHERE_WS_PING_INTERVAL_S", "15")))
 except ValueError:
     WS_PING_INTERVAL_S = 15.0
 
 try:
-    LIVE_HISTORY_EVENTS = max(0, int(_os.environ.get("MAGISTRY_LIVE_HISTORY_EVENTS", "60")))
+    LIVE_HISTORY_EVENTS = max(0, int(_os.environ.get("SPHERE_LIVE_HISTORY_EVENTS", "60")))
 except ValueError:
     LIVE_HISTORY_EVENTS = 60
 
 try:
-    LIVE_GRAPH_THROTTLE_S = max(0.05, float(_os.environ.get("MAGISTRY_LIVE_GRAPH_THROTTLE_S", "0.25")))
+    LIVE_GRAPH_THROTTLE_S = max(0.05, float(_os.environ.get("SPHERE_LIVE_GRAPH_THROTTLE_S", "0.25")))
 except ValueError:
     LIVE_GRAPH_THROTTLE_S = 0.25
 
 try:
-    WS_EVENT_BATCH_SIZE = max(1, int(_os.environ.get("MAGISTRY_WS_EVENT_BATCH_SIZE", "50")))
+    WS_EVENT_BATCH_SIZE = max(1, int(_os.environ.get("SPHERE_WS_EVENT_BATCH_SIZE", "50")))
 except ValueError:
     WS_EVENT_BATCH_SIZE = 50
 
 try:
-    WS_EVENT_BATCH_INTERVAL_S = max(0.02, float(_os.environ.get("MAGISTRY_WS_EVENT_BATCH_INTERVAL_S", "0.15")))
+    WS_EVENT_BATCH_INTERVAL_S = max(0.02, float(_os.environ.get("SPHERE_WS_EVENT_BATCH_INTERVAL_S", "0.15")))
 except ValueError:
     WS_EVENT_BATCH_INTERVAL_S = 0.15
 
-_drop_raw = (_os.environ.get("MAGISTRY_WS_DROP_EVENT_TYPES", "idle") or "").strip()
+_drop_raw = (_os.environ.get("SPHERE_WS_DROP_EVENT_TYPES", "idle") or "").strip()
 WS_DROP_EVENT_TYPES: set[str] = (
     {t.strip() for t in _drop_raw.split(",") if t.strip()}
     if _drop_raw

@@ -52,7 +52,7 @@ def test_jwt_expire_hours_invalid_env(monkeypatch: pytest.MonkeyPatch):
 
 def test_validate_jwt_secret_rejects_short_secret(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("JWT_SECRET", "short-secret")
-    monkeypatch.delenv("MAGISTRY_DEV", raising=False)
+    monkeypatch.delenv("SPHERE_DEV", raising=False)
     reloaded = importlib.reload(auth_module)
     try:
         with pytest.raises(RuntimeError, match="at least 32 bytes"):
@@ -64,7 +64,7 @@ def test_validate_jwt_secret_rejects_short_secret(monkeypatch: pytest.MonkeyPatc
 
 def test_dev_mode_uses_stable_fallback_secret(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("JWT_SECRET", raising=False)
-    monkeypatch.setenv("MAGISTRY_DEV", "1")
+    monkeypatch.setenv("SPHERE_DEV", "1")
     reloaded = importlib.reload(auth_module)
     try:
         reloaded.validate_jwt_secret()
@@ -75,7 +75,7 @@ def test_dev_mode_uses_stable_fallback_secret(monkeypatch: pytest.MonkeyPatch):
         assert reloaded_again.decode_token(token)["sub"] == "alice"
     finally:
         monkeypatch.setenv("JWT_SECRET", _LONG_TEST_SECRET)
-        monkeypatch.delenv("MAGISTRY_DEV", raising=False)
+        monkeypatch.delenv("SPHERE_DEV", raising=False)
         importlib.reload(reloaded)
 
 

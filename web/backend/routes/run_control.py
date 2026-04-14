@@ -14,7 +14,7 @@ from web.backend.run_artifacts import (
     run_log_sidecar_candidates,
 )
 from web.backend.settings import RESULTS_DIR
-from web.backend.validators import resolve_rounds, resolve_seed, validate_run_name, validate_scenario_id
+from web.backend.validators import resolve_rounds, validate_run_name, validate_scenario_id
 from .scenarios import _resolve_scenario_path, load_scenario_config_for_web
 
 router = APIRouter(tags=["run-control"])
@@ -43,7 +43,6 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
         return launch_simulation_from_config(
             scenario_config=payload,
             governance=governance,
-            seed=int(cfg.seed),
             rounds=int(cfg.ticks),
             runner_type="web",
             parallel_agents=cfg.runtime.parallel_agents,
@@ -60,7 +59,7 @@ async def run_scenario(scenario_id: str, _user: User = Depends(require_admin)) -
 async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
     """Запустить встроенный прогон (S0-S2).
 
-    Поддерживает шаблоны из ``/api/templates/scenarios`` с overrides по governance/seed/rounds.
+    Поддерживает шаблоны из ``/api/templates/scenarios`` с overrides по governance/rounds.
     """
     from web.backend.runner import TooManyRunsError, launch_simulation
 
@@ -70,7 +69,6 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
     validate_scenario_id(scenario)
 
     governance = str(data.get("governance") or "G1").strip() or "G1"
-    seed = resolve_seed(data.get("seed"))
     rounds = resolve_rounds(data.get("rounds"), default=25)
     parallel_agents = data.get("parallel_agents")
     if parallel_agents is not None and not isinstance(parallel_agents, bool):
@@ -100,7 +98,6 @@ async def launch_run(data: dict, _user: User = Depends(require_admin)) -> dict:
         return launch_simulation(
             scenario=scenario,
             governance=governance,
-            seed=seed,
             runner_type="web",
             rounds=rounds,
             parallel_agents=parallel_agents,

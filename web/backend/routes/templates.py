@@ -23,7 +23,7 @@ router = APIRouter(tags=["templates"])
 async def list_template_scenarios(_user: User = Depends(require_viewer)) -> list[dict]:
     """Вернуть список встроенных шаблонов сценариев (S*).
 
-    Шаблоны собираются из поддерживаемых seed-сценариев репозитория.
+    Шаблоны собираются из поддерживаемых template-сценариев репозитория.
     """
     result: list[dict] = []
     for scenario_id in sorted(_TEMPLATE_FILE_MAP):

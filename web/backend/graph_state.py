@@ -1,4 +1,4 @@
-"""Graph state reconstruction for the MAGISTRY web UI.
+"""Graph state reconstruction for the SPHERE web UI.
 
 This module is intentionally dependency-free so it can be imported from tests
 without pulling in FastAPI/aiofiles.
@@ -53,7 +53,7 @@ def _is_governance_agent(agent_id: str) -> bool:
 def _is_agentish_id(entity_id: str) -> bool:
     """Return True for agent identifiers understood by the current UI.
 
-    Typed MAGISTRY-LC ids keep only ``agent:*`` nodes in the social graph.
+    Typed SPHERE-LC ids keep only ``agent:*`` nodes in the social graph.
     Untyped legacy ids are still treated as agents for backward compatibility.
     """
     if not entity_id:
@@ -78,6 +78,17 @@ class GraphStateBuilder:
     agents: dict[str, dict] = field(default_factory=dict)
     edges: dict[tuple[str, str], float] = field(default_factory=dict)
     _thread_strength: dict[str, float] = field(default_factory=dict)
+    environment_signals: list[str] = field(default_factory=list)
+    information_climate: dict[str, Any] = field(
+        default_factory=lambda: {
+            "public_mood": "",
+            "oversight_attention": "",
+            "media_pressure": "",
+            "narrative_temperature": "",
+            "active_signals": [],
+        }
+    )
+    informal_links: dict[str, dict] = field(default_factory=dict)
 
     def ingest(self, e: dict[str, Any]) -> None:
         e = normalize_event_compat(e)
@@ -165,6 +176,32 @@ class GraphStateBuilder:
                     self.agents[target]["position_title"] = new_title
             return
 
+        if event_type == "environment_information_climate_updated":
+            signals = payload.get("active_signals") or []
+            if isinstance(signals, list):
+                self.environment_signals = [str(item) for item in signals if str(item)]
+                self.information_climate["active_signals"] = list(self.environment_signals)
+            self.information_climate["public_mood"] = str(payload.get("public_mood", self.information_climate.get("public_mood", "")) or "")
+            self.information_climate["oversight_attention"] = str(payload.get("oversight_attention", self.information_climate.get("oversight_attention", "")) or "")
+            self.information_climate["media_pressure"] = str(payload.get("media_pressure", self.information_climate.get("media_pressure", "")) or "")
+            self.information_climate["narrative_temperature"] = str(payload.get("narrative_temperature", self.information_climate.get("narrative_temperature", "")) or "")
+            return
+
+        if event_type == "environment_informal_link_updated":
+            link_id = str(payload.get("link_id", "") or "")
+            if link_id:
+                self.informal_links[link_id] = {
+                    "link_id": link_id,
+                    "agent_a_id": str(payload.get("agent_a_id", "") or ""),
+                    "agent_b_id": str(payload.get("agent_b_id", "") or ""),
+                    "link_type": str(payload.get("link_type", "") or ""),
+                    "strength": _as_float(payload.get("strength", 0.0), default=0.0),
+                    "visibility": str(payload.get("visibility", "") or ""),
+                    "pressure": str(payload.get("pressure", "") or ""),
+                    "source": str(payload.get("source", "") or ""),
+                }
+            return
+
         # Backward/legacy: edges strengthened implicitly by message traffic.
         if event_type == "message_sent":
             to_id = str(payload.get("to_id", "") or "")
@@ -201,7 +238,22 @@ class GraphStateBuilder:
             {"source": k[0], "target": k[1], "strength": v}
             for k, v in self.edges.items()
         ]
-        return {"nodes": nodes, "edges": edge_list}
+        return {
+            "nodes": nodes,
+            "edges": edge_list,
+            "environment": {
+                "active_signals": list(self.environment_signals),
+                "information_climate": dict(self.information_climate),
+                "informal_links": sorted(
+                    self.informal_links.values(),
+                    key=lambda item: (
+                        -float(item.get("strength", 0.0)),
+                        str(item.get("link_type", "")),
+                        str(item.get("link_id", "")),
+                    ),
+                )[:12],
+            },
+        }
 
     def _ensure_agent(self, agent_id: str) -> None:
         if agent_id and agent_id not in self.agents:

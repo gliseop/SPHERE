@@ -8,10 +8,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from magistry_lc.config import AgentConfig, ChannelConfig, GovernanceConfig, ScenarioConfig
-from magistry_lc.ids import EntityKind, make_id, normalize_slug
-from magistry_lc.persona import PersonaArtifact
-from magistry_lc.scenario import save_scenario
+from sphere_lc.config import AgentConfig, ChannelConfig, GovernanceConfig, ScenarioConfig
+from sphere_lc.governance_modes import apply_builtin_governance_mode, infer_builtin_governance_mode
+from sphere_lc.ids import EntityKind, make_id, normalize_slug
+from sphere_lc.persona import PersonaArtifact
+from sphere_lc.scenario import save_scenario
 
 from web.backend.auth import require_admin, require_viewer
 from web.backend.database import User
@@ -36,39 +37,14 @@ _DEFAULT_SCENARIO_TEMPLATE = "S1"
 _DEFAULT_GOVERNANCE_MODE = "G1"
 _DEFAULT_PUBLIC_CHANNEL = {"channel_id": "chan:public", "title": "Публичный канал"}
 _TEMPLATE_FILE_MAP = {
-    "S0": "seed_s0_g0.json",
-    "S1": "seed_s1_g1.json",
-    "S2": "seed_s2_g2.json",
+    "S0": "template_s0_g0.json",
+    "S1": "template_s1_g1.json",
+    "S2": "template_s2_g2.json",
+    "S3": "template_s3_g3.json",
 }
 _BUILTIN_SCENARIO_FILES = frozenset(_TEMPLATE_FILE_MAP.values())
 _GOVERNANCE_METADATA_KEYS = frozenset({"id", "label", "description", "custom"})
 _UNSET = object()
-_KNOWN_ROLE_ALIASES = {
-    "auditor",
-    "audit",
-    "aud",
-    "аудитор",
-    "business",
-    "contractor",
-    "vendor",
-    "external",
-    "biz",
-    "подрядчик",
-    "контрагент",
-    "внешний",
-    "juror",
-    "jury",
-    "jur",
-    "присяжный",
-    "official",
-    "official_procurement",
-    "off",
-    "employee",
-    "staff",
-    "officials",
-    "чиновник",
-    "сотрудник",
-}
 
 
 def _load_personality_record(personality_id: str) -> dict[str, Any] | None:
@@ -91,37 +67,6 @@ def _persona_from_personality_id(personality_id: str) -> PersonaArtifact | None:
         summary=str(raw.get("description") or raw.get("name") or personality_id),
         biography=str(raw.get("biography") or ""),
     )
-
-
-def _role_defaults(role: str) -> tuple[bool, list[str], bool, str]:
-    normalized = (role or "").strip().casefold()
-    if normalized in {"auditor", "audit", "aud", "аудитор"}:
-        return True, ["audit", "message", "work", "dao"], False, "аудитор"
-    if normalized in {
-        "business",
-        "contractor",
-        "vendor",
-        "external",
-        "biz",
-        "подрядчик",
-        "контрагент",
-        "внешний",
-    }:
-        return False, ["message"], False, "контрагент"
-    if normalized in {"juror", "jury", "jur", "присяжный"}:
-        return True, ["dao"], False, "присяжный"
-    if normalized in {
-        "official",
-        "official_procurement",
-        "off",
-        "employee",
-        "staff",
-        "officials",
-        "чиновник",
-        "сотрудник",
-    }:
-        return True, ["message", "work", "dao"], True, "специалист"
-    return True, ["message", "work"], True, (role or "специалист").strip() or "специалист"
 
 
 def _normalize_capabilities(raw: Any) -> list[str]:
@@ -194,38 +139,12 @@ def _ensure_default_public_channel(cfg: ScenarioConfig) -> None:
     cfg.world.channels.insert(0, ChannelConfig.model_validate(_DEFAULT_PUBLIC_CHANNEL))
 
 
-def _apply_builtin_governance_mode(cfg: ScenarioConfig, normalized: str) -> None:
-    audit = cfg.governance.audit
-    audit.mode = "rules"
-    if normalized == "G0":
-        audit.enabled = False
-        audit.reputation_freeze_enabled = False
-        audit.reputation_penalty_delta = None
-    elif normalized == "G1":
-        audit.enabled = True
-        audit.reputation_freeze_enabled = False
-        audit.reputation_penalty_delta = None
-    elif normalized == "G2":
-        audit.enabled = True
-        audit.reputation_freeze_enabled = True
-        audit.reputation_penalty_delta = None
-    else:
-        audit.enabled = True
-        audit.reputation_freeze_enabled = True
-        audit.reputation_penalty_delta = (
-            float(audit.reputation_penalty_delta)
-            if audit.reputation_penalty_delta is not None
-            else -0.75
-        )
-    cfg.governance.audit = audit
-
-
 def _apply_governance_mode(cfg: ScenarioConfig, governance_mode: str | None) -> None:
     normalized = (governance_mode or "").strip().upper()
     if not normalized:
         return
     if normalized in BUILTIN_GOVERNANCE_IDS:
-        _apply_builtin_governance_mode(cfg, normalized)
+        apply_builtin_governance_mode(cfg, normalized)
         return
 
     raw = _load_governance_mode_record(normalized)
@@ -243,28 +162,29 @@ def _build_agent_config(
     raw_id = str(agent_data.get("id") or "").strip()
     name = str(agent_data.get("name") or raw_id or f"Агент {index}").strip() or f"Агент {index}"
     role = str(agent_data.get("role") or "").strip()
-    normalized_role = role.casefold()
     position = str(agent_data.get("position") or "").strip()
     personality_id = str(agent_data.get("personality_archetype") or "").strip()
-    role_is_known = normalized_role in _KNOWN_ROLE_ALIASES
     raw_caps = agent_data.get("capabilities", _UNSET)
     explicit_capabilities = (
         _normalize_capabilities(raw_caps) if raw_caps is not _UNSET else None
     )
+    raw_internal = agent_data.get("internal", _UNSET)
+    explicit_internal = raw_internal if isinstance(raw_internal, bool) else _UNSET
+    raw_wants_promotion = agent_data.get("wants_promotion", _UNSET)
     raw_initial_reputation = agent_data.get("initial_reputation", _UNSET)
-
-    inferred_internal, inferred_caps, inferred_wants, inferred_title = _role_defaults(role)
     if existing is not None:
         agent_id = existing.agent_id
-        internal = inferred_internal if role_is_known else existing.internal
+        internal = bool(explicit_internal) if explicit_internal is not _UNSET else existing.internal
         if explicit_capabilities is not None:
             capabilities = explicit_capabilities
         else:
-            capabilities = (
-                inferred_caps if role_is_known else (list(existing.capabilities) or inferred_caps)
-            )
-        wants_promotion = inferred_wants if role_is_known else existing.wants_promotion
-        initial_title = position or (inferred_title if role_is_known else existing.initial_title) or inferred_title
+            capabilities = list(existing.capabilities)
+        wants_promotion = (
+            bool(raw_wants_promotion)
+            if isinstance(raw_wants_promotion, bool)
+            else existing.wants_promotion
+        )
+        initial_title = position or existing.initial_title or (role or "специалист").strip() or "специалист"
         if raw_initial_reputation is _UNSET:
             initial_reputation = float(existing.initial_reputation)
         else:
@@ -273,10 +193,10 @@ def _build_agent_config(
     else:
         slug = normalize_slug(raw_id or name, fallback=f"agent_{index}")
         agent_id = make_id(EntityKind.AGENT, slug)
-        internal = inferred_internal
-        capabilities = explicit_capabilities if explicit_capabilities is not None else inferred_caps
-        wants_promotion = inferred_wants
-        initial_title = position or inferred_title
+        internal = bool(explicit_internal) if explicit_internal is not _UNSET else True
+        capabilities = explicit_capabilities if explicit_capabilities is not None else ["message", "work"]
+        wants_promotion = bool(raw_wants_promotion) if isinstance(raw_wants_promotion, bool) else True
+        initial_title = position or (role or "специалист").strip() or "специалист"
         initial_reputation = 0.0 if raw_initial_reputation is _UNSET else float(raw_initial_reputation)
         persona = PersonaArtifact(summary=(position or role or name).strip())
 
@@ -314,8 +234,6 @@ def _sync_config_from_payload(
     cfg.title = payload.name.strip() or scenario_id
     cfg.description = (payload.description or narrative_context or "").strip()
     cfg.ticks = int(payload.rounds)
-    if payload.seed is not None:
-        cfg.seed = int(payload.seed)
     if "parallel_agents" in payload.model_fields_set:
         cfg.runtime.parallel_agents = bool(payload.parallel_agents)
     if "parallel_workers" in payload.model_fields_set:
@@ -374,10 +292,7 @@ def load_scenario_config_for_web(path: Path, *, scenario_id: str | None = None) 
     except Exception as exc:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Legacy web-scenario format is no longer supported; "
-                "save scenarios as full ScenarioConfig"
-            ),
+            detail="Scenario file must be a full ScenarioConfig",
         ) from exc
 
 
@@ -482,14 +397,7 @@ def _infer_governance_mode(cfg: ScenarioConfig) -> str:
         if candidate.model_dump(mode="json") == current:
             return mode_id
 
-    audit = cfg.governance.audit
-    if not audit.enabled:
-        return "G0"
-    if audit.reputation_penalty_delta is not None:
-        return "G3"
-    if audit.reputation_freeze_enabled:
-        return "G2"
-    return _DEFAULT_GOVERNANCE_MODE
+    return infer_builtin_governance_mode(cfg, default_mode=_DEFAULT_GOVERNANCE_MODE)
 
 
 def _to_ui_agent_id(agent_id: str, *, fallback: str) -> str:
@@ -512,6 +420,7 @@ def _scenario_config_to_payload(cfg: ScenarioConfig, *, scenario_id: str) -> dic
                 "id": _to_ui_agent_id(agent.agent_id, fallback=f"agent_{index}"),
                 "name": agent.name,
                 "role": _infer_ui_role(agent),
+                "internal": bool(agent.internal),
                 "position": agent.initial_title,
                 "initial_reputation": float(agent.initial_reputation),
                 "personality_archetype": agent.persona.persona_id,
@@ -528,7 +437,6 @@ def _scenario_config_to_payload(cfg: ScenarioConfig, *, scenario_id: str) -> dic
         "scenario": scenario_template,
         "governance": _infer_governance_mode(cfg),
         "rounds": int(cfg.ticks),
-        "seed": int(cfg.seed),
         "runner": "cognitive",
         "parallel_agents": bool(cfg.runtime.parallel_agents),
         "parallel_workers": cfg.runtime.parallel_workers,
@@ -603,7 +511,7 @@ async def create_scenario(payload: ScenarioPayload, _user: User = Depends(requir
     """
     for _ in range(_ALLOCATE_ID_ATTEMPTS):
         scenario_id = next_s_number()
-        suffix = ".yaml" if payload.sim_config is not None else ".json"
+        suffix = ".json"
         path = SCENARIOS_DIR / f"{scenario_id}{suffix}"
         try:
             with path.open("x", encoding="utf-8") as handle:

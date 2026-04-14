@@ -1,0 +1,39 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: sphere-web:dev
+    ports:
+      - "8765:8765"
+    environment:
+      PORT: 8765
+      SPHERE_DEV: ${SPHERE_DEV:-1}
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_EXPIRE_HOURS: ${JWT_EXPIRE_HOURS:-24}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-http://localhost:8765}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENROUTER_PROVIDER_ORDER: ${OPENROUTER_PROVIDER_ORDER:-}
+      SPHERE_LLM_REQUEST_TIMEOUT_S: ${SPHERE_LLM_REQUEST_TIMEOUT_S:-30}
+      SPHERE_LLM_CALL_DEADLINE_S: ${SPHERE_LLM_CALL_DEADLINE_S:-30}
+      SPHERE_USERS_DB: /data/users.db
+      SPHERE_ADMIN_USERNAME: ${SPHERE_ADMIN_USERNAME:-sphere_admin}
+      SPHERE_ADMIN_PASSWORD: ${SPHERE_ADMIN_PASSWORD:-SphereDocker123!}
+      SPHERE_ADMIN_ROLE: ${SPHERE_ADMIN_ROLE:-admin}
+      SPHERE_ADMIN_FORCE_UPDATE: ${SPHERE_ADMIN_FORCE_UPDATE:-1}
+    volumes:
+      - ./results:/app/results
+      - ./scenarios:/app/scenarios
+      - ./data:/app/data
+      - sphere_users:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  sphere_users:

@@ -1,4 +1,4 @@
-"""Pydantic-модели запросов/ответов для API MAGISTRY."""
+"""Pydantic-модели запросов/ответов для API SPHERE."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .settings import MAX_ROUNDS, MAX_SEED
+from .settings import MAX_ROUNDS
 
 
 class ScenarioAgentPayload(BaseModel):
@@ -17,6 +17,7 @@ class ScenarioAgentPayload(BaseModel):
     id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
     name: str = Field(min_length=1, max_length=128)
     role: str = Field(min_length=1, max_length=256)
+    internal: bool = True
     initial_reputation: float = Field(ge=0.0, le=100.0)
     capabilities: list[str] | None = Field(default=None, max_length=16)
 
@@ -31,7 +32,6 @@ class ScenarioPayload(BaseModel):
     scenario: str = Field(default="S1", pattern=r"^S\d+$")
     governance: str = Field(default="G1", pattern=r"^G\d+$")
     rounds: int = Field(default=10, ge=1, le=MAX_ROUNDS)
-    seed: int | None = Field(default=None, ge=0, le=MAX_SEED)
     runner: str | None = Field(default=None, max_length=64)
     parallel_agents: bool | None = None
     parallel_workers: int | None = Field(default=None, ge=1, le=128)
@@ -47,7 +47,6 @@ class SecondaryAgentsPayload(BaseModel):
 
     scenario: str = Field(default="S1", pattern=r"^S\d+$")
     governance: str = Field(default="G1", pattern=r"^G\d+$")
-    seed: int | None = Field(default=None, ge=0, le=MAX_SEED)
     rounds: int | None = Field(default=None, ge=1, le=MAX_ROUNDS)
     prompt: str = Field(min_length=1, max_length=10_000)
     family_count: int = Field(default=0, ge=0, le=20)
