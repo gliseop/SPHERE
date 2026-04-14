@@ -196,6 +196,14 @@ class _ResolvedContextualId:
 def _normalize_perform_op_args(op_type: str, args: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(args)
 
+    # Flatten вложенных контейнеров: LLM часто прячет поля в params/args/fields/message.
+    for container_key in ("params", "args", "fields", "message"):
+        container = normalized.get(container_key)
+        if isinstance(container, dict):
+            for k, v in container.items():
+                if k not in normalized or normalized.get(k) in (None, ""):
+                    normalized[k] = v
+
     def _move(target: str, *sources: str) -> None:
         if target in normalized and normalized.get(target) not in (None, ""):
             return
@@ -205,7 +213,8 @@ def _normalize_perform_op_args(op_type: str, args: dict[str, Any]) -> dict[str, 
                 return
 
     if op_type == "send_message":
-        _move("to_id", "to_id", "to_agent_id", "channel_id", "target_agent_id")
+        _move("to_id", "to_id", "to_agent_id", "channel_id", "target_agent_id",
+              "target_id", "recipient_id", "to")
         _move("text", "text", "message", "content", "description")
         _move("private", "private", "is_private")
         if "private" not in normalized and "channel_id" in normalized:
@@ -234,21 +243,34 @@ def _normalize_perform_op_args(op_type: str, args: dict[str, Any]) -> dict[str, 
     for noisy_key in (
         "from_agent_id",
         "from_id",
+        "from",
         "agent_id",
+        "actor_id" if op_type not in {"upsert_pending_interaction"} else "",
+        "sender_id",
+        "source_agent_id" if op_type not in {"upsert_pending_interaction", "upsert_informal_link"} else "",
         "initiator_id",
         "initiator_agent_id",
         "responder_agent_id",
         "recipient_agent_id",
+        "recipient_id",
         "to_agent_id",
+        "to" if op_type == "send_message" else "",
+        "target_id" if op_type == "send_message" else "",
         "channel_id",
+        "channel",
+        "channel_type",
+        "message_type" if op_type == "send_message" else "",
         "message",
         "content",
         "note",
         "note_text",
+        "message_text",
         "description" if op_type != "narrative_action" and op_type != "add_information_signal" and op_type != "create_artifact" else "",
         "summary" if op_type in {"add_work_note", "submit_work_proposal"} else "",
         "is_private",
         "params",
+        "args",
+        "fields",
     ):
         if noisy_key:
             normalized.pop(noisy_key, None)
