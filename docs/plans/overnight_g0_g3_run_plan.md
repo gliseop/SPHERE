@@ -48,7 +48,7 @@ SPHERE_LLM_CALL_DEADLINE_S=180.0             # default 30 — аналогичн
 
 ### Проверка окружения перед стартом
 ```bash
-cd /path/to/MAGISTRY
+cd /path/to/project
 python -c "from dotenv import load_dotenv; load_dotenv(); import os; print('API_KEY:', bool(os.getenv('OPENAI_API_KEY'))); print('BASE_URL:', os.getenv('OPENAI_BASE_URL'))"
 python -m pytest tests/ -x -q   # должно быть 322 passed
 ```
@@ -61,7 +61,7 @@ python -m pytest tests/ -x -q   # должно быть 322 passed
 
 ### Вариант A: один прогон G3 (рекомендовано начать с него)
 ```bash
-cd /path/to/MAGISTRY
+cd /path/to/project
 python -m sphere_lc.cli run \
   --scenario scenarios/procurement_tender_large.json \
   --governance G3 \
