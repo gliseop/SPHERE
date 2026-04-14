@@ -593,7 +593,7 @@ arbiter:
       Если proposal содержательный, но не материализуем → отклони с reason.
       Actor capabilities: {{agent_caps}}
       ВАЖНО: в op_type используй только snake_case-значения из JSON-схемы.
-      ВАЖНО: для send_message ВСЕГДА указывай to_id в args (agent:xxx для private, chan:xxx для channel). Без to_id операция будет отклонена.
+      ВАЖНО: для send_message ВСЕГДА указывай to_id в args (agent:xxx для private, chan:xxx или org:xxx для public). Без to_id операция будет отклонена.
       Ответ: только JSON по схеме.
     retry_suffix: |-
       ПРЕДЫДУЩАЯ ПОПЫТКА materialization вернула approved=true и пустой ops для содержательного proposal.

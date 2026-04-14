@@ -1344,14 +1344,14 @@ class Arbiter:
         )
         try:
             return _PerformArbiterOutput.model_validate(_normalize_perform_llm_output(resp.data))
-        except Exception as first_error:
-            pass
+        except Exception as exc:
+            first_error_msg = str(exc)
 
         # Retry с подсказкой об ошибке валидации.
         hint = (
-            f"\n\nПРЕДЫДУЩАЯ ПОПЫТКА вернула невалидный JSON: {first_error}\n"
+            f"\n\nПРЕДЫДУЩАЯ ПОПЫТКА вернула невалидный JSON: {first_error_msg}\n"
             "Исправь ответ. Напоминание:\n"
-            "- send_message: обязательно args.to_id (формат agent:xxx для private, chan:xxx для channel), args.text\n"
+            "- send_message: обязательно args.to_id (формат agent:xxx для private, chan:xxx/org:xxx для public), args.text\n"
             "- in_person_contact: обязательно args.target_agent_id, args.summary\n"
             "- upsert_informal_link: обязательно args.agent_a_id, args.agent_b_id, args.link_type\n"
             "- upsert_pending_interaction: обязательно args.target_agent_id, args.summary\n"
@@ -1462,15 +1462,6 @@ class Arbiter:
                 )
             except Exception as exc:
                 if is_side_effect and ops:
-                    continue
-                # Мягкая деградация для missing-field ошибок (не unsupported op_type):
-                # пропускаем невалидный op если уже есть хотя бы один успешный.
-                is_field_error = isinstance(exc, ValueError) and "unsupported op_type" not in str(exc)
-                if is_field_error and ops:
-                    logger.warning(
-                        "Skipping invalid op %s for %s (have %d valid ops): %s",
-                        item.op_type, agent_id, len(ops), exc,
-                    )
                     continue
                 return ActionResult(
                     action_index,
@@ -2238,7 +2229,7 @@ class Arbiter:
             )
             if agent_a == agent_b:
                 raise ValueError("informal link requires two different agents")
-            link_type = str(args.get("link_type") or "professional").strip()
+            link_type = str(args.get("link_type") or "").strip()
             if not link_type:
                 raise ValueError("upsert_informal_link requires link_type")
             strength_delta = float(args.get("strength_delta") or 0.1)
