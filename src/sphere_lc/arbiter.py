@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import re
 from datetime import date, timedelta
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+
+logger = logging.getLogger(__name__)
 
 from .actions import (
     Action,
@@ -1341,8 +1344,32 @@ class Arbiter:
         )
         try:
             return _PerformArbiterOutput.model_validate(_normalize_perform_llm_output(resp.data))
-        except Exception as exc:
-            return _PerformArbiterOutput(approved=False, reason=f"arbiter_parse_error:{exc}", ops=[])
+        except Exception as first_error:
+            pass
+
+        # Retry с подсказкой об ошибке валидации.
+        hint = (
+            f"\n\nПРЕДЫДУЩАЯ ПОПЫТКА вернула невалидный JSON: {first_error}\n"
+            "Исправь ответ. Напоминание:\n"
+            "- send_message: обязательно args.to_id (формат agent:xxx для private, chan:xxx для channel), args.text\n"
+            "- in_person_contact: обязательно args.target_agent_id, args.summary\n"
+            "- upsert_informal_link: обязательно args.agent_a_id, args.agent_b_id, args.link_type\n"
+            "- upsert_pending_interaction: обязательно args.target_agent_id, args.summary\n"
+            "- Используй ТОЛЬКО поля из JSON-схемы."
+        )
+        try:
+            resp2 = await self.llm.generate_structured(
+                role="arbiter",
+                name="perform",
+                tick=state.tick,
+                system=system,
+                user=user + hint,
+                schema=_perform_output_schema(),
+                temperature=self.temperature,
+            )
+            return _PerformArbiterOutput.model_validate(_normalize_perform_llm_output(resp2.data))
+        except Exception as retry_error:
+            return _PerformArbiterOutput(approved=False, reason=f"arbiter_parse_error:{retry_error}", ops=[])
 
     def _should_retry_unmaterialized_proposal(
         self,
@@ -1435,6 +1462,15 @@ class Arbiter:
                 )
             except Exception as exc:
                 if is_side_effect and ops:
+                    continue
+                # Мягкая деградация для missing-field ошибок (не unsupported op_type):
+                # пропускаем невалидный op если уже есть хотя бы один успешный.
+                is_field_error = isinstance(exc, ValueError) and "unsupported op_type" not in str(exc)
+                if is_field_error and ops:
+                    logger.warning(
+                        "Skipping invalid op %s for %s (have %d valid ops): %s",
+                        item.op_type, agent_id, len(ops), exc,
+                    )
                     continue
                 return ActionResult(
                     action_index,
