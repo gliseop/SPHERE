@@ -112,6 +112,8 @@ def _normalize_perform_op_type(op_type: str) -> str:
         "ModifyReputationOp": "modify_reputation",
         "CreateArtifactOp": "create_artifact",
         "UpdateArtifactOp": "update_artifact",
+        "edit_artifact": "update_artifact",
+        "EditArtifactOp": "update_artifact",
         "RecordNarrativeActionOp": "narrative_action",
         "record_narrative_action": "narrative_action",
         "add_narrative_action": "narrative_action",
@@ -2200,7 +2202,7 @@ class Arbiter:
             )
             if agent_a == agent_b:
                 raise ValueError("informal link requires two different agents")
-            link_type = str(args.get("link_type") or "").strip()
+            link_type = str(args.get("link_type") or "professional").strip()
             if not link_type:
                 raise ValueError("upsert_informal_link requires link_type")
             strength_delta = float(args.get("strength_delta") or 0.1)
@@ -2245,7 +2247,7 @@ class Arbiter:
             if source_agent_id not in state.agents:
                 source_agent_id = agent_id
             category = str(args.get("category") or "follow_up").strip()
-            summary = str(args.get("summary") or "").strip()
+            summary = str(args.get("summary") or proposal_text or "").strip()
             if not summary:
                 raise ValueError("upsert_pending_interaction requires summary")
             due_offset = int(args.get("due_offset_ticks") or 2)
