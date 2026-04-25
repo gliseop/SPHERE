@@ -17,3 +17,4 @@ tmp_*_run/
 tmp_bp*/
 tmp_*_trace.jsonl
 docs/Prokofev_R._Igrakota1._Igra_Kota_Kniga_Pervaya.txt
+.firecrawl/

@@ -2257,7 +2257,9 @@ def test_openai_provider_only_sets_provider_order_for_openrouter() -> None:
     }
 
 
-def test_openai_provider_uses_30s_timeout_by_default() -> None:
+def test_openai_provider_uses_30s_timeout_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SPHERE_LLM_REQUEST_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("SPHERE_LLM_CALL_DEADLINE_S", raising=False)
     provider = OpenAICompatibleProvider(
         model=DEFAULT_LLM_MODEL,
         api_key="test-key",
