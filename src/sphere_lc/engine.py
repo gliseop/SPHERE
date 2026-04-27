@@ -751,6 +751,15 @@ class WorldEngine:
 
             truth_window = int(self.cfg.governance.audit.lookback_events)
             truth_recent = events_history[-truth_window:] if truth_window > 0 else list(events_history)
+            # Для contact-pattern окно должно покрывать window_ticks тиков целиком,
+            # независимо от плотности events. Срезаем по tick, не по count.
+            contact_window_ticks = int(
+                self.cfg.governance.audit.private_contact_window_ticks
+            )
+            contact_low_tick = int(state.tick) - contact_window_ticks
+            tick_bounded_history = [
+                ev for ev in events_history if int(ev.tick) >= contact_low_tick
+            ]
             truth_records = truth_detector.detect_tick(
                 state=state,
                 tick_events=tick_events,
@@ -760,8 +769,9 @@ class WorldEngine:
                 truth_log.extend(truth_records)
             truth_contact_records = truth_detector.detect_contact_patterns(
                 state=state,
-                all_events=list(truth_recent) + list(tick_events),
+                all_events=list(tick_bounded_history) + list(tick_events),
                 tick=state.tick,
+                window_ticks=contact_window_ticks,
             )
             if truth_contact_records:
                 truth_log.extend(truth_contact_records)
@@ -774,6 +784,7 @@ class WorldEngine:
                         state=state,
                         tick_events=tick_events,
                         recent_events=audit_recent,
+                        pattern_events=tick_bounded_history,
                     )
                 except Exception as exc:
                     logger.warning("Runtime auditor failed on tick %s: %s", state.tick, exc)

@@ -93,6 +93,7 @@ class TruthDetector:
 
         low_tick = int(tick) - int(window_ticks)
         pairs: dict[tuple[str, str], int] = {}
+        pair_events: dict[tuple[str, str], list[Event]] = {}
         for event in all_events:
             if int(event.tick) < low_tick:
                 continue
@@ -112,6 +113,7 @@ class TruthDetector:
                 continue
             key = (min(left, right), max(left, right))
             pairs[key] = pairs.get(key, 0) + 1
+            pair_events.setdefault(key, []).append(event)
 
         records: list[TruthRecord] = []
         for (left, right), count in pairs.items():
@@ -125,6 +127,11 @@ class TruthDetector:
                 continue
             subject_agent_id = left if left_agent.internal else right
             target_agent_id = right if left_agent.internal else left
+            relevant_events = sorted(
+                pair_events.get((left, right), []),
+                key=lambda e: int(e.tick),
+            )
+            evidence_refs = [_event_ref(ev) for ev in relevant_events[-min(len(relevant_events), 6):]]
             records.append(
                 TruthRecord(
                     tick=int(tick),
@@ -139,6 +146,7 @@ class TruthDetector:
                     ),
                     mechanism="private_contact_frequency",
                     risk_tags=["external_contact", "procurement"],
+                    evidence_refs=evidence_refs,
                 )
             )
         return self._dedupe(records)

@@ -689,6 +689,12 @@ def test_runtime_auditor_rule_flags_internal_external_contact_pattern() -> None:
             payload={"to_id": "agent:contractor", "private": True, "text": "one"},
         ),
         Event(
+            tick=1,
+            event_type="message_sent",
+            actor_id="agent:contractor",
+            payload={"to_id": "agent:off_1", "private": True, "text": "one_b"},
+        ),
+        Event(
             tick=2,
             event_type="message_sent",
             actor_id="agent:contractor",

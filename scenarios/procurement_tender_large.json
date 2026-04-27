@@ -37,7 +37,7 @@
   "governance": {
     "position_policy": "dao",
     "dao_voters": null,
-    "quorum": 0.5,
+    "quorum": 0.34,
     "pass_threshold": 0.5,
     "vote_duration_ticks": 3,
     "require_consent": true,
@@ -54,7 +54,8 @@
       "freeze_duration_ticks": 4,
       "reputation_freeze_enabled": true,
       "collegial_review_enabled": true,
-      "reputation_penalty_delta": null
+      "reputation_penalty_delta": null,
+      "reviewer_seed_salt": "run_v2_20260427"
     }
   },
   "agents": [

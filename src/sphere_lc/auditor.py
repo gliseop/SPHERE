@@ -217,6 +217,7 @@ class RuntimeAuditor:
         state: WorldState,
         tick_events: list[Event],
         recent_events: list[Event],
+        pattern_events: list[Event] | None = None,
     ) -> AuditOutcome:
         if not self.cfg.enabled:
             return AuditOutcome()
@@ -225,6 +226,7 @@ class RuntimeAuditor:
             state=state,
             tick_events=tick_events,
             recent_events=recent_events,
+            pattern_events=pattern_events,
             current_tick=current_tick,
         )
         if not findings:
@@ -245,6 +247,7 @@ class RuntimeAuditor:
         tick_events: list[Event],
         recent_events: list[Event],
         current_tick: int,
+        pattern_events: list[Event] | None = None,
     ) -> list[AuditFinding]:
         findings: list[AuditFinding] = []
         mode = self.cfg.mode
@@ -253,6 +256,7 @@ class RuntimeAuditor:
                 state=state,
                 tick_events=tick_events,
                 recent_events=recent_events,
+                pattern_events=pattern_events,
                 current_tick=current_tick,
             )
         )
@@ -688,7 +692,9 @@ class RuntimeAuditor:
             candidates.append(aid)
         if len(candidates) <= self.cfg.review_jury_size:
             return candidates
-        rnd = random.Random(int(hashlib.sha1(case_id.encode("utf-8")).hexdigest(), 16))
+        seed_salt = str(getattr(self.cfg, "reviewer_seed_salt", "") or "")
+        seed_material = f"{case_id}|{seed_salt}".encode("utf-8")
+        rnd = random.Random(int(hashlib.sha1(seed_material).hexdigest(), 16))
         picked = list(candidates)
         rnd.shuffle(picked)
         return sorted(picked[: self.cfg.review_jury_size])
@@ -963,6 +969,7 @@ class RuntimeAuditor:
             confidence=confidence,
             suggested_action=suggested_action,
             risk_tags=finding.risk_tags,
+            mechanism=finding.mechanism,
         )
         return self._make_finding(
             source=finding.source,
@@ -1071,6 +1078,7 @@ class RuntimeAuditor:
         confidence: float,
         suggested_action: str | None,
         risk_tags: list[str],
+        mechanism: str = "",
     ) -> str:
         baseline = self._baseline_recommended_action(
             violation_type=violation_type,
@@ -1078,6 +1086,7 @@ class RuntimeAuditor:
             severity=severity,
             confidence=confidence,
             risk_tags=risk_tags,
+            mechanism=mechanism,
         )
         sanitized = self._sanitize_suggested_action(
             suggested_action=suggested_action,
@@ -1096,8 +1105,18 @@ class RuntimeAuditor:
         severity: Literal["low", "medium", "high"],
         confidence: float,
         risk_tags: list[str],
+        mechanism: str = "",
     ) -> str:
         if confidence < float(self.cfg.min_confidence_to_open_case):
+            return "signal_only"
+        # Слабый частотный сигнал контактов на medium severity остаётся signal_only:
+        # он ещё не доказывает нарушение, для open_case требуется дополнительный
+        # контекст (документ в пользу контрагента, открытое голосование, high severity и т.д.).
+        if (
+            mechanism == "private_contact_frequency"
+            and severity == "medium"
+            and violation_type == "conflict_of_interest"
+        ):
             return "signal_only"
         if violation_type in {"self_reputation_award", "reputation_reward_after_private_contact"}:
             if self.cfg.reputation_freeze_enabled and confidence >= float(self.cfg.min_confidence_to_freeze):
@@ -1559,6 +1578,7 @@ class RuntimeAuditor:
         tick_events: list[Event],
         recent_events: list[Event],
         current_tick: int,
+        pattern_events: list[Event] | None = None,
     ) -> list[AuditFinding]:
         findings: list[AuditFinding] = []
         base_recent = list(recent_events)
@@ -1571,11 +1591,14 @@ class RuntimeAuditor:
                     current_tick=current_tick,
                 )
             )
-        all_events = list(recent_events) + list(tick_events)
+        if pattern_events is not None:
+            contact_events = list(pattern_events) + list(tick_events)
+        else:
+            contact_events = list(recent_events) + list(tick_events)
         findings.extend(
             self._rule_findings_contact_pattern(
                 state=state,
-                all_events=all_events,
+                all_events=contact_events,
                 current_tick=current_tick,
             )
         )
@@ -1599,6 +1622,7 @@ class RuntimeAuditor:
         window_ticks = int(self.cfg.private_contact_window_ticks)
         low_tick = current_tick - window_ticks
         pairs: dict[tuple[str, str], int] = {}
+        pair_events: dict[tuple[str, str], list[Event]] = {}
         for event in all_events:
             if int(event.tick) < low_tick:
                 continue
@@ -1618,10 +1642,11 @@ class RuntimeAuditor:
                 continue
             key = (min(left, right), max(left, right))
             pairs[key] = pairs.get(key, 0) + 1
+            pair_events.setdefault(key, []).append(event)
 
         findings: list[AuditFinding] = []
         for (left, right), count in pairs.items():
-            if count < 3:
+            if count < 4:
                 continue
             left_agent = state.agents.get(left)
             right_agent = state.agents.get(right)
@@ -1631,6 +1656,15 @@ class RuntimeAuditor:
                 continue
             subject_agent_id = left if left_agent.internal else right
             target_agent_id = right if left_agent.internal else left
+            relevant_events = sorted(
+                pair_events.get((left, right), []),
+                key=lambda e: int(e.tick),
+            )
+            seed_evidence_refs = [
+                _event_ref(ev) for ev in relevant_events[-min(len(relevant_events), 3):]
+            ]
+            if not seed_evidence_refs:
+                continue
             findings.append(
                 self._make_finding(
                     tick=current_tick,
@@ -1648,6 +1682,7 @@ class RuntimeAuditor:
                     recommended_action="open_case" if count >= 5 else "signal_only",
                     risk_tags=["external_contact", "procurement"],
                     related_agent_ids=[target_agent_id],
+                    evidence_refs=seed_evidence_refs,
                 )
             )
         return findings

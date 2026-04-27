@@ -465,8 +465,23 @@ def _normalize_index_matches(
     left_key: str,
     right_key: str,
 ) -> list[tuple[int, int]]:
+    """Принимает совпадения по ключам ``_index`` или их алиасам ``_idx``.
+
+    LLM-судьи на разных провайдерах возвращают то ``truth_index``/``signal_index``,
+    то их сокращённые варианты ``truth_idx``/``signal_idx``. Без алиасинга весь
+    результат тихо отбрасывается, что обнулит semantic-метрики.
+    """
     if not isinstance(items, list):
         return []
+    left_aliases = (left_key, left_key.replace("_index", "_idx"))
+    right_aliases = (right_key, right_key.replace("_index", "_idx"))
+
+    def _pick(item: dict[str, Any], aliases: tuple[str, ...]) -> Any:
+        for key in aliases:
+            if key in item:
+                return item.get(key)
+        return None
+
     out: list[tuple[int, int]] = []
     used_left: set[int] = set()
     used_right: set[int] = set()
@@ -474,8 +489,8 @@ def _normalize_index_matches(
         if not isinstance(item, dict):
             continue
         try:
-            left_idx = int(item.get(left_key))
-            right_idx = int(item.get(right_key))
+            left_idx = int(_pick(item, left_aliases))
+            right_idx = int(_pick(item, right_aliases))
         except (TypeError, ValueError):
             continue
         if not (0 <= left_idx < left_size and 0 <= right_idx < right_size):
@@ -488,11 +503,19 @@ def _normalize_index_matches(
     return out
 
 
-def _strict_match(*, truth_entries: list[dict[str, Any]], signal_entries: list[dict[str, Any]]) -> list[tuple[int, int]]:
+_STRICT_TICK_WINDOW = 3
+
+
+def _strict_match(
+    *,
+    truth_entries: list[dict[str, Any]],
+    signal_entries: list[dict[str, Any]],
+    tick_window: int = _STRICT_TICK_WINDOW,
+) -> list[tuple[int, int]]:
     candidates: list[tuple[float, int, int]] = []
     for truth_idx, truth in enumerate(truth_entries):
         for signal_idx, signal in enumerate(signal_entries):
-            score = _strict_match_score(truth=truth, signal=signal)
+            score = _strict_match_score(truth=truth, signal=signal, tick_window=tick_window)
             if score > 0.0:
                 candidates.append((score, truth_idx, signal_idx))
     candidates.sort(reverse=True)
@@ -508,9 +531,22 @@ def _strict_match(*, truth_entries: list[dict[str, Any]], signal_entries: list[d
     return matches
 
 
-def _strict_match_score(*, truth: dict[str, Any], signal: dict[str, Any]) -> float:
-    if int(truth["tick"]) != int(signal["tick"]):
+def _strict_match_score(
+    *,
+    truth: dict[str, Any],
+    signal: dict[str, Any],
+    tick_window: int = _STRICT_TICK_WINDOW,
+) -> float:
+    truth_tick = int(truth["tick"])
+    signal_tick = int(signal["tick"])
+    tick_diff = abs(truth_tick - signal_tick)
+    if tick_diff > max(0, int(tick_window)):
         return 0.0
+    tick_penalty = 0.0
+    if tick_diff > 0:
+        # За каждый тик расхождения снимаем небольшую долю — точное попадание
+        # ценнее «попадание в окне», но обоих признаём как валидные совпадения.
+        tick_penalty = min(0.2, 0.05 * tick_diff)
     if str(truth["subject"]) != str(signal["subject"]):
         return 0.0
     if not _violation_type_match(truth.get("violation_type"), signal.get("violation_type")):
@@ -523,15 +559,15 @@ def _strict_match_score(*, truth: dict[str, Any], signal: dict[str, Any]) -> flo
     truth_relaxed = set(truth.get("evidence_relaxed") or set())
     signal_relaxed = set(signal.get("evidence_relaxed") or set())
     if truth_exact and signal_exact and truth_exact == signal_exact:
-        return 1.0
+        return max(0.0, 1.0 - tick_penalty)
     if truth_relaxed and signal_relaxed and truth_relaxed == signal_relaxed:
-        return 0.8
+        return max(0.0, 0.8 - tick_penalty)
     if not truth_relaxed and not signal_relaxed:
-        return 0.7
+        return max(0.0, 0.7 - tick_penalty)
     # Truth without evidence refs (e.g. state-based detect_contact_patterns):
     # match on header fields alone — the TruthRecord has no specific event anchors.
     if not truth_relaxed:
-        return 0.6
+        return max(0.0, 0.6 - tick_penalty)
     return 0.0
 
 

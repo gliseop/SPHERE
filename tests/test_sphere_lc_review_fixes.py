@@ -2603,7 +2603,7 @@ def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path
 
     assert "Голосования в ходу: vote:1" in prompt
     assert "Верни только JSON с одним полем `reply`." in prompt
-    assert "если тебя выдвинули, ты можешь прямо согласиться или отказаться" in prompt
+    assert "если тебя выдвинули или процедура адресована тебе как субъекту" in prompt
     assert "respond_nomination (vote_id, accept: true/false)" not in prompt
 
 

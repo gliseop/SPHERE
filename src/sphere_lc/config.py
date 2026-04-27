@@ -444,6 +444,7 @@ class AuditRuntimeConfig(BaseModel):
     reputation_penalty_delta: float | None = None
     collegial_review_enabled: bool = True
     review_jury_size: int = 3
+    reviewer_seed_salt: str = ""
 
     @field_validator("actor_id")
     @classmethod
