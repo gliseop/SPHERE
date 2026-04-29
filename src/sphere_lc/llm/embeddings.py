@@ -99,7 +99,7 @@ class OpenAIEmbeddingProvider:
 
         self._model = model
         self._openai_cls = OpenAI
-        self._timeout_s = max(1.0, _env_float("SPHERE_EMBEDDING_TIMEOUT_S", 30.0))
+        self._timeout_s = max(1.0, _env_float("SPHERE_EMBEDDING_TIMEOUT_S", 45.0))
         self._max_retries = max(0, _env_int("SPHERE_EMBEDDING_MAX_RETRIES", 3))
         self._retry_base_delay_s = max(
             0.1, _env_float("SPHERE_EMBEDDING_RETRY_BASE_DELAY_S", 1.0)

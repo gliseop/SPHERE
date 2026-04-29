@@ -243,6 +243,7 @@ class AgentMemory:
             system=render_prompt("memory.summarize.system"),
             user=user,
             temperature=temperature,
+            max_completion_tokens=int(cfg.summary_max_completion_tokens),
         )
         new_summary = _norm_text(resp.text)
         self.working = self.working[batch_size:]

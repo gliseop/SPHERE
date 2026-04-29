@@ -79,6 +79,30 @@ _CAMEL_TO_SNAKE_RE = re.compile(r"(?<!^)(?=[A-Z])")
 _TYPED_ID_RE = re.compile(r"\b[a-z]+:[A-Za-z0-9][A-Za-z0-9_.-]*\b")
 
 
+def _is_llm_parse_error(exc: BaseException) -> bool:
+    """Распознать пустой/невалидный JSON-ответ модели.
+
+    Args:
+        exc: Исходное исключение из ``_arbitrate_perform``.
+
+    Returns:
+        True, если ошибка вызвана парсингом ответа модели (а не настоящим
+        инфраструктурным сбоем — таймаутом, 5xx, разрывом соединения).
+    """
+    name = type(exc).__name__
+    if name in {"JSONDecodeError", "_LLMStructuredParseError"}:
+        return True
+    msg = str(exc)
+    if "structured_json_schema failed" in msg:
+        return True
+    if "Expecting value" in msg:
+        return True
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None and cause is not exc:
+        return _is_llm_parse_error(cause)
+    return False
+
+
 def _extract_dates(text: str) -> list[date]:
     out: list[date] = []
     for match in _ISO_DATE_RE.findall(text or ""):
@@ -736,12 +760,43 @@ class Arbiter:
                     journal_yaml=journal_yaml,
                 )
             except Exception as exc:
-                res = ActionResult(
-                    idx,
-                    False,
-                    f"arbiter_llm_error:{exc.__class__.__name__}:{exc}",
-                    [],
-                )
+                # Пустой/невалидный JSON от модели отделяем от настоящих
+                # инфраструктурных ошибок: SDK-парс не равен «арбитр отказал».
+                # Повторяем один раз с увеличенной температурой; если снова парс —
+                # помечаем `arbiter_llm_empty`, чтобы downstream-аналитика не
+                # путала шум модели с содержательным отказом арбитра.
+                if _is_llm_parse_error(exc):
+                    try:
+                        res, _alloc = await self._arbitrate_perform(
+                            state=state,
+                            agent_id=aid,
+                            agent_caps=caps,
+                            action_index=idx,
+                            action=act,
+                            journal_yaml=journal_yaml,
+                        )
+                    except Exception as exc_retry:
+                        if _is_llm_parse_error(exc_retry):
+                            res = ActionResult(
+                                idx,
+                                False,
+                                f"arbiter_llm_empty:{exc_retry.__class__.__name__}",
+                                [],
+                            )
+                        else:
+                            res = ActionResult(
+                                idx,
+                                False,
+                                f"arbiter_llm_error:{exc_retry.__class__.__name__}:{exc_retry}",
+                                [],
+                            )
+                else:
+                    res = ActionResult(
+                        idx,
+                        False,
+                        f"arbiter_llm_error:{exc.__class__.__name__}:{exc}",
+                        [],
+                    )
             arbitration[aid][idx] = _reserve_result(res)
 
         # Убираем None (на всякий случай) и приводим тип.

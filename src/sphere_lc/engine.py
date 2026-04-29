@@ -749,27 +749,41 @@ class WorldEngine:
                             )
                             self._write_names_sidecar(state=state)
 
-            truth_window = int(self.cfg.governance.audit.lookback_events)
-            truth_recent = events_history[-truth_window:] if truth_window > 0 else list(events_history)
-            # Для contact-pattern окно должно покрывать window_ticks тиков целиком,
-            # независимо от плотности events. Срезаем по tick, не по count.
+            # История событий для аудита и truth срезается по тикам, а не по count,
+            # чтобы окно `private_contact_window_ticks` было гарантированно покрыто
+            # независимо от плотности событий на тик. Параметры
+            # `lookback_events`/`tick_events_history` сохранены как safety-cap для
+            # деградации памяти при экстремальной плотности.
             contact_window_ticks = int(
                 self.cfg.governance.audit.private_contact_window_ticks
             )
+            audit_window_ticks = max(
+                int(self.cfg.governance.audit.audit_window_ticks),
+                contact_window_ticks,
+            )
+            audit_low_tick = int(state.tick) - audit_window_ticks
             contact_low_tick = int(state.tick) - contact_window_ticks
+            audit_window_events = int(self.cfg.governance.audit.lookback_events)
             tick_bounded_history = [
                 ev for ev in events_history if int(ev.tick) >= contact_low_tick
             ]
+            audit_recent_full = [
+                ev for ev in events_history if int(ev.tick) >= audit_low_tick
+            ]
+            # Safety-cap: если плотность экстремальна, обрезаем хвост в количестве,
+            # но при штатной нагрузке весь tick-bounded slice уйдёт в детекторы.
+            if audit_window_events > 0 and len(audit_recent_full) > audit_window_events:
+                audit_recent_full = audit_recent_full[-audit_window_events:]
             truth_records = truth_detector.detect_tick(
                 state=state,
                 tick_events=tick_events,
-                recent_events=truth_recent,
+                recent_events=audit_recent_full,
             )
             if truth_records:
                 truth_log.extend(truth_records)
             truth_contact_records = truth_detector.detect_contact_patterns(
                 state=state,
-                all_events=list(tick_bounded_history) + list(tick_events),
+                all_events=list(audit_recent_full) + list(tick_events),
                 tick=state.tick,
                 window_ticks=contact_window_ticks,
             )
@@ -777,8 +791,7 @@ class WorldEngine:
                 truth_log.extend(truth_contact_records)
 
             if self.cfg.governance.audit.enabled:
-                audit_window = int(self.cfg.governance.audit.lookback_events)
-                audit_recent = events_history[-audit_window:] if audit_window > 0 else list(events_history)
+                audit_recent = audit_recent_full
                 try:
                     audit_outcome = await auditor.inspect_tick(
                         state=state,
@@ -860,7 +873,18 @@ class WorldEngine:
                     simulated_date=current_date,
                 ))
 
-            # Ограничиваем историю для памяти.
+            # Срезаем историю по тикам, а не по count: окна аудита и truth должны
+            # покрываться целиком независимо от плотности событий. tick_events_history
+            # сохранён как safety-cap при экстремальной плотности.
+            keep_ticks = max(
+                int(self.cfg.governance.audit.audit_window_ticks),
+                int(self.cfg.governance.audit.private_contact_window_ticks),
+                int(self.cfg.runtime.freeform_truth_window_ticks),
+            ) + 1
+            history_low_tick = int(state.tick) - keep_ticks
+            events_history = [
+                ev for ev in events_history if int(ev.tick) >= history_low_tick
+            ]
             if len(events_history) > self.cfg.runtime.tick_events_history:
                 events_history = events_history[-self.cfg.runtime.tick_events_history :]
 

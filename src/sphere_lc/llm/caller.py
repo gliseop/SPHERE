@@ -76,6 +76,7 @@ class LLMCaller:
         system: str,
         user: str,
         temperature: float,
+        max_completion_tokens: int | None = None,
     ) -> LLMResponse:
         """Вызвать LLM и залогировать trace."""
         started = time.monotonic()
@@ -84,7 +85,7 @@ class LLMCaller:
             import asyncio
 
             resp: LLMResponse = await asyncio.to_thread(
-                self.provider.generate, system, user, temperature
+                self.provider.generate, system, user, temperature, max_completion_tokens
             )
             span.response = resp.text
             span.model = resp.model

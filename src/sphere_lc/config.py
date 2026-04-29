@@ -102,6 +102,10 @@ class MemoryConfig(BaseModel):
     working_render_max_chars: int = 40_000
     working_render_entry_max_chars: int = 3_000
     summary_context_fraction: float = 0.30
+    # Жёсткий потолок длины ответа модели на summary-вызов. Без него модели
+    # с большим completion-окном (например, nemotron 65k) уходят в потолок и
+    # съедают значительную часть LLM-времени без полезного результата.
+    summary_max_completion_tokens: int = 4_000
 
     # Long-term hybrid index.
     long_term_max_docs: int = 800
@@ -427,6 +431,7 @@ class AuditRuntimeConfig(BaseModel):
     actor_id: str | None = None
     mode: Literal["rules", "hybrid", "llm"] = "llm"
     lookback_events: int = 120
+    audit_window_ticks: int = 5
     private_contact_window_ticks: int = 3
     obligation_window_ticks: int = 3
     response_window_ticks: int = 2
@@ -456,6 +461,7 @@ class AuditRuntimeConfig(BaseModel):
 
     @field_validator(
         "lookback_events",
+        "audit_window_ticks",
         "private_contact_window_ticks",
         "obligation_window_ticks",
         "response_window_ticks",

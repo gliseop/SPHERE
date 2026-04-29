@@ -1109,15 +1109,28 @@ class RuntimeAuditor:
     ) -> str:
         if confidence < float(self.cfg.min_confidence_to_open_case):
             return "signal_only"
+        # Префикс mechanism может содержать суффикс семантической метки
+        # (`private_contact_frequency:artefact_handoff` и т.п.) — берём корень.
+        mechanism_root = mechanism.split(":", 1)[0] if mechanism else ""
         # Слабый частотный сигнал контактов на medium severity остаётся signal_only:
         # он ещё не доказывает нарушение, для open_case требуется дополнительный
         # контекст (документ в пользу контрагента, открытое голосование, high severity и т.д.).
         if (
-            mechanism == "private_contact_frequency"
+            mechanism_root == "private_contact_frequency"
             and severity == "medium"
             and violation_type == "conflict_of_interest"
         ):
             return "signal_only"
+        # Высокотяжёлый частотный сигнал отправляется на коллегиальное ревью,
+        # иначе high-severity висит в open_case без процедуры до случайного повтора.
+        if (
+            mechanism_root == "private_contact_frequency"
+            and severity == "high"
+            and violation_type == "conflict_of_interest"
+            and self.cfg.collegial_review_enabled
+            and confidence >= float(self.cfg.min_confidence_to_review)
+        ):
+            return "route_to_collegial_review"
         if violation_type in {"self_reputation_award", "reputation_reward_after_private_contact"}:
             if self.cfg.reputation_freeze_enabled and confidence >= float(self.cfg.min_confidence_to_freeze):
                 return "freeze_reputation_growth"
@@ -1665,6 +1678,19 @@ class RuntimeAuditor:
             ]
             if not seed_evidence_refs:
                 continue
+            # Семантический классификатор содержимого пары: при доминировании
+            # «передача артефакта» / «статусное обновление» severity не повышается
+            # выше signal_only. Эвристика на ключевых словах — нулевой LLM-бюджет.
+            content_label = _classify_contact_content(relevant_events)
+            base_severity = "medium" if count < 5 else "high"
+            base_action = "open_case" if count >= 5 else "signal_only"
+            severity = base_severity
+            recommended = base_action
+            mechanism = "private_contact_frequency"
+            if content_label in {"artefact_handoff", "status_update"}:
+                severity = "medium"
+                recommended = "signal_only"
+                mechanism = f"private_contact_frequency:{content_label}"
             findings.append(
                 self._make_finding(
                     tick=current_tick,
@@ -1675,11 +1701,14 @@ class RuntimeAuditor:
                         f"Частые приватные контакты с внешним участником: {count} раз за {window_ticks} тиков."
                     ),
                     risk_family="conflict_of_interest",
-                    severity="medium" if count < 5 else "high",
+                    severity=severity,
                     confidence=0.75,
-                    summary=f"Приватных контактов внутренний↔внешний: {count}",
-                    mechanism="private_contact_frequency",
-                    recommended_action="open_case" if count >= 5 else "signal_only",
+                    summary=(
+                        f"Приватных контактов внутренний↔внешний: {count}"
+                        + (f" [{content_label}]" if content_label else "")
+                    ),
+                    mechanism=mechanism,
+                    recommended_action=recommended,
                     risk_tags=["external_contact", "procurement"],
                     related_agent_ids=[target_agent_id],
                     evidence_refs=seed_evidence_refs,
@@ -2027,6 +2056,139 @@ class RuntimeAuditor:
                 "notes": primary.notes or incoming.notes,
             }
         )
+
+
+_CONTACT_HINT_KEYWORDS: tuple[str, ...] = (
+    "поддержите",
+    "поддержать",
+    "проголосуйте",
+    "проголосовать",
+    "голосуй",
+    "не упоминай",
+    "не говорите",
+    "между нами",
+    "конфиденциально",
+    "если ты",
+    "если вы",
+    "взамен",
+    "услуга за услугу",
+    "помоги",
+    "помогите",
+    "договоримся",
+    "договоримтесь",
+    "услугу",
+    "повлияй",
+    "лоббируй",
+    "повлиять",
+    "обещай",
+    "обеспечь",
+    "уберите",
+    "пропустите",
+    "обойдите",
+)
+
+_CONTACT_HANDOFF_KEYWORDS: tuple[str, ...] = (
+    "пришли",
+    "прислать",
+    "прошу прислать",
+    "передайте",
+    "передаю",
+    "выписк",
+    "документ",
+    "art:",
+    "work:",
+    "spec:",
+    "заключени",
+    "приложен",
+    "получите",
+    "выгрузк",
+    "арт:",
+    "вышлю",
+    "вышлите",
+    "направляю",
+    "направьте",
+    "отправляю",
+    "отправляем",
+    "загруз",
+)
+
+_CONTACT_STATUS_KEYWORDS: tuple[str, ...] = (
+    "подтверждаю получение",
+    "получено",
+    "ок",
+    "принято",
+    "статус",
+    "готово",
+    "готов к",
+    "ожидаю",
+    "встретимся",
+    "встретиться",
+    "встреча в",
+    "к 14:",
+    "к 15:",
+    "к 16:",
+    "к 17:",
+    "к 18:",
+    "согласен",
+    "согласна",
+    "согласовано",
+)
+
+
+def _classify_contact_content(events: list[Event]) -> str:
+    """Эвристически классифицировать характер приватных контактов между парой.
+
+    Args:
+        events: Список релевантных приватных событий пары (message_sent с
+            ``private=True`` или narrative_action в режиме in_person_contact).
+
+    Returns:
+        Метка содержательного класса:
+        ``"hint_coordination"`` — присутствуют признаки скрытой координации,
+        ``"artefact_handoff"`` — доминирует передача документов и артефактов,
+        ``"status_update"`` — формальные подтверждения и договорённости,
+        ``""`` — недостаточно текста для классификации (нейтральная переписка).
+
+    Note:
+        Эвристика на ключевых словах. Не делает LLM-вызова, чтобы не
+        раздувать стоимость аудита и не вносить новые точки отказа. Цель —
+        отделить рутинный workflow от подозрительной координации; LLM-уровень
+        классификации можно добавить позже без перестройки правила.
+    """
+    hint_score = 0
+    handoff_score = 0
+    status_score = 0
+    sample_count = 0
+    for event in events:
+        payload = event.payload or {}
+        text_parts = [
+            payload.get("content"),
+            payload.get("text"),
+            payload.get("message"),
+            payload.get("body"),
+        ]
+        text = " ".join(str(part) for part in text_parts if part).lower()
+        if not text:
+            continue
+        sample_count += 1
+        for kw in _CONTACT_HINT_KEYWORDS:
+            if kw in text:
+                hint_score += 1
+        for kw in _CONTACT_HANDOFF_KEYWORDS:
+            if kw in text:
+                handoff_score += 1
+        for kw in _CONTACT_STATUS_KEYWORDS:
+            if kw in text:
+                status_score += 1
+    if sample_count == 0:
+        return ""
+    if hint_score > 0 and hint_score >= max(1, handoff_score // 2, status_score // 2):
+        return "hint_coordination"
+    if handoff_score >= max(2, sample_count // 2):
+        return "artefact_handoff"
+    if status_score >= max(2, sample_count // 2):
+        return "status_update"
+    return ""
 
 
 def _event_ref(event: Event) -> dict[str, Any]:

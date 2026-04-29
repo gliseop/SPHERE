@@ -94,6 +94,7 @@ class MockLLMProvider:
         system: str,
         user: str,
         temperature: float = 0.0,
+        max_completion_tokens: int | None = None,
     ) -> LLMResponse:
         """Сгенерировать детерминированный ответ.
 
@@ -101,6 +102,7 @@ class MockLLMProvider:
             system: Системный промпт.
             user: Пользовательский промпт.
             temperature: Не используется.
+            max_completion_tokens: Не используется в mock-провайдере.
 
         Returns:
             Mock-ответ.
@@ -225,9 +227,20 @@ class OpenAICompatibleProvider:
         self._cache = LLMCache(cache_path) if cache_path else None
         self._use_tool_calls = use_tool_calls
         self._max_retries = max(0, _env_int("SPHERE_LLM_MAX_RETRIES", 2))
+        # Дополнительный бюджет ретраев именно для парс-ошибок (пустой JSON):
+        # SDK ретраит сетевые коды, но не реагирует на пустой ответ модели.
+        # Расширенный бюджет позволяет пережить короткое окно деградации провайдера
+        # без эскалации в LLMCallError.
+        self._parse_max_retries = max(
+            self._max_retries,
+            _env_int("SPHERE_LLM_PARSE_MAX_RETRIES", 4),
+        )
         self._retry_base_delay_s = max(0.05, _env_float("SPHERE_LLM_RETRY_BASE_DELAY_S", 0.75))
         self._retry_max_delay_s = max(self._retry_base_delay_s, _env_float("SPHERE_LLM_RETRY_MAX_DELAY_S", 8.0))
         self._retry_on_parse = (os.getenv("SPHERE_LLM_RETRY_ON_PARSE") or "").strip().lower() not in ("0", "false", "no", "off")
+        self._parse_retry_temp_jitter = max(
+            0.0, _env_float("SPHERE_LLM_PARSE_RETRY_TEMP_JITTER", 0.1)
+        )
         self._log_max_chars = _env_int("SPHERE_LLM_LOG_MAX_CHARS", 0)
         log_path = _resolve_llm_log_path()
         self._debug_logger = _LLMDebugLogger(log_path, max_chars=self._log_max_chars) if log_path else None
@@ -290,8 +303,11 @@ class OpenAICompatibleProvider:
     ) -> tuple[Any, dict[str, Any]]:
         call_id = uuid.uuid4().hex
         overall_started = time.monotonic()
+        # Бюджет: max_retries для штатных ошибок, parse_max_retries — для пустого JSON.
+        max_attempts = max(self._max_retries, self._parse_max_retries) + 1
+        base_temperature = create_kwargs.get("temperature")
 
-        for attempt in range(self._max_retries + 1):
+        for attempt in range(max_attempts):
             elapsed_s = time.monotonic() - overall_started
             remaining_budget_s = self._call_deadline_s - elapsed_s
             if remaining_budget_s <= 0:
@@ -302,6 +318,13 @@ class OpenAICompatibleProvider:
             attempt_timeout_s = min(self._request_timeout_s, max(0.5, remaining_budget_s))
             create_kwargs_with_timeout = dict(create_kwargs)
             create_kwargs_with_timeout["timeout"] = attempt_timeout_s
+            # На retry после парс-ошибки слегка варьируем температуру: помогает,
+            # когда провайдер залип на пустом JSON для конкретной точки сэмплинга.
+            if attempt > 0 and self._parse_retry_temp_jitter > 0 and base_temperature is not None:
+                jitter_sign = 1 if attempt % 2 == 1 else -1
+                jitter_amount = self._parse_retry_temp_jitter * (0.5 + random.random())
+                jittered = float(base_temperature) + jitter_sign * jitter_amount
+                create_kwargs_with_timeout["temperature"] = max(0.0, min(2.0, jittered))
             sanitized_kwargs = _sanitize_create_kwargs(
                 create_kwargs_with_timeout,
                 max_chars=self._log_max_chars,
@@ -377,7 +400,12 @@ class OpenAICompatibleProvider:
                 )
                 elapsed_after_s = time.monotonic() - overall_started
                 remaining_after_s = self._call_deadline_s - elapsed_after_s
-                will_retry = attempt < self._max_retries and retryable and remaining_after_s > 0.05
+                # Парс-ошибкам выдаём расширенный бюджет (parse_max_retries),
+                # обычным ретраиваемым — стандартный (max_retries).
+                effective_max_retries = (
+                    self._parse_max_retries if (is_parse and self._retry_on_parse) else self._max_retries
+                )
+                will_retry = attempt < effective_max_retries and retryable and remaining_after_s > 0.05
                 sleep_s = min(self._retry_sleep_s(attempt), max(0.0, remaining_after_s - 0.05)) if will_retry else 0.0
 
                 self._log(
@@ -431,6 +459,7 @@ class OpenAICompatibleProvider:
         system: str,
         user: str,
         temperature: float = 0.0,
+        max_completion_tokens: int | None = None,
     ) -> LLMResponse:
         """Сгенерировать ответ через OpenAI API.
 
@@ -438,6 +467,8 @@ class OpenAICompatibleProvider:
             system: Системный промпт.
             user: Пользовательский промпт.
             temperature: Температура генерации.
+            max_completion_tokens: Жёсткий потолок длины ответа в токенах.
+                None — без явного лимита (модель сама решает).
 
         Returns:
             Ответ LLM.
@@ -466,6 +497,8 @@ class OpenAICompatibleProvider:
             ],
             "temperature": safe_temperature,
         }
+        if max_completion_tokens is not None and max_completion_tokens > 0:
+            create_kwargs["max_tokens"] = int(max_completion_tokens)
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
 

@@ -2386,7 +2386,7 @@ def test_memory_summarizes_working_buffer(tmp_path: Path) -> None:
 
 def test_memory_summarization_failure_preserves_working_buffer(tmp_path: Path) -> None:
     class _FailingSummaryProvider(MockLLMProvider):
-        def generate(self, system: str, user: str, temperature: float = 0.0):
+        def generate(self, system: str, user: str, temperature: float = 0.0, max_completion_tokens: int | None = None):
             raise RuntimeError("boom")
 
     mem = AgentMemory(agent_id="agent:off_1")
