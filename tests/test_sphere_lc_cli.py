@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sphere_lc.cli import _SafeArgumentParser
+from sphere_lc.cli import _SafeArgumentParser, build_parser
 from sphere_lc.llm.providers import OpenAICompatibleProvider
 from sphere_lc.persona import PersonaLibrary
 from sphere_lc.scenario import _load_yaml
@@ -71,3 +71,22 @@ def test_openai_provider_error_points_to_project_install(monkeypatch: pytest.Mon
 
     assert "pip install -e ." in str(exc.value)
     assert "sphere-sim[llm]" not in str(exc.value)
+
+
+def test_run_parser_accepts_personas_pre_enriched_path() -> None:
+    """CLI принимает ``--personas-pre-enriched-path`` и кладёт его в args.
+
+    Защита от опечатки или регрессии: флаг должен быть зарегистрирован
+    в подкоманде ``run`` и сохраняться в ``args.personas_pre_enriched_path``.
+    """
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "run",
+            "--scenario",
+            "/tmp/scenario.json",
+            "--personas-pre-enriched-path",
+            "/tmp/personas.json",
+        ]
+    )
+    assert args.personas_pre_enriched_path == "/tmp/personas.json"

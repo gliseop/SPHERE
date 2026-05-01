@@ -3231,6 +3231,7 @@ class WorldEngine:
                 "version": 1,
                 "fingerprint": self._personas_cache_fingerprint(cache_input),
                 "input": cache_input,
+                "source": "enriched",
             },
             "personas": {
                 aid: persona.model_dump(mode="json")
@@ -3241,6 +3242,38 @@ class WorldEngine:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    def _load_pre_enriched_personas(self, *, path: Path) -> dict[str, PersonaArtifact]:
+        """Прочитать предобогащённые персоны из файла.
+
+        Args:
+            path: Путь к JSON-файлу в формате ``_save_personas_cache``.
+
+        Returns:
+            Отображение ``agent_id -> PersonaArtifact`` для тех записей,
+            которые удалось распарсить. Невалидные записи пропускаются.
+            При ошибке чтения файла или некорректной структуре возвращает
+            пустой словарь.
+        """
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Failed to read pre-enriched personas from %s: %s", path, exc)
+            return {}
+        if not isinstance(raw, dict):
+            logger.warning("Pre-enriched personas file %s has invalid root type", path)
+            return {}
+        personas_raw = raw.get("personas")
+        if not isinstance(personas_raw, dict):
+            logger.warning("Pre-enriched personas file %s missing 'personas' mapping", path)
+            return {}
+        out: dict[str, PersonaArtifact] = {}
+        for aid, item in personas_raw.items():
+            try:
+                out[str(aid)] = PersonaArtifact.model_validate(item)
+            except Exception as exc:
+                logger.warning("Skipping invalid persona %r in %s: %s", aid, path, exc)
+        return out
+
     async def _enrich_personas(self, *, state: WorldState, llm: LLMCaller) -> None:
         to_enrich_ids = [
             aid for aid, agent in sorted(state.agents.items()) if not agent.persona.biography.strip()
@@ -3248,22 +3281,83 @@ class WorldEngine:
         if not to_enrich_ids:
             return
 
+        # Ветка предобогащённых персон. Используется в сериях главы 3,
+        # где идентичность персон между прогонами G0/G1/G2/G3 — обязательное
+        # условие чистоты сравнения. Кэш по fingerprint в этой ветке намеренно
+        # не используется: достаточно явного указания пути из RuntimeConfig.
+        pre_enriched_path_raw = (self.cfg.runtime.personas_pre_enriched_path or "").strip()
+        skip_global_cache_save = False
+        pre_enriched_applied = 0
+        pre_enriched: dict[str, PersonaArtifact] = {}
+        if pre_enriched_path_raw:
+            pre_path = Path(pre_enriched_path_raw)
+            if not pre_path.exists():
+                logger.warning(
+                    "personas_pre_enriched_path is set but file does not exist: %s",
+                    pre_path,
+                )
+            else:
+                pre_enriched = self._load_pre_enriched_personas(path=pre_path)
+                for aid in to_enrich_ids:
+                    persona = pre_enriched.get(aid)
+                    if persona is None:
+                        continue
+                    if not self._persona_is_cache_complete(persona):
+                        logger.warning(
+                            "Pre-enriched persona for %s is incomplete, falling back to enrich",
+                            aid,
+                        )
+                        continue
+                    state.agents[aid].persona = persona
+                    pre_enriched_applied += 1
+                if pre_enriched_applied:
+                    logger.info(
+                        "Loaded %d pre-enriched personas from %s",
+                        pre_enriched_applied,
+                        pre_path,
+                    )
+                # Когда персоны пришли из явного файла, мы не хотим, чтобы
+                # они «утекли» в глобальный кэш и подменили будущие прогоны
+                # с другим сценарием через совпадение fingerprint.
+                skip_global_cache_save = True
+
         cache_input = self._personas_cache_input(state=state)
-        cached = self._load_personas_cache(state=state, cache_input=cache_input)
+        cached: dict[str, PersonaArtifact] = {}
+        if not skip_global_cache_save:
+            cached = self._load_personas_cache(state=state, cache_input=cache_input)
 
         pending: list[str] = []
+        cache_hits = 0
         for aid in to_enrich_ids:
+            if state.agents[aid].persona.biography.strip():
+                # Уже подставлена из pre_enriched — пропускаем.
+                continue
             cached_persona = cached.get(aid)
             if cached_persona is None or not self._persona_is_cache_complete(cached_persona):
                 pending.append(aid)
                 continue
             state.agents[aid].persona = cached_persona
+            cache_hits += 1
 
         if not pending:
-            logger.info(
-                "Loaded persona cache for %d agents from %s",
-                len(to_enrich_ids),
-                self._personas_global_cache_path(cache_input=cache_input),
+            # Все агенты покрыты без вызова LLM. Выбираем источник:
+            # «pre_enriched» только если ни одной персоны не пришлось
+            # дотягивать из глобального кэша; иначе «cache», а если был
+            # частичный pre_enriched + частичный кэш — всё равно «cache»
+            # как преобладающий путь, чтобы meta.source не вводил в
+            # заблуждение.
+            if pre_enriched_applied > 0 and cache_hits == 0:
+                snapshot_source = "pre_enriched"
+            else:
+                snapshot_source = "cache"
+            if not skip_global_cache_save:
+                logger.info(
+                    "Loaded persona cache for %d agents from %s",
+                    len(to_enrich_ids),
+                    self._personas_global_cache_path(cache_input=cache_input),
+                )
+            self._write_local_personas_snapshot(
+                state=state, cache_input=cache_input, source=snapshot_source
             )
             return
 
@@ -3277,13 +3371,76 @@ class WorldEngine:
             state.agents[aid].persona = persona
 
         all_enriched = all(self._persona_is_cache_complete(state.agents[aid].persona) for aid in to_enrich_ids)
+        # Если был хотя бы один реальный вызов LLM — итоговый источник
+        # «enriched», даже если часть персон пришла из pre_enriched/cache.
         if not all_enriched:
+            if skip_global_cache_save:
+                self._write_local_personas_snapshot(
+                    state=state, cache_input=cache_input, source="enriched"
+                )
             return
         try:
             personas = {aid: agent.persona for aid, agent in state.agents.items()}
-            self._save_personas_cache(cache_input=cache_input, personas=personas)
+            if skip_global_cache_save:
+                self._write_local_personas_snapshot(
+                    state=state,
+                    cache_input=cache_input,
+                    source="enriched",
+                    personas=personas,
+                )
+            else:
+                self._save_personas_cache(cache_input=cache_input, personas=personas)
         except Exception as exc:
             logger.warning("Failed to write personas cache: %s", exc)
+
+    def _write_local_personas_snapshot(
+        self,
+        *,
+        state: WorldState,
+        cache_input: dict[str, Any],
+        source: str,
+        personas: dict[str, PersonaArtifact] | None = None,
+    ) -> None:
+        """Записать только локальный ``personas.json`` без глобального кэша.
+
+        Используется и в режиме предобогащённых персон, и в обычных кэш-режимах
+        для самодокументирования прогона. В первом случае мы дополнительно
+        не «утекаем» персонами в каталог ``_persona_cache`` через совпадение
+        fingerprint.
+
+        Args:
+            state: Текущее состояние мира.
+            cache_input: Словарь, по которому считается fingerprint.
+            source: Реальный источник персон, попадает в ``meta.source``.
+                Допустимые значения: ``"pre_enriched"`` (загружено из явного
+                файла), ``"cache"`` (полное попадание в глобальный кэш),
+                ``"enriched"`` (часть или все персоны сгенерированы LLM).
+            personas: Готовый словарь персон, либо ``None`` —
+                в последнем случае он собирается из ``state.agents``.
+        """
+        if personas is None:
+            personas = {aid: agent.persona for aid, agent in state.agents.items()}
+        try:
+            payload = {
+                "meta": {
+                    "version": 1,
+                    "fingerprint": self._personas_cache_fingerprint(cache_input),
+                    "input": cache_input,
+                    "source": source,
+                },
+                "personas": {
+                    aid: persona.model_dump(mode="json")
+                    for aid, persona in sorted(personas.items())
+                },
+            }
+            local_path = self._personas_cache_path()
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Failed to write local personas snapshot: %s", exc)
 
     def _init_state(self, *, event_log: EventLog) -> WorldState:
         state = WorldState(tick=0, registry=EntityRegistry(), environment=EnvironmentState())

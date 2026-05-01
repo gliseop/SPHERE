@@ -99,6 +99,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
         cfg.runtime.enrich_personas = True
     if getattr(args, "persona_enrich_mode", None):
         cfg.runtime.persona_enrich_mode = str(args.persona_enrich_mode)
+    if getattr(args, "personas_pre_enriched_path", None):
+        cfg.runtime.personas_pre_enriched_path = str(args.personas_pre_enriched_path)
     if getattr(args, "governance", None):
         apply_builtin_governance_mode(cfg, args.governance)
     out_dir = Path(args.out) if args.out else Path("results") / datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -209,6 +211,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("full", "core"),
         default=None,
         help="Режим обогащения персон: full (summary+biography+interview) или core (summary+biography)",
+    )
+    p_run.add_argument(
+        "--personas-pre-enriched-path",
+        type=str,
+        default=None,
+        help="Путь к JSON с предобогащёнными персонами (для воспроизводимости серии прогонов главы 3)",
     )
     p_run.add_argument(
         "--governance",

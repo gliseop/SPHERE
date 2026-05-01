@@ -263,6 +263,22 @@ class RuntimeConfig(BaseModel):
     langgraph_debug: bool = False
     enrich_personas: bool = False
     persona_enrich_mode: Literal["full", "core"] = "full"
+    personas_pre_enriched_path: str | None = None
+    """Путь к JSON-файлу с предобогащёнными персонами.
+
+    При указании этого пути ``WorldEngine._enrich_personas`` пропускает
+    LLM-генерацию и проверку кэша по fingerprint, загружая персоны
+    напрямую из файла. Формат файла совместим с тем, что пишет
+    ``WorldEngine._save_personas_cache`` — словарь с полями ``meta``
+    (опциональный) и ``personas`` (отображение
+    ``agent_id -> PersonaArtifact``).
+
+    Если в файле отсутствует персона для конкретного агента или
+    она не проходит проверку ``_persona_is_cache_complete``, агент
+    попадает в очередь стандартного обогащения через LLM (fallback).
+    Опция предназначена для серий главы 3, где требуется гарантия
+    идентичности персон между прогонами в режимах G0, G1, G2, G3.
+    """
     spawn_secondary: bool = False
     max_secondary_per_agent: int = 2
     max_agents: int = 15
@@ -450,6 +466,8 @@ class AuditRuntimeConfig(BaseModel):
     collegial_review_enabled: bool = True
     review_jury_size: int = 3
     reviewer_seed_salt: str = ""
+    audit_prompt_max_tokens: int = 200_000
+    audit_use_summary_for_old_ticks: bool = False
 
     @field_validator("actor_id")
     @classmethod
@@ -475,6 +493,13 @@ class AuditRuntimeConfig(BaseModel):
         if v < 0:
             raise ValueError("value must be >= 0")
         return v
+
+    @field_validator("audit_prompt_max_tokens")
+    @classmethod
+    def _validate_audit_prompt_max_tokens(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("audit_prompt_max_tokens must be > 0")
+        return int(v)
 
     @field_validator(
         "min_confidence_to_flag",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .llm import LLMCaller
 from .prompts import render_prompt
+
+logger = logging.getLogger(__name__)
 
 class EvaluationSummary(BaseModel):
     """Итог сравнения runtime-сигналов и truth-layer."""
@@ -33,6 +36,17 @@ class EvaluationSummary(BaseModel):
     semantic_precision: float = 0.0
     semantic_recall: float = 0.0
     semantic_f1: float = 0.0
+    semantic_status: str = "skipped"
+    """Статус выполнения семантического судьи.
+
+    Значения:
+        - ``"computed"``: судья отработал успешно, метрики ``semantic_*`` валидны;
+        - ``"failed"``: судья был вызван, но упал с исключением — значения ``semantic_*``
+          остаются плейсхолдерами и не должны интерпретироваться как реальные;
+        - ``"skipped"``: судья не запускался (например, отсутствует truth-список).
+    """
+    semantic_failure_reason: str = ""
+    """Свободно-формулированная причина падения, заполняется при ``semantic_status="failed"``."""
     case_truth_source: str = "truth"
     case_truth_total: int = 0
     case_true_positive: int = 0
@@ -212,8 +226,22 @@ async def augment_evaluation_with_semantic_judge(
             schema=_evaluation_semantic_schema(),
             temperature=temperature,
         )
-    except Exception:
-        return summary
+    except Exception as exc:
+        reason = _classify_semantic_judge_error(exc)
+        logger.warning(
+            "semantic judge failed: %s — %s (%s); truth_findings=%d signal_findings=%d",
+            type(exc).__name__,
+            exc,
+            reason,
+            len(truth_findings),
+            len(signal_findings),
+        )
+        return summary.model_copy(
+            update={
+                "semantic_status": "failed",
+                "semantic_failure_reason": f"{type(exc).__name__}: {reason}",
+            }
+        )
 
     data = resp.data if isinstance(resp.data, dict) else {}
     semantic_matches = _normalize_index_matches(
@@ -250,6 +278,8 @@ async def augment_evaluation_with_semantic_judge(
             "semantic_precision": round(semantic_precision, 4),
             "semantic_recall": round(semantic_recall, 4),
             "semantic_f1": round(_f1(semantic_precision, semantic_recall), 4),
+            "semantic_status": "computed",
+            "semantic_failure_reason": "",
             "case_true_positive": case_tp,
             "case_false_positive": case_fp,
             "case_false_negative": case_fn,
@@ -593,12 +623,106 @@ def _evidence_ref_signature(item: dict[str, Any], *, include_timestamp: bool = T
     return json.dumps(keys, ensure_ascii=False, sort_keys=True)
 
 
+_VIOLATION_TYPE_SYNONYMS: dict[str, set[str]] = {
+    # LLM-аудитор v3 фактически использует ``preferential_treatment`` и ``other``
+    # как описание тех же эпизодов, что детерминированный truth-детектор
+    # маркирует как ``conflict_of_interest``. Анализ events.jsonl в прогоне
+    # ``overnight_g3_v3_deepseek`` показал, что 21 finding с типом ``other``
+    # описывает приватные контакты, координацию замолчания, неформальные
+    # встречи в обход формального процесса — это семейство «конфликт интересов /
+    # преференциальное обращение». Без словаря синонимов 30 из 47 finding'ов
+    # не сопоставлялись с эталоном, обнуляя precision и recall.
+    "conflict_of_interest": {
+        "conflict_of_interest",
+        "preferential_treatment",
+        "other",
+    },
+}
+
+
+def _build_violation_type_index(
+    groups: dict[str, set[str]],
+) -> dict[str, frozenset[str]]:
+    """Свернуть словарь групп синонимов в индекс «значение → группа».
+
+    Для каждого значения в любой группе сопоставляется замороженное множество
+    всех её членов. Это даёт симметричный и транзитивный матчер: если ``a`` и
+    ``b`` принадлежат одной группе, то и ``b`` и ``a`` тоже, и любая третья
+    точка ``c`` из той же группы матчится с ``a`` и ``b``.
+
+    Args:
+        groups: Словарь, где ключ — каноническое имя группы (для удобства
+            интроспекции), а значение — множество синонимов.
+
+    Returns:
+        Индекс «значение в нижнем регистре без пробелов → frozenset группы».
+    """
+    index: dict[str, frozenset[str]] = {}
+    for group in groups.values():
+        normalized = frozenset(item.lower().strip() for item in group)
+        for member in normalized:
+            index[member] = normalized
+    return index
+
+
+_VIOLATION_TYPE_INDEX: dict[str, frozenset[str]] = _build_violation_type_index(
+    _VIOLATION_TYPE_SYNONYMS
+)
+
+
 def _violation_type_match(left: Any, right: Any) -> bool:
-    left_norm = _normalize_violation_type(left)
-    right_norm = _normalize_violation_type(right)
+    """Сравнить два значения ``violation_type`` с учётом словаря синонимов.
+
+    Ранее функция требовала точного совпадения строк, и LLM-аудитор с типами
+    ``preferential_treatment``/``other`` не сопоставлялся с truth-детектором,
+    выдающим только ``conflict_of_interest``. Теперь мы признаём пару валидной,
+    если оба значения принадлежат одной группе синонимов в
+    ``_VIOLATION_TYPE_SYNONYMS``. Сравнение нечувствительно к регистру и
+    окружающим пробелам.
+
+    Args:
+        left: Левое значение (например, из truth-записи).
+        right: Правое значение (например, из payload события audit_flagged).
+
+    Returns:
+        ``True``, если значения совпадают точно либо принадлежат одной группе
+        синонимов; иначе — ``False``. Пустые/``None``-значения никогда не
+        матчатся.
+    """
+    left_norm = _normalize_violation_type(left).lower().strip()
+    right_norm = _normalize_violation_type(right).lower().strip()
     if not left_norm or not right_norm:
         return False
-    return left_norm == right_norm
+    if left_norm == right_norm:
+        return True
+    left_group = _VIOLATION_TYPE_INDEX.get(left_norm)
+    right_group = _VIOLATION_TYPE_INDEX.get(right_norm)
+    if left_group is None or right_group is None:
+        return False
+    return left_group is right_group
+
+
+def _classify_semantic_judge_error(exc: Exception) -> str:
+    """Сгенерировать человекочитаемую подсказку о причине падения LLM-судьи.
+
+    Анализирует текст исключения и выделяет три класса распространённых
+    ошибок: исчерпание баланса OpenRouter (HTTP 402), переполнение контекстного
+    окна модели и прочие сбои. Подсказка попадает в ``semantic_failure_reason``
+    и в WARNING-лог, чтобы аналитик мог быстро понять, нужно ли пополнять
+    баланс, сжимать промпт или искать иную причину.
+
+    Args:
+        exc: Исключение, перехваченное в обёртке судьи.
+
+    Returns:
+        Короткая фраза, описывающая категорию ошибки.
+    """
+    text = str(exc).lower()
+    if "402" in text or "insufficient credits" in text or "requires more credits" in text:
+        return "OpenRouter insufficient credits"
+    if "context length" in text or "context_length" in text or "maximum context" in text:
+        return "prompt too long"
+    return "generic LLM failure"
 
 
 def _f1(precision: float, recall: float) -> float:

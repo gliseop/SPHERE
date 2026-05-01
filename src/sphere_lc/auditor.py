@@ -91,11 +91,26 @@ class AuditFinding(BaseModel):
 
 
 class AuditOutcome(BaseModel):
+    """Результат runtime-аудита одного тика.
+
+    Attributes:
+        findings: Подтверждённые finding'и аудитора.
+        events: События аудитора, готовые к эмиссии.
+        ops: Операции состояния, готовые к применению.
+        audit_self_counterparty_filtered: Счётчик отброшенных или
+            переписанных LLM-finding'ов, в которых ``subject`` совпадал с
+            ``counterparty_agent_id`` (баг сериализации модели).
+        audit_history_truncated: Метаданные усечения истории при сборке
+            промпта аудитора. ``None`` означает, что усечения не было.
+    """
+
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     findings: list[AuditFinding] = Field(default_factory=list)
     events: list[Event] = Field(default_factory=list)
     ops: list[Any] = Field(default_factory=list)
+    audit_self_counterparty_filtered: int = 0
+    audit_history_truncated: dict[str, int] | None = None
 
 
 class _RawAuditFindingModel(BaseModel):
@@ -203,9 +218,16 @@ def _actuation_verifier_schema() -> dict[str, Any]:
     }
 
 
-@dataclass(slots=True)
+@dataclass
 class RuntimeAuditor:
-    """LLM-first runtime-аудитор с детерминированным actuator-слоем."""
+    """LLM-first runtime-аудитор с детерминированным actuator-слоем.
+
+    Note:
+        ``slots=True`` намеренно не используется: внутри одного
+        ``inspect_tick`` накопителем служат приватные атрибуты
+        (счётчик self_counterparty, метаданные усечения истории), а slots
+        запретили бы их инициализацию вне field-объявлений.
+    """
 
     cfg: AuditRuntimeConfig
     llm: LLMCaller | None = None
@@ -219,6 +241,31 @@ class RuntimeAuditor:
         recent_events: list[Event],
         pattern_events: list[Event] | None = None,
     ) -> AuditOutcome:
+        """Запустить аудит-цикл одного тика и вернуть подтверждённые finding'и.
+
+        Args:
+            state: Текущее состояние мира.
+            tick_events: События текущего тика.
+            recent_events: Окно недавних событий для контекста (расширенное).
+            pattern_events: Дополнительная подборка событий для частотных
+                паттернов (опционально).
+
+        Returns:
+            ``AuditOutcome`` с подтверждёнными finding'ами, событиями для
+            эмиссии (включая ``audit_runtime_warning`` и
+            ``audit_history_truncated`` при необходимости), а также
+            счётчиками ``audit_self_counterparty_filtered``
+            и ``audit_history_truncated``.
+        """
+
+        # Сброс счётчиков, накапливаемых вспомогательными методами в
+        # пределах одного inspect_tick (используются вместо проброса
+        # сигнатур через все слои вычисления).
+        self._self_counterparty_filtered = 0
+        self._self_counterparty_filter_events: list[Event] = []
+        self._history_truncated_meta: dict[str, int] | None = None
+        self._history_truncated_events: list[Event] = []
+
         if not self.cfg.enabled:
             return AuditOutcome()
         current_tick = int(state.tick)
@@ -230,15 +277,27 @@ class RuntimeAuditor:
             current_tick=current_tick,
         )
         if not findings:
-            return AuditOutcome()
+            outcome = AuditOutcome(
+                audit_self_counterparty_filtered=int(self._self_counterparty_filtered),
+                audit_history_truncated=self._history_truncated_meta,
+            )
+            outcome.events.extend(self._self_counterparty_filter_events)
+            outcome.events.extend(self._history_truncated_events)
+            return outcome
         findings.sort(key=lambda item: (-float(item.confidence), item.risk_family, item.subject_agent_id))
         findings = findings[: self.cfg.max_findings_per_tick]
-        return self._apply_policy(
+        outcome = self._apply_policy(
             state=state,
             findings=findings,
             current_tick=current_tick,
             recent_events=recent_events,
         )
+        # Перенос счётчиков и сопутствующих событий в итог.
+        outcome.audit_self_counterparty_filtered = int(self._self_counterparty_filtered)
+        outcome.audit_history_truncated = self._history_truncated_meta
+        outcome.events.extend(self._self_counterparty_filter_events)
+        outcome.events.extend(self._history_truncated_events)
+        return outcome
 
     async def _collect_findings(
         self,
@@ -294,31 +353,55 @@ class RuntimeAuditor:
             return []
         system = render_prompt("auditor.runtime_findings.system")
         all_events = list(recent_events) + list(tick_events)
-        user = json.dumps(
-            {
-                "tick": current_tick,
-                "access_policy": self.cfg.access_policy,
-                "state_snapshot": self._state_snapshot(state),
-                "open_audit_cases": self._open_cases_snapshot(state),
-                "pending_obligations": self._pending_obligations_snapshot(
-                    state=state,
-                    recent_events=recent_events,
-                    current_tick=current_tick,
-                ),
-                "current_tick_events": self._sanitize_events(state=state, events=tick_events),
-                "recent_events": self._sanitize_events(
-                    state=state,
-                    events=self._compact_recent_events_for_llm(
-                        events=recent_events[-self.cfg.lookback_events :]
-                    ),
-                ),
-                "private_contact_pairs": self._private_contact_pairs(
-                    recent_events=all_events,
-                    current_tick=current_tick,
-                ),
-            },
-            ensure_ascii=False,
+
+        compacted_recent = self._compact_recent_events_for_llm(
+            events=recent_events[-self.cfg.lookback_events :]
         )
+        # Приоритизированное усечение истории: hard-cap по числу токенов
+        # промпта, чтобы не падать на context overflow в OpenRouter.
+        # Стратегия — сначала отбрасываем события низкого приоритета
+        # (рутинные work_update, status_update и обычные message_sent
+        # без признаков координации), затем — события среднего
+        # приоритета (приватные сообщения между неподозрительными парами).
+        # Высокий приоритет (audit_*, vote_*, reputation_*, dao_*,
+        # truth_violation, agent_signal high) не отбрасываем.
+        truncated_recent, dropped_low, dropped_mid = self._truncate_events_by_priority(
+            events=compacted_recent,
+            state=state,
+            base_payload_factory=lambda evs: self._build_audit_user_payload(
+                state=state,
+                tick_events=tick_events,
+                recent_events_for_llm=evs,
+                all_events=all_events,
+                current_tick=current_tick,
+            ),
+            max_tokens=int(self.cfg.audit_prompt_max_tokens),
+        )
+        if dropped_low or dropped_mid:
+            self._history_truncated_meta = {
+                "dropped_low": int(dropped_low),
+                "dropped_mid": int(dropped_mid),
+                "kept": len(truncated_recent),
+                "max_tokens": int(self.cfg.audit_prompt_max_tokens),
+            }
+            self._history_truncated_events.append(
+                Event(
+                    tick=current_tick,
+                    event_type="audit_history_truncated",
+                    actor_id=self.cfg.actor_id,
+                    payload=dict(self._history_truncated_meta),
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            )
+
+        user_payload = self._build_audit_user_payload(
+            state=state,
+            tick_events=tick_events,
+            recent_events_for_llm=truncated_recent,
+            all_events=all_events,
+            current_tick=current_tick,
+        )
+        user = json.dumps(user_payload, ensure_ascii=False)
         resp = await self.llm.generate_structured(
             role="auditor",
             name="runtime_auditor",
@@ -346,12 +429,86 @@ class RuntimeAuditor:
             confidence = float(raw.confidence)
             if subject is not None and not subject.internal:
                 confidence = min(confidence, float(self.cfg.external_subject_confidence_cap))
+
+            # Правка subject == counterparty: модель часто возвращает один и
+            # тот же agent_id и в subject, и в target. Если в evidence_refs
+            # есть отличный target_agent_id, считаем его правильным
+            # контрагентом; если нет — отбрасываем finding и эмитим
+            # audit_runtime_warning с reason="self_counterparty".
+            #
+            # Исключение — типы нарушений «self_*» (self_reputation_award,
+            # self_nomination и т.п.): для них совпадение subject==target —
+            # семантически валидное состояние (агент действует в свою пользу).
+            # В этих случаях постпроцессор не запускает фильтр.
+            target_id_raw = (raw.target_agent_id or "").strip() or None
+            evidence_refs_norm = self._normalize_raw_evidence_refs(
+                evidence_refs=raw.evidence_refs,
+                state=state,
+            )
+            related_ids_norm = [aid for aid in raw.related_agent_ids if aid in state.agents]
+            violation_type_norm = str(raw.violation_type or "").strip()
+            is_self_violation = violation_type_norm.startswith("self_") or (
+                violation_type_norm in {"self_reputation_award", "self_nomination"}
+            )
+            if (
+                target_id_raw
+                and target_id_raw == raw.subject_agent_id
+                and not is_self_violation
+            ):
+                replacement = self._extract_alternate_target_from_refs(
+                    evidence_refs=evidence_refs_norm,
+                    subject_agent_id=raw.subject_agent_id,
+                    state=state,
+                )
+                if replacement is None:
+                    # Дополнительный шанс — взять из related_agent_ids.
+                    for aid in related_ids_norm:
+                        if aid != raw.subject_agent_id:
+                            replacement = aid
+                            break
+                if replacement is None:
+                    self._self_counterparty_filtered += 1
+                    self._self_counterparty_filter_events.append(
+                        Event(
+                            tick=current_tick,
+                            event_type="audit_runtime_warning",
+                            actor_id=self.cfg.actor_id,
+                            payload={
+                                "reason": "self_counterparty",
+                                "subject_agent_id": raw.subject_agent_id,
+                                "violation_type": str(raw.violation_type or "").strip(),
+                                "summary": raw.summary.strip(),
+                                "decision": "dropped",
+                            },
+                            audience=[INTERNAL_AUDIENCE],
+                        )
+                    )
+                    continue
+                self._self_counterparty_filtered += 1
+                self._self_counterparty_filter_events.append(
+                    Event(
+                        tick=current_tick,
+                        event_type="audit_runtime_warning",
+                        actor_id=self.cfg.actor_id,
+                        payload={
+                            "reason": "self_counterparty",
+                            "subject_agent_id": raw.subject_agent_id,
+                            "violation_type": str(raw.violation_type or "").strip(),
+                            "summary": raw.summary.strip(),
+                            "decision": "rewritten",
+                            "replacement_target_agent_id": replacement,
+                        },
+                        audience=[INTERNAL_AUDIENCE],
+                    )
+                )
+                target_id_raw = replacement
+
             findings.append(
                 self._make_finding(
                     source="llm",
                     tick=current_tick,
                     subject_agent_id=raw.subject_agent_id,
-                    target_agent_id=raw.target_agent_id,
+                    target_agent_id=target_id_raw,
                     violation_type=str(raw.violation_type or "").strip(),
                     violation_type_freeform=str(raw.violation_type_freeform or "").strip(),
                     risk_family=(raw.risk_family or "other").strip(),
@@ -362,12 +519,77 @@ class RuntimeAuditor:
                     beneficiary=raw.beneficiary,
                     risk_tags=[str(tag).strip() for tag in raw.risk_tags if str(tag).strip()],
                     recommended_action=raw.recommended_action or "signal_only",
-                    related_agent_ids=[aid for aid in raw.related_agent_ids if aid in state.agents],
+                    related_agent_ids=related_ids_norm,
                     evidence_refs=list(raw.evidence_refs),
                     notes=(raw.notes or "").strip(),
                 )
             )
         return findings
+
+    @staticmethod
+    def _normalize_raw_evidence_refs(
+        *,
+        evidence_refs: list[dict[str, Any]],
+        state: WorldState,
+    ) -> list[dict[str, Any]]:
+        """Подсветить наиболее вероятные agent_id внутри evidence_refs.
+
+        Args:
+            evidence_refs: Сырые ссылки, как пришли от LLM.
+            state: Текущее состояние мира (для проверки существования id).
+
+        Returns:
+            Новый список ссылок без модификации входа. Каждая ссылка
+            оставлена как dict; значения agent-ключей нормализованы к
+            str (если присутствуют).
+        """
+
+        out: list[dict[str, Any]] = []
+        for ref in evidence_refs or []:
+            if not isinstance(ref, dict):
+                continue
+            normalized = dict(ref)
+            for key in ("target_agent_id", "to_id", "counterparty_agent_id", "related_target_agent_id", "actor_id"):
+                value = normalized.get(key)
+                if value is None:
+                    continue
+                normalized[key] = str(value).strip()
+            out.append(normalized)
+        return out
+
+    @staticmethod
+    def _extract_alternate_target_from_refs(
+        *,
+        evidence_refs: list[dict[str, Any]],
+        subject_agent_id: str,
+        state: WorldState,
+    ) -> str | None:
+        """Найти в evidence_refs первый agent_id, отличный от subject.
+
+        Args:
+            evidence_refs: Нормализованные ссылки на события.
+            subject_agent_id: id анализируемого субъекта.
+            state: Состояние мира для проверки существования агента.
+
+        Returns:
+            Первый встреченный ``agent:*`` id, отличный от subject и
+            присутствующий в ``state.agents``; ``None`` если подходящего нет.
+        """
+
+        for ref in evidence_refs or []:
+            if not isinstance(ref, dict):
+                continue
+            for key in ("target_agent_id", "to_id", "counterparty_agent_id", "related_target_agent_id"):
+                value = str(ref.get(key) or "").strip()
+                if not value:
+                    continue
+                if value == subject_agent_id:
+                    continue
+                if not value.startswith("agent:"):
+                    continue
+                if value in state.agents:
+                    return value
+        return None
 
     def _apply_policy(
         self,
@@ -849,6 +1071,224 @@ class RuntimeAuditor:
                 }
             )
         return rows
+
+    def _build_audit_user_payload(
+        self,
+        *,
+        state: WorldState,
+        tick_events: list[Event],
+        recent_events_for_llm: list[Event],
+        all_events: list[Event],
+        current_tick: int,
+    ) -> dict[str, Any]:
+        """Собрать словарь user-payload для runtime-аудитора.
+
+        Args:
+            state: Текущее состояние мира.
+            tick_events: События текущего тика.
+            recent_events_for_llm: Уже отфильтрованный/усечённый список
+                недавних событий, готовый к подаче в модель.
+            all_events: Полный набор недавних плюс tick событий — нужен
+                для частотных пар приватных контактов.
+            current_tick: Номер текущего тика.
+
+        Returns:
+            Словарь, готовый к JSON-сериализации в `user` промпта.
+        """
+
+        return {
+            "tick": current_tick,
+            "access_policy": self.cfg.access_policy,
+            "state_snapshot": self._state_snapshot(state),
+            "open_audit_cases": self._open_cases_snapshot(state),
+            "pending_obligations": self._pending_obligations_snapshot(
+                state=state,
+                recent_events=recent_events_for_llm,
+                current_tick=current_tick,
+            ),
+            "current_tick_events": self._sanitize_events(state=state, events=tick_events),
+            "recent_events": self._sanitize_events(
+                state=state,
+                events=recent_events_for_llm,
+            ),
+            "private_contact_pairs": self._private_contact_pairs(
+                recent_events=all_events,
+                current_tick=current_tick,
+            ),
+        }
+
+    @staticmethod
+    def _estimate_prompt_tokens(payload: dict[str, Any]) -> int:
+        """Оценить число токенов сериализованного payload эвристикой.
+
+        Args:
+            payload: Готовый к подаче словарь user-payload.
+
+        Returns:
+            Грубая оценка токенов как ``len(serialized_text) / 4``. Этого
+            достаточно для контроля cap'а: при пересечении мы попросту
+            начинаем отбрасывать события и пересчитываем.
+
+        Note:
+            Используется простая эвристика без зависимости от ``tiktoken``,
+            чтобы не вводить новый внешний пакет. Реальные tokenizer'ы
+            на русско-английских смесях дают ~3.5–4.5 символа на токен;
+            берём 4.0 как округлённую медиану.
+        """
+
+        try:
+            text = json.dumps(payload, ensure_ascii=False)
+        except (TypeError, ValueError):
+            text = str(payload)
+        return max(0, len(text) // 4)
+
+    @staticmethod
+    def _classify_event_priority(event: Event) -> Literal["high", "mid", "low"]:
+        """Классифицировать событие по приоритету при усечении истории.
+
+        Args:
+            event: Конкретное событие из недавнего окна.
+
+        Returns:
+            Метка приоритета:
+            ``"high"`` — события governance, аудита, голосований,
+            репутации, истины и сигналы high severity (не отбрасывать);
+            ``"mid"`` — приватные сообщения между подозреваемыми (с
+            признаками координации) и in_person_contact;
+            ``"low"`` — всё остальное (work_update, рутинные status_update,
+            непомеченные message_sent).
+        """
+
+        event_type = str(event.event_type or "")
+        payload = event.payload or {}
+        high_types = {
+            "audit_flagged",
+            "audit_case_opened",
+            "audit_case_closed",
+            "audit_case_updated",
+            "audit_escalated",
+            "audit_explanation_requested",
+            "audit_documents_requested",
+            "audit_monitoring_enabled",
+            "audit_runtime_warning",
+            "audit_history_truncated",
+            "vote_opened",
+            "vote_cast",
+            "vote_closed",
+            "reputation_frozen",
+            "reputation_unfrozen",
+            "reputation_modified",
+            "reputation_gain_blocked",
+            "truth_violation",
+            "review_case_opened",
+            "review_case_closed",
+            "position_changed",
+        }
+        if event_type in high_types:
+            return "high"
+        if event_type.startswith("dao_"):
+            return "high"
+        if event_type == "agent_signal":
+            severity = str(payload.get("severity") or "").strip().lower()
+            if severity == "high":
+                return "high"
+            return "mid"
+        if event_type == "message_sent" and bool(payload.get("private", True)):
+            content_class = str(payload.get("content_class") or "").strip()
+            if content_class in {"hint_coordination", "artefact_handoff"}:
+                return "mid"
+            return "mid"
+        if (
+            event_type == "narrative_action"
+            and str(payload.get("action_kind") or "").strip() == "in_person_contact"
+        ):
+            return "mid"
+        return "low"
+
+    def _truncate_events_by_priority(
+        self,
+        *,
+        events: list[Event],
+        state: WorldState,
+        base_payload_factory,
+        max_tokens: int,
+    ) -> tuple[list[Event], int, int]:
+        """Усечь список событий по приоритету до соблюдения cap по токенам.
+
+        Args:
+            events: Уже скомпактированный список недавних событий.
+            state: Текущее состояние мира (для оценки payload).
+            base_payload_factory: Колбэк ``events -> dict``, собирающий
+                полный user-payload (без сериализации). Нужен, чтобы оценка
+                токенов учитывала state_snapshot и все остальные блоки
+                (а не только сами события).
+            max_tokens: Жёсткий потолок токенов для сериализованного
+                payload. По достижении лимита возвращаем ровно тот набор,
+                который ещё помещается.
+
+        Returns:
+            Кортеж ``(kept_events, dropped_low, dropped_mid)``.
+            ``kept_events`` сохраняет порядок исходного списка.
+        """
+
+        if max_tokens <= 0:
+            return list(events), 0, 0
+
+        events_with_priority = [(self._classify_event_priority(ev), idx, ev) for idx, ev in enumerate(events)]
+        # Сначала смотрим: вписывается ли весь набор без усечения?
+        full_payload = base_payload_factory(events)
+        if self._estimate_prompt_tokens(full_payload) <= max_tokens:
+            return list(events), 0, 0
+
+        dropped_low = 0
+        dropped_mid = 0
+        # Шаг 1: удаляем low-приоритетные события начиная с самых старых.
+        keep = list(events_with_priority)
+
+        def _current_kept_events() -> list[Event]:
+            return [item[2] for item in sorted(keep, key=lambda triple: triple[1])]
+
+        def _check_fit() -> bool:
+            payload = base_payload_factory(_current_kept_events())
+            return self._estimate_prompt_tokens(payload) <= max_tokens
+
+        # Удаляем низкий приоритет (от старых к новым).
+        low_indices = [i for i, item in enumerate(keep) if item[0] == "low"]
+        for i in low_indices:
+            if _check_fit():
+                break
+            keep[i] = ("__drop__", keep[i][1], keep[i][2])
+            dropped_low += 1
+        keep = [item for item in keep if item[0] != "__drop__"]
+
+        if _check_fit():
+            return _current_kept_events(), dropped_low, dropped_mid
+
+        # Шаг 2: удаляем средний приоритет (от старых к новым).
+        mid_indices = [i for i, item in enumerate(keep) if item[0] == "mid"]
+        for i in mid_indices:
+            if _check_fit():
+                break
+            keep[i] = ("__drop__", keep[i][1], keep[i][2])
+            dropped_mid += 1
+        keep = [item for item in keep if item[0] != "__drop__"]
+
+        if _check_fit():
+            return _current_kept_events(), dropped_low, dropped_mid
+
+        # Шаг 3: даже только high — сократим самое старое до тех пор, пока
+        # не вписываемся. Это крайний случай для очень длинных рядов
+        # high-приоритетных событий.
+        # Считаем как dropped_mid (запасной счётчик), чтобы факт усечения
+        # был отражён в метаданных.
+        while keep and not _check_fit():
+            # Удаляем самое старое событие.
+            oldest_idx = min(range(len(keep)), key=lambda i: keep[i][1])
+            keep[oldest_idx] = ("__drop__", keep[oldest_idx][1], keep[oldest_idx][2])
+            dropped_mid += 1
+            keep = [item for item in keep if item[0] != "__drop__"]
+
+        return _current_kept_events(), dropped_low, dropped_mid
 
     def _compact_recent_events_for_llm(self, *, events: list[Event]) -> list[Event]:
         noisy_caps = {
