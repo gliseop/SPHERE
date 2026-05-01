@@ -77,6 +77,29 @@ def _provider_order_from_env() -> list[str] | None:
     return _normalize_provider_order(raw.split(","))
 
 
+def _provider_ignore_from_env() -> list[str] | None:
+    """Прочитать список игнорируемых апстрим-провайдеров из окружения.
+
+    OpenRouter маршрутизирует запросы на разные апстримы (DeepInfra, DeepSeek,
+    Novita, Together AI и т.д.) и при срабатывании rate-limit на одном из них
+    возвращает 429 без автоматического fallback. Через
+    ``SPHERE_LLM_PROVIDER_IGNORE`` (или ``OPENROUTER_PROVIDER_IGNORE``) можно
+    запретить конкретного апстрима — OpenRouter будет сразу выбирать другой
+    при доступности.
+
+    Returns:
+        Нормализованный список идентификаторов апстримов либо ``None``.
+    """
+    raw = (
+        os.getenv("SPHERE_LLM_PROVIDER_IGNORE")
+        or os.getenv("OPENROUTER_PROVIDER_IGNORE")
+        or ""
+    ).strip()
+    if not raw:
+        return None
+    return _normalize_provider_order(raw.split(","))
+
+
 class MockLLMProvider:
     """Детерминированный mock-провайдер для тестов и отладки."""
 
@@ -245,13 +268,14 @@ class OpenAICompatibleProvider:
         log_path = _resolve_llm_log_path()
         self._debug_logger = _LLMDebugLogger(log_path, max_chars=self._log_max_chars) if log_path else None
         self._extra_body: dict | None = None
-        if provider_order and _supports_provider_routing(base_url):
-            self._extra_body = {
-                "provider": {
-                    "order": provider_order,
-                    "allow_fallbacks": True,
-                }
-            }
+        provider_ignore = _provider_ignore_from_env()
+        if _supports_provider_routing(base_url) and (provider_order or provider_ignore):
+            provider_block: dict[str, Any] = {"allow_fallbacks": True}
+            if provider_order:
+                provider_block["order"] = provider_order
+            if provider_ignore:
+                provider_block["ignore"] = provider_ignore
+            self._extra_body = {"provider": provider_block}
 
     def _get_client(self) -> Any:
         client = getattr(self._client_local, "client", None)
