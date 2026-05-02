@@ -1124,6 +1124,7 @@ class WorldEngine:
                     "duration_ms": 0.0,
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
+                    "cached_tokens": 0,
                     "durations_ms": [],
                     "retries_used": 0,
                     "timeout_count": 0,
@@ -1149,12 +1150,14 @@ class WorldEngine:
                 error = row.get("error") or {}
                 prompt_tokens = int(usage.get("prompt_tokens") or 0)
                 completion_tokens = int(usage.get("completion_tokens") or 0)
+                cached_tokens = int(usage.get("cached_tokens") or 0)
 
                 role_bucket = _touch(role_stats, role)
                 role_bucket["calls"] = int(role_bucket["calls"]) + 1
                 role_bucket["duration_ms"] = float(role_bucket["duration_ms"]) + duration_ms
                 role_bucket["prompt_tokens"] = int(role_bucket["prompt_tokens"]) + prompt_tokens
                 role_bucket["completion_tokens"] = int(role_bucket["completion_tokens"]) + completion_tokens
+                role_bucket["cached_tokens"] = int(role_bucket["cached_tokens"]) + cached_tokens
                 role_bucket["durations_ms"].append(duration_ms)
                 role_bucket["retries_used"] = int(role_bucket["retries_used"]) + int(meta.get("retries_used") or 0)
                 if error:
@@ -1168,6 +1171,7 @@ class WorldEngine:
                     tick_bucket["duration_ms"] = float(tick_bucket["duration_ms"]) + duration_ms
                     tick_bucket["prompt_tokens"] = int(tick_bucket["prompt_tokens"]) + prompt_tokens
                     tick_bucket["completion_tokens"] = int(tick_bucket["completion_tokens"]) + completion_tokens
+                    tick_bucket["cached_tokens"] = int(tick_bucket["cached_tokens"]) + cached_tokens
                     tick_bucket["durations_ms"].append(duration_ms)
                     tick_bucket["retries_used"] = int(tick_bucket["retries_used"]) + int(meta.get("retries_used") or 0)
                     if error:
@@ -1193,6 +1197,7 @@ class WorldEngine:
                         "duration_ms": round(duration_ms, 3),
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
+                        "cached_tokens": cached_tokens,
                         "total_tokens": prompt_tokens + completion_tokens,
                         "retries_used": int(meta.get("retries_used") or 0),
                         "error_type": str(error.get("type") or "") or None,
@@ -1232,6 +1237,7 @@ class WorldEngine:
 
         total_prompt = sum(int(bucket["prompt_tokens"]) for bucket in role_stats.values())
         total_completion = sum(int(bucket["completion_tokens"]) for bucket in role_stats.values())
+        total_cached = sum(int(bucket.get("cached_tokens") or 0) for bucket in role_stats.values())
         sum_duration_ms = sum(float(bucket["duration_ms"]) for bucket in role_stats.values())
         total_retries = sum(int(bucket["retries_used"]) for bucket in role_stats.values())
         total_timeouts = sum(int(bucket["timeout_count"]) for bucket in role_stats.values())
@@ -1242,18 +1248,57 @@ class WorldEngine:
             else 0.0
         )
 
+        llm_cfg = self.cfg.llm
+        input_price_per_m = float(getattr(llm_cfg, "input_price_per_m", 0.0) or 0.0)
+        cache_read_price_per_m = float(getattr(llm_cfg, "cache_read_price_per_m", 0.0) or 0.0)
+        output_price_per_m = float(getattr(llm_cfg, "output_price_per_m", 0.0) or 0.0)
+
+        def _cost_breakdown(
+            *, prompt: int, cached: int, completion: int
+        ) -> tuple[float, float]:
+            """Оценить экономию и полную стоимость одного бакета.
+
+            Args:
+                prompt: Полное число prompt-токенов (включая cached).
+                cached: Из них прочитанных из prompt-cache.
+                completion: Число completion-токенов.
+
+            Returns:
+                Кортеж ``(savings_usd, total_cost_usd)``. Savings — экономия от
+                cache по сравнению с тарифом без cache. Total — фактическая
+                цена с учётом cache_read.
+            """
+            non_cached = max(0, prompt - cached)
+            non_cached_cost = (non_cached / 1_000_000.0) * input_price_per_m
+            cached_cost = (cached / 1_000_000.0) * cache_read_price_per_m
+            output_cost = (completion / 1_000_000.0) * output_price_per_m
+            total = non_cached_cost + cached_cost + output_cost
+            savings = (cached / 1_000_000.0) * (input_price_per_m - cache_read_price_per_m)
+            return round(max(0.0, savings), 6), round(total, 6)
+
         def _format_bucket(bucket: dict[str, Any]) -> dict[str, float | int | None]:
             total_tokens = int(bucket["prompt_tokens"]) + int(bucket["completion_tokens"])
             duration_ms = float(bucket["duration_ms"])
             duration_s = duration_ms / 1000.0
             durations = [float(item) for item in bucket.get("durations_ms", [])]
+            cached = int(bucket.get("cached_tokens") or 0)
+            prompt = int(bucket["prompt_tokens"])
+            completion = int(bucket["completion_tokens"])
+            cache_hit_ratio = (cached / prompt) if prompt > 0 else 0.0
+            cache_savings_usd, total_cost_usd = _cost_breakdown(
+                prompt=prompt, cached=cached, completion=completion
+            )
             return {
                 "calls": int(bucket["calls"]),
                 "duration_ms": round(duration_ms, 3),
                 "duration_s": round(duration_s, 3),
-                "prompt_tokens": int(bucket["prompt_tokens"]),
-                "completion_tokens": int(bucket["completion_tokens"]),
+                "prompt_tokens": prompt,
+                "completion_tokens": completion,
+                "cached_tokens": cached,
                 "total_tokens": total_tokens,
+                "cache_hit_ratio": round(cache_hit_ratio, 6),
+                "cache_savings_usd": cache_savings_usd,
+                "total_cost_usd": total_cost_usd,
                 "avg_duration_ms": round(duration_ms / max(int(bucket["calls"]), 1), 3),
                 "avg_total_tokens": round(total_tokens / max(int(bucket["calls"]), 1), 3),
                 "tokens_per_second": round(total_tokens / duration_s, 3) if duration_s > 0 else None,
@@ -1283,11 +1328,23 @@ class WorldEngine:
 
         slow_calls.sort(key=lambda item: float(item.get("duration_ms") or 0.0), reverse=True)
 
+        overall_cache_hit_ratio = (total_cached / total_prompt) if total_prompt > 0 else 0.0
+        overall_savings_usd, overall_total_cost_usd = _cost_breakdown(
+            prompt=total_prompt, cached=total_cached, completion=total_completion
+        )
+
         return {
             "overall": {
                 "prompt_tokens": total_prompt,
                 "completion_tokens": total_completion,
+                "cached_tokens": total_cached,
                 "total_tokens": total_prompt + total_completion,
+                "cache_hit_ratio": round(overall_cache_hit_ratio, 6),
+                "cache_savings_usd": overall_savings_usd,
+                "total_cost_usd": overall_total_cost_usd,
+                "input_price_per_m": input_price_per_m,
+                "cache_read_price_per_m": cache_read_price_per_m,
+                "output_price_per_m": output_price_per_m,
                 "sum_llm_duration_ms": round(sum_duration_ms, 3),
                 "sum_llm_duration_s": round(sum_duration_ms / 1000.0, 3),
                 "trace_span_s": round(trace_span_seconds, 3),

@@ -42,7 +42,18 @@ def _load_dotenv_if_available() -> None:
 
 
 def create_llm_provider(cfg: LLMConfig) -> LLMProvider:
-    """Создать LLM провайдер по конфигу."""
+    """Создать LLM провайдер по конфигу.
+
+    Если в ``cfg.cache_busting_prefix`` задан непустой префикс, провайдер
+    добавит уникальный маркер в каждое сообщение, что гарантирует промах
+    prompt-cache. Используется в режиме A/B-тестирования эффекта кэша.
+
+    Args:
+        cfg: Настройки LLM-провайдера.
+
+    Returns:
+        Совместимый с протоколом ``LLMProvider`` экземпляр.
+    """
     _load_dotenv_if_available()
     api_key = os.getenv(cfg.api_key_env)
     if not api_key:
@@ -57,6 +68,7 @@ def create_llm_provider(cfg: LLMConfig) -> LLMProvider:
         base_url=base_url,
         provider_order=provider_order,
         use_tool_calls=cfg.use_tool_calls,
+        cache_busting_prefix=cfg.cache_busting_prefix,
     )
 
 

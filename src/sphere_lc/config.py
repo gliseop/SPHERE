@@ -43,7 +43,28 @@ def _normalize_string_list(values: list[str] | tuple[str, ...]) -> list[str]:
 
 
 class LLMConfig(BaseModel):
-    """Настройки LLM-провайдера."""
+    """Настройки LLM-провайдера.
+
+    Помимо стандартных параметров (модель, base_url, температура), включает
+    поля для оценки prompt-cache: тарифы за миллион токенов и опциональный
+    префикс для отключения кэша при A/B-тестах. Тарифы по умолчанию
+    соответствуют ``deepseek/deepseek-v4-flash`` через OpenRouter
+    (``input_price_per_m=0.14``, ``cache_read_price_per_m=0.028``,
+    ``output_price_per_m=0.28``); для других моделей значения переопределяются
+    в сценарии или скриптом-обёрткой.
+
+    Attributes:
+        cache_busting_prefix: Если непустое, провайдер добавляет уникальный
+            префикс в system-сообщение, гарантируя промах prompt-cache на
+            каждом запросе. Используется только в режиме A прогона
+            cache-busting.
+        input_price_per_m: Цена за миллион prompt-токенов в USD без скидки
+            на cache (используется для оценочной полной стоимости и для
+            расчёта экономии вместе с ``cache_read_price_per_m``).
+        cache_read_price_per_m: Цена за миллион токенов, прочитанных из
+            prompt-cache (обычно 0.1-0.5 от ``input_price_per_m``).
+        output_price_per_m: Цена за миллион completion-токенов.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -54,6 +75,10 @@ class LLMConfig(BaseModel):
     temperature: float = 0.0
     use_tool_calls: bool = True
     trace_max_chars: int = 0
+    cache_busting_prefix: str | None = None
+    input_price_per_m: float = 0.14
+    cache_read_price_per_m: float = 0.028
+    output_price_per_m: float = 0.28
 
     @field_validator("provider_order")
     @classmethod
@@ -70,6 +95,21 @@ class LLMConfig(BaseModel):
             seen.add(key)
             out.append(value)
         return out
+
+    @field_validator("input_price_per_m", "cache_read_price_per_m", "output_price_per_m")
+    @classmethod
+    def _validate_price(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("LLM price must be >= 0")
+        return float(v)
+
+    @field_validator("cache_busting_prefix")
+    @classmethod
+    def _normalize_cache_busting_prefix(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = str(v).strip()
+        return cleaned or None
 
 
 class MemoryWeights(BaseModel):

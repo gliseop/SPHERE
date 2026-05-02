@@ -7,6 +7,7 @@ import asyncio
 import concurrent.futures
 import os
 import sys
+import uuid
 from collections.abc import Coroutine
 from collections.abc import Sequence
 from datetime import datetime
@@ -103,10 +104,16 @@ def _cmd_run(args: argparse.Namespace) -> None:
         cfg.runtime.personas_pre_enriched_path = str(args.personas_pre_enriched_path)
     if getattr(args, "governance", None):
         apply_builtin_governance_mode(cfg, args.governance)
+    if bool(getattr(args, "cache_busting", False)):
+        cfg.llm.cache_busting_prefix = uuid.uuid4().hex
     out_dir = Path(args.out) if args.out else Path("results") / datetime.now().strftime("%Y%m%d_%H%M%S")
     artifacts = default_artifacts(out_dir)
 
     console.print(f"[bold]SPHERE-LC run[/bold] scenario={args.scenario} ticks={cfg.ticks} out={out_dir}")
+    if cfg.llm.cache_busting_prefix:
+        console.print(
+            f"[yellow]Prompt cache отключён: cache_busting_prefix={cfg.llm.cache_busting_prefix}[/yellow]"
+        )
 
     with Progress(
         TextColumn("[bold blue]{task.description}"),
@@ -224,6 +231,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=list(BUILTIN_GOVERNANCE_MODES),
         default=None,
         help="Применить built-in governance mode (G0, G1, G2, G3)",
+    )
+    p_run.add_argument(
+        "--cache-busting",
+        action="store_true",
+        help=(
+            "Принудительно отключить prompt-cache провайдера: добавляет "
+            "уникальный префикс с uuid4 в каждое сообщение. Используется "
+            "для A/B-тестирования эффекта prompt-cache."
+        ),
     )
     p_run.set_defaults(fn=_cmd_run)
 

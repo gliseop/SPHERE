@@ -10,7 +10,54 @@ import time
 import traceback
 import uuid
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
+
+
+def _extract_usage(resp_usage: Any) -> dict[str, int]:
+    """Извлечь usage с поддержкой parsing prompt cache токенов.
+
+    OpenRouter и совместимые провайдеры (DeepSeek, Anthropic, OpenAI и др.)
+    возвращают данные о prompt-cache в подполе ``prompt_tokens_details``.
+    Эта функция нормализует структуру вне зависимости от того, отдал ли
+    SDK pydantic-объект, dict или их смесь.
+
+    Args:
+        resp_usage: Объект ``resp.usage`` из ответа провайдера. Может быть
+            pydantic-моделью OpenAI SDK или dict (некоторые SDK-версии
+            и совместимые клиенты).
+
+    Returns:
+        Словарь ``{prompt_tokens, completion_tokens[, cached_tokens]}``.
+        Если ``resp_usage`` пуст или ``None``, возвращается пустой dict.
+    """
+    if resp_usage is None:
+        return {}
+
+    def _get(obj: Any, name: str) -> Any:
+        if isinstance(obj, Mapping):
+            return obj.get(name)
+        return getattr(obj, name, None)
+
+    prompt_tokens = _get(resp_usage, "prompt_tokens")
+    completion_tokens = _get(resp_usage, "completion_tokens")
+    if prompt_tokens is None and completion_tokens is None:
+        return {}
+
+    usage: dict[str, int] = {
+        "prompt_tokens": int(prompt_tokens or 0),
+        "completion_tokens": int(completion_tokens or 0),
+    }
+
+    details = _get(resp_usage, "prompt_tokens_details")
+    if details is not None:
+        cached = _get(details, "cached_tokens")
+        if cached is not None:
+            try:
+                usage["cached_tokens"] = int(cached)
+            except (TypeError, ValueError):
+                pass
+
+    return usage
 
 from ..config import DEFAULT_LLM_MODEL
 from .protocols import LLMProvider, LLMResponse, StructuredLLMResponse
@@ -226,6 +273,7 @@ class OpenAICompatibleProvider:
         cache_path: str | None = None,
         provider_order: list[str] | None = None,
         use_tool_calls: bool = True,
+        cache_busting_prefix: str | None = None,
     ) -> None:
         try:
             from openai import OpenAI
@@ -276,6 +324,8 @@ class OpenAICompatibleProvider:
             if provider_ignore:
                 provider_block["ignore"] = provider_ignore
             self._extra_body = {"provider": provider_block}
+        prefix_value = (cache_busting_prefix or "").strip()
+        self._cache_busting_prefix: str | None = prefix_value or None
 
     def _get_client(self) -> Any:
         client = getattr(self._client_local, "client", None)
@@ -478,6 +528,43 @@ class OpenAICompatibleProvider:
             return 0.01
         return 0.0
 
+    def _build_messages(
+        self,
+        system: str,
+        user: str,
+    ) -> list[dict[str, str]]:
+        """Собрать messages с опциональной cache-busting приставкой.
+
+        Если задан ``cache_busting_prefix``, добавляется отдельная
+        системная message в самое начало с уникальным маркером
+        ``ab_test_cache_busting=<prefix>:<uuid4-token>``. Уникальный токен
+        перегенерируется на каждый вызов, что гарантирует разный
+        prefix у каждого запроса и принудительный промах prompt-cache.
+        Базовый ``system``-блок остаётся неизменным, что не повредит
+        качеству ответов модели.
+
+        Args:
+            system: Системный промпт.
+            user: Пользовательский промпт.
+
+        Returns:
+            Список messages в формате OpenAI chat completions.
+        """
+        if self._cache_busting_prefix:
+            cache_buster_token = uuid.uuid4().hex
+            buster_text = (
+                f"ab_test_cache_busting={self._cache_busting_prefix}:{cache_buster_token}"
+            )
+            return [
+                {"role": "system", "content": buster_text},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+
     def generate(
         self,
         system: str,
@@ -515,10 +602,7 @@ class OpenAICompatibleProvider:
 
         create_kwargs: dict = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": self._build_messages(system, user),
             "temperature": safe_temperature,
         }
         if max_completion_tokens is not None and max_completion_tokens > 0:
@@ -529,12 +613,7 @@ class OpenAICompatibleProvider:
         def _parse(resp: Any) -> tuple[LLMResponse, dict[str, Any]]:
             raw_text = resp.choices[0].message.content or ""
             text = _strip_think_tags(raw_text)
-            usage = {}
-            if resp.usage:
-                usage = {
-                    "prompt_tokens": resp.usage.prompt_tokens,
-                    "completion_tokens": resp.usage.completion_tokens,
-                }
+            usage = _extract_usage(resp.usage)
             return (
                 LLMResponse(text=text, model=self._model, usage=usage),
                 {
@@ -629,10 +708,7 @@ class OpenAICompatibleProvider:
 
         create_kwargs: dict = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": self._build_messages(system, user),
             "temperature": safe_temperature,
             "response_format": {
                 "type": "json_schema",
@@ -654,12 +730,7 @@ class OpenAICompatibleProvider:
             except json.JSONDecodeError:
                 extracted = _extract_json(text)
                 data = json.loads(extracted)
-            usage = {}
-            if resp.usage:
-                usage = {
-                    "prompt_tokens": resp.usage.prompt_tokens,
-                    "completion_tokens": resp.usage.completion_tokens,
-                }
+            usage = _extract_usage(resp.usage)
             return (
                 StructuredLLMResponse(data=data, model=self._model, usage=usage),
                 {
@@ -688,10 +759,7 @@ class OpenAICompatibleProvider:
 
         create_kwargs: dict = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": self._build_messages(system, user),
             "temperature": safe_temperature,
             "tools": [
                 {
@@ -725,12 +793,7 @@ class OpenAICompatibleProvider:
             except json.JSONDecodeError:
                 extracted = _extract_json(text)
                 data = json.loads(extracted)
-            usage = {}
-            if resp.usage:
-                usage = {
-                    "prompt_tokens": resp.usage.prompt_tokens,
-                    "completion_tokens": resp.usage.completion_tokens,
-                }
+            usage = _extract_usage(resp.usage)
             return (
                 StructuredLLMResponse(data=data, model=self._model, usage=usage),
                 {
@@ -756,6 +819,7 @@ def create_provider(
     cache_path: str | None = None,
     provider_order: list[str] | None = None,
     use_tool_calls: bool = True,
+    cache_busting_prefix: str | None = None,
 ) -> LLMProvider:
     """Фабрика LLM-провайдеров.
 
@@ -772,6 +836,8 @@ def create_provider(
             (например, ["DeepInfra", "Groq"]).
         use_tool_calls: Использовать function calling вместо
             json_schema для structured output.
+        cache_busting_prefix: Если непустое, добавляет уникальный префикс
+            в каждое сообщение (для A/B-теста с отключённым prompt-cache).
 
     Returns:
         Экземпляр провайдера.
@@ -797,4 +863,5 @@ def create_provider(
         cache_path=cache_path,
         provider_order=resolved_provider_order,
         use_tool_calls=resolved_use_tool_calls,
+        cache_busting_prefix=cache_busting_prefix,
     )
