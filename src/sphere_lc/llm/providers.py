@@ -103,6 +103,43 @@ def _extract_usage(resp_usage: Any) -> dict[str, int]:
     return usage
 
 
+def _extract_reasoning_content(resp: Any) -> str:
+    """Извлечь reasoning_content (chain-of-thought) из ответа модели.
+
+    DeepSeek native API (deepseek-reasoner, deepseek-chat в режиме
+    рассуждений) возвращает рассуждения модели в поле
+    ``choices[0].message.reasoning_content``. Некоторые OpenRouter-провайдеры
+    кладут аналогичное содержимое в ``choices[0].message.reasoning``.
+    Эта функция аккуратно достаёт текст из обоих вариантов и возвращает
+    пустую строку, если его нет (например, для не-reasoning моделей).
+
+    Args:
+        resp: Объект ответа OpenAI-совместимого SDK.
+
+    Returns:
+        Строка с рассуждением модели или пустая строка.
+    """
+    try:
+        choices = getattr(resp, "choices", None) or (resp.get("choices") if isinstance(resp, Mapping) else None)
+        if not choices:
+            return ""
+        msg = choices[0].message if hasattr(choices[0], "message") else choices[0].get("message")
+        if msg is None:
+            return ""
+        for attr in ("reasoning_content", "reasoning"):
+            if hasattr(msg, attr):
+                value = getattr(msg, attr) or ""
+            elif isinstance(msg, Mapping):
+                value = msg.get(attr) or ""
+            else:
+                value = ""
+            if value:
+                return str(value)
+    except Exception:
+        return ""
+    return ""
+
+
 def _supports_provider_routing(base_url: str | None) -> bool:
     """Проверить, что backend понимает OpenRouter provider routing."""
     return "openrouter" in (base_url or "").lower()
@@ -343,6 +380,12 @@ class OpenAICompatibleProvider:
             0.0, _env_float("SPHERE_LLM_PARSE_RETRY_TEMP_JITTER", 0.1)
         )
         self._log_max_chars = _env_int("SPHERE_LLM_LOG_MAX_CHARS", 0)
+        # Reasoning-цепочки могут быть длинными (тысячи токенов), но они
+        # критически нужны для качественной части анализа. По умолчанию
+        # ограничиваем 8000 символов, чтобы trace.jsonl не разрастался.
+        self._reasoning_log_max_chars = _env_int(
+            "SPHERE_LLM_REASONING_LOG_MAX_CHARS", 8000
+        )
         log_path = _resolve_llm_log_path()
         self._debug_logger = _LLMDebugLogger(log_path, max_chars=self._log_max_chars) if log_path else None
         self._extra_body: dict | None = None
@@ -644,11 +687,18 @@ class OpenAICompatibleProvider:
             raw_text = resp.choices[0].message.content or ""
             text = _strip_think_tags(raw_text)
             usage = _extract_usage(resp.usage)
+            reasoning = _extract_reasoning_content(resp)
+            meta: dict[str, Any] = {}
+            if reasoning:
+                meta["reasoning_content"] = _truncate_text(
+                    reasoning, self._reasoning_log_max_chars
+                )
             return (
-                LLMResponse(text=text, model=self._model, usage=usage),
+                LLMResponse(text=text, model=self._model, usage=usage, meta=meta),
                 {
                     "usage": usage,
                     "raw_text": _truncate_text(raw_text, self._log_max_chars),
+                    **({"reasoning_content": meta["reasoning_content"]} if reasoning else {}),
                 },
             )
 
@@ -811,12 +861,19 @@ class OpenAICompatibleProvider:
                 extracted = _extract_json(text)
                 data = json.loads(extracted)
             usage = _extract_usage(resp.usage)
+            reasoning = _extract_reasoning_content(resp)
+            meta: dict[str, Any] = {}
+            if reasoning:
+                meta["reasoning_content"] = _truncate_text(
+                    reasoning, self._reasoning_log_max_chars
+                )
             return (
-                StructuredLLMResponse(data=data, model=self._model, usage=usage),
+                StructuredLLMResponse(data=data, model=self._model, usage=usage, meta=meta),
                 {
                     "usage": usage,
                     "raw_text": _truncate_text(raw_text, self._log_max_chars),
                     "parsed": data,
+                    **({"reasoning_content": meta["reasoning_content"]} if reasoning else {}),
                 },
             )
 
@@ -874,12 +931,19 @@ class OpenAICompatibleProvider:
                 extracted = _extract_json(text)
                 data = json.loads(extracted)
             usage = _extract_usage(resp.usage)
+            reasoning = _extract_reasoning_content(resp)
+            meta: dict[str, Any] = {}
+            if reasoning:
+                meta["reasoning_content"] = _truncate_text(
+                    reasoning, self._reasoning_log_max_chars
+                )
             return (
-                StructuredLLMResponse(data=data, model=self._model, usage=usage),
+                StructuredLLMResponse(data=data, model=self._model, usage=usage, meta=meta),
                 {
                     "usage": usage,
                     "raw_text": _truncate_text(raw_args, self._log_max_chars),
                     "parsed": data,
+                    **({"reasoning_content": meta["reasoning_content"]} if reasoning else {}),
                 },
             )
 
@@ -984,12 +1048,19 @@ class OpenAICompatibleProvider:
                             f"{_truncate_text(raw_text, 400)!r}"
                         ) from exc
             usage = _extract_usage(resp.usage)
+            reasoning = _extract_reasoning_content(resp)
+            meta: dict[str, Any] = {}
+            if reasoning:
+                meta["reasoning_content"] = _truncate_text(
+                    reasoning, self._reasoning_log_max_chars
+                )
             return (
-                StructuredLLMResponse(data=data, model=self._model, usage=usage),
+                StructuredLLMResponse(data=data, model=self._model, usage=usage, meta=meta),
                 {
                     "usage": usage,
                     "raw_text": _truncate_text(raw_text, self._log_max_chars),
                     "parsed": data,
+                    **({"reasoning_content": meta["reasoning_content"]} if reasoning else {}),
                 },
             )
 

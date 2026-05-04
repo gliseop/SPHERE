@@ -181,6 +181,98 @@ def test_extract_usage_handles_none() -> None:
     assert _extract_usage(None) == {}
 
 
+def test_extract_reasoning_content_from_message_attr() -> None:
+    """``reasoning_content`` читается из атрибута message reasoning_content (DeepSeek native)."""
+    from sphere_lc.llm.providers import _extract_reasoning_content
+
+    @dataclass
+    class _StubMessageWithReasoning:
+        content: str
+        reasoning_content: str = ""
+        tool_calls: list[Any] | None = None
+
+    @dataclass
+    class _Choice:
+        message: _StubMessageWithReasoning
+
+    @dataclass
+    class _Resp:
+        choices: list[_Choice]
+
+    resp = _Resp(
+        choices=[
+            _Choice(
+                message=_StubMessageWithReasoning(
+                    content="ok",
+                    reasoning_content="Думаю: A → B → C, делаю вывод.",
+                )
+            )
+        ]
+    )
+    assert _extract_reasoning_content(resp) == "Думаю: A → B → C, делаю вывод."
+
+
+def test_extract_reasoning_content_falls_back_to_reasoning_field() -> None:
+    """Альтернативное поле ``reasoning`` (OpenRouter) тоже читается."""
+    from sphere_lc.llm.providers import _extract_reasoning_content
+
+    @dataclass
+    class _MsgReasoning:
+        content: str
+        reasoning: str = ""
+        tool_calls: list[Any] | None = None
+
+    @dataclass
+    class _Choice:
+        message: _MsgReasoning
+
+    @dataclass
+    class _Resp:
+        choices: list[_Choice]
+
+    resp = _Resp(choices=[_Choice(message=_MsgReasoning(content="x", reasoning="thought"))])
+    assert _extract_reasoning_content(resp) == "thought"
+
+
+def test_extract_reasoning_content_returns_empty_when_missing() -> None:
+    """Для не-reasoning моделей возвращает пустую строку, не падая."""
+    from sphere_lc.llm.providers import _extract_reasoning_content
+
+    resp = _StubResponse(
+        choices=[_StubChoice(message=_StubMessage(content="ok"))],
+        usage=_StubUsage(prompt_tokens=10, completion_tokens=2),
+    )
+    assert _extract_reasoning_content(resp) == ""
+
+
+def test_provider_generate_persists_reasoning_in_meta() -> None:
+    """``generate`` кладёт reasoning_content в meta LLMResponse при наличии."""
+
+    @dataclass
+    class _MsgR:
+        content: str
+        reasoning_content: str = ""
+        tool_calls: list[Any] | None = None
+
+    @dataclass
+    class _ChoiceR:
+        message: _MsgR
+
+    def factory():
+        return _StubResponse(
+            choices=[_ChoiceR(message=_MsgR(content="answer", reasoning_content="step1, step2"))],
+            usage=_StubUsage(prompt_tokens=50, completion_tokens=5),
+        )
+
+    client = _StubClient(factory)
+    provider = _make_provider(client)
+    provider._reasoning_log_max_chars = 8000
+
+    resp = provider.generate(system="sys", user="usr")
+    assert resp.text == "answer"
+    assert resp.meta.get("reasoning_content") == "step1, step2"
+
+
 def test_provider_generate_picks_cached_tokens() -> None:
     """`OpenAICompatibleProvider.generate` кладёт cached_tokens в LLMResponse."""
 

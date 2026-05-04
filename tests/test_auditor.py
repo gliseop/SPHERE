@@ -1434,6 +1434,227 @@ def test_runtime_auditor_keeps_self_violation_with_subject_equals_target(
     assert not warnings, "Для self_-типов warning self_counterparty не нужен"
 
 
+class _NullTargetSubjectInEvidenceProvider(MockLLMProvider):
+    """Mock LLM, оставляющий target пустым; evidence_refs содержит только subject.
+
+    Воспроизводит реальный паттерн пилота: модель не заполняет
+    ``target_agent_id`` (или ставит null), а в ``evidence_refs`` единственный
+    участник — сам субъект. До фикса post-validation ``_first_event_target_agent_id``
+    возвращал id субъекта, и finding эмитился с ``subject==target``.
+    """
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data={
+                "findings": [
+                    {
+                        "subject_agent_id": "agent:off_1",
+                        "target_agent_id": None,
+                        "violation_type": "conflict_of_interest",
+                        "risk_family": "conflict_of_interest",
+                        "confidence": 0.9,
+                        "summary": "Подозрительная активность субъекта.",
+                        "mechanism": "self-action",
+                        "evidence_refs": [
+                            {
+                                "tick": 1,
+                                "event_type": "work_note_added",
+                                "actor_id": "agent:off_1",
+                                "target_agent_id": "agent:off_1",
+                            }
+                        ],
+                    }
+                ]
+            },
+            model="mock",
+        )
+
+
+class _NullTargetWithAlternateInEvidenceProvider(MockLLMProvider):
+    """Mock LLM с пустым target и альтернативным участником в evidence_refs.
+
+    После фикса post-validation должна сработать перепись: target берётся
+    из второго ref (``agent:off_2``), а warning имеет
+    ``decision="rewritten_post_validation"``.
+    """
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data={
+                "findings": [
+                    {
+                        "subject_agent_id": "agent:off_1",
+                        "target_agent_id": None,
+                        "violation_type": "conflict_of_interest",
+                        "risk_family": "conflict_of_interest",
+                        "confidence": 0.9,
+                        "summary": "Координация перед голосованием.",
+                        "mechanism": "private contact",
+                        "evidence_refs": [
+                            {
+                                "tick": 1,
+                                "event_type": "work_note_added",
+                                "actor_id": "agent:off_1",
+                                "target_agent_id": "agent:off_1",
+                            },
+                            {
+                                "tick": 1,
+                                "event_type": "message_sent",
+                                "actor_id": "agent:off_1",
+                                "target_agent_id": "agent:off_2",
+                            },
+                        ],
+                    }
+                ]
+            },
+            model="mock",
+        )
+
+
+def test_postprocess_does_not_set_subject_as_target(tmp_path: Path) -> None:
+    """``_first_event_target_agent_id`` не возвращает subject из evidence_refs.
+
+    Сценарий пилота G3: модель оставила target пустым, и в evidence_refs
+    единственный участник — сам субъект. До фикса
+    ``_first_event_target_agent_id`` заполнял ``target_agent_id``
+    значением subject, что приводило к 16 audit-событиям с
+    ``subject==target``. После фикса target остаётся ``None``.
+    """
+
+    state = _mk_state()
+    state.tick = 2
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm", actor_id="agent:auditor"),
+        llm=LLMCaller(
+            provider=_NullTargetSubjectInEvidenceProvider(),
+            trace=TraceLog(tmp_path / "trace.jsonl"),
+        ),
+    )
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=[],
+            recent_events=[],
+        )
+    )
+
+    for finding in outcome.findings:
+        assert finding.target_agent_id != finding.subject_agent_id, (
+            f"Finding не должен иметь subject==target, получили "
+            f"subject={finding.subject_agent_id} target={finding.target_agent_id}"
+        )
+
+
+def test_postprocess_picks_alternate_target_skipping_subject_in_evidence(tmp_path: Path) -> None:
+    """``_first_event_target_agent_id`` пропускает subject и выбирает следующий ref.
+
+    Если первый ref содержит subject (мусор сериализации), а во втором ref
+    есть другой агент — финальный target будет указывать на этого агента.
+    """
+
+    state = _mk_state()
+    state.tick = 2
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm", actor_id="agent:auditor"),
+        llm=LLMCaller(
+            provider=_NullTargetWithAlternateInEvidenceProvider(),
+            trace=TraceLog(tmp_path / "trace.jsonl"),
+        ),
+    )
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=[],
+            recent_events=[],
+        )
+    )
+
+    assert outcome.findings, "Finding с альтернативным target не должен быть отброшен"
+    assert outcome.findings[0].target_agent_id == "agent:off_2"
+    assert outcome.findings[0].subject_agent_id == "agent:off_1"
+
+
+def test_collegial_review_excludes_subject_from_reviewers(tmp_path: Path) -> None:
+    """Защитный тест: subject своего же дела не должен попадать в reviewers.
+
+    Регрессионная проверка для bug 2 пилота. Открываем коллегиальный
+    обзор для subject ``agent:off_1`` через ``_open_collegial_review``;
+    ожидаем, что в payload OpenVoteOp.voters субъекта нет.
+    """
+
+    from sphere_lc.auditor import AuditFinding
+
+    state = _mk_state()
+    state.agents["agent:off_3"] = AgentState(
+        agent_id="agent:off_3",
+        name="agent:off_3",
+        internal=True,
+        capabilities=["dao", "message"],
+    )
+    state.tick = 3
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(
+            enabled=True,
+            mode="llm",
+            actor_id="agent:auditor",
+            collegial_review_enabled=True,
+            min_confidence_to_review=0.5,
+            review_jury_size=3,
+        ),
+    )
+    finding = AuditFinding(
+        finding_id="finding:1",
+        source="llm",
+        tick=3,
+        subject_agent_id="agent:off_1",
+        target_agent_id="agent:off_2",
+        violation_type="conflict_of_interest",
+        violation_type_freeform="",
+        risk_family="conflict_of_interest",
+        severity="medium",
+        confidence=0.9,
+        summary="Тест",
+        mechanism="",
+        beneficiary=None,
+        risk_tags=[],
+        recommended_action="route_to_collegial_review",
+        related_agent_ids=["agent:off_2"],
+        evidence_refs=[],
+        notes="",
+    )
+
+    ops, events, vote_id = auditor._open_collegial_review(
+        state=state,
+        finding=finding,
+        actor_id="agent:auditor",
+        case_id="audit_case:test",
+        current_tick=3,
+    )
+
+    assert ops, "Ожидался OpenVoteOp"
+    open_vote_op = ops[0]
+    assert "agent:off_1" not in open_vote_op.voters, (
+        f"Subject не должен быть среди reviewers, получили {open_vote_op.voters}"
+    )
+    assert "agent:off_2" not in open_vote_op.voters, (
+        "related_agent_id (counterparty) тоже исключается"
+    )
+
+
 class _NoOpAuditorProvider(MockLLMProvider):
     """Mock LLM без findings — нужен только чтобы пропустить вызов через цепочку."""
 

@@ -1353,7 +1353,9 @@ class RuntimeAuditor:
             recent_events=recent_events,
             current_tick=current_tick,
         )
-        target_agent_id = finding.target_agent_id or self._first_event_target_agent_id(evidence_refs)
+        target_agent_id = finding.target_agent_id or self._first_event_target_agent_id(
+            evidence_refs, subject_agent_id=finding.subject_agent_id
+        )
         normalized_violation_type = str(finding.violation_type or "").strip() or "other"
         normalized_freeform = str(finding.violation_type_freeform or "").strip()
         suggested_action = finding.recommended_action
@@ -1382,7 +1384,10 @@ class RuntimeAuditor:
                         normalized_freeform = normalized_violation_type
                     normalized_violation_type = canonical_violation_type
                 verified_target_id = str(verdict.target_agent_id or "").strip()
-                if verified_target_id in state.agents:
+                if (
+                    verified_target_id in state.agents
+                    and verified_target_id != finding.subject_agent_id
+                ):
                     target_agent_id = verified_target_id
                 if str(verdict.recommended_action or "").strip():
                     suggested_action = str(verdict.recommended_action or "").strip()
@@ -1396,6 +1401,61 @@ class RuntimeAuditor:
             confidence = min(confidence, float(self.cfg.external_subject_confidence_cap))
         if normalized_violation_type.startswith("self_") and not target_agent_id:
             target_agent_id = finding.subject_agent_id
+        is_self_violation_norm = normalized_violation_type.startswith("self_") or (
+            normalized_violation_type in {"self_reputation_award", "self_nomination"}
+        )
+        if (
+            target_agent_id == finding.subject_agent_id
+            and not is_self_violation_norm
+        ):
+            replacement = self._extract_alternate_target_from_refs(
+                evidence_refs=evidence_refs,
+                subject_agent_id=finding.subject_agent_id,
+                state=state,
+            )
+            if replacement is None:
+                for aid in finding.related_agent_ids or []:
+                    if aid != finding.subject_agent_id and aid in state.agents:
+                        replacement = aid
+                        break
+            if replacement is None:
+                self._self_counterparty_filtered += 1
+                self._self_counterparty_filter_events.append(
+                    Event(
+                        tick=current_tick,
+                        event_type="audit_runtime_warning",
+                        actor_id=self.cfg.actor_id,
+                        payload={
+                            "reason": "self_counterparty",
+                            "subject_agent_id": finding.subject_agent_id,
+                            "violation_type": normalized_violation_type,
+                            "summary": finding.summary,
+                            "decision": "dropped_post_validation",
+                            "stage": "postprocess",
+                        },
+                        audience=[INTERNAL_AUDIENCE],
+                    )
+                )
+                return None
+            self._self_counterparty_filtered += 1
+            self._self_counterparty_filter_events.append(
+                Event(
+                    tick=current_tick,
+                    event_type="audit_runtime_warning",
+                    actor_id=self.cfg.actor_id,
+                    payload={
+                        "reason": "self_counterparty",
+                        "subject_agent_id": finding.subject_agent_id,
+                        "violation_type": normalized_violation_type,
+                        "summary": finding.summary,
+                        "decision": "rewritten_post_validation",
+                        "replacement_target_agent_id": replacement,
+                        "stage": "postprocess",
+                    },
+                    audience=[INTERNAL_AUDIENCE],
+                )
+            )
+            target_agent_id = replacement
         if not self._finding_has_min_runtime_support(
             finding=finding,
             evidence_refs=evidence_refs,
@@ -1749,12 +1809,30 @@ class RuntimeAuditor:
             return to_id
         return None
 
-    def _first_event_target_agent_id(self, evidence_refs: list[dict[str, Any]]) -> str | None:
+    def _first_event_target_agent_id(
+        self,
+        evidence_refs: list[dict[str, Any]],
+        *,
+        subject_agent_id: str | None = None,
+    ) -> str | None:
+        """Первый ``agent:*`` id из evidence_refs, отличный от subject.
+
+        Args:
+            evidence_refs: Нормализованные ссылки на события.
+            subject_agent_id: Если задан — id, который НЕ должен возвращаться
+                (защита от self-counterparty).
+
+        Returns:
+            Первый подходящий agent id или ``None``.
+        """
         for ref in evidence_refs:
             for key in ("target_agent_id", "to_id", "counterparty_agent_id", "related_target_agent_id"):
                 value = str(ref.get(key) or "").strip()
-                if value.startswith("agent:"):
-                    return value
+                if not value.startswith("agent:"):
+                    continue
+                if subject_agent_id and value == subject_agent_id:
+                    continue
+                return value
         return None
 
     def _case_id_for_finding(self, finding: AuditFinding) -> str:
