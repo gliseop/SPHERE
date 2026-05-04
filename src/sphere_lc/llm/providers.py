@@ -12,6 +12,24 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from ..config import DEFAULT_LLM_MODEL
+from .protocols import LLMProvider, LLMResponse, StructuredLLMResponse
+from .cache import LLMCache
+from ._utils import (
+    LLMCallError,
+    _env_float,
+    _env_int,
+    _extract_json,
+    _jsonable,
+    _resolve_llm_log_path,
+    _sanitize_create_kwargs,
+    _should_log_errors,
+    _should_log_success,
+    _strip_think_tags,
+    _truncate_text,
+)
+from ._debug_logger import _LLMDebugLogger
+
 
 def _extract_usage(resp_usage: Any) -> dict[str, int]:
     """Извлечь usage с поддержкой parsing prompt cache токенов.
@@ -57,25 +75,15 @@ def _extract_usage(resp_usage: Any) -> dict[str, int]:
             except (TypeError, ValueError):
                 pass
 
-    return usage
+    if "cached_tokens" not in usage:
+        cached_native = _get(resp_usage, "prompt_cache_hit_tokens")
+        if cached_native is not None:
+            try:
+                usage["cached_tokens"] = int(cached_native)
+            except (TypeError, ValueError):
+                pass
 
-from ..config import DEFAULT_LLM_MODEL
-from .protocols import LLMProvider, LLMResponse, StructuredLLMResponse
-from .cache import LLMCache
-from ._utils import (
-    LLMCallError,
-    _env_float,
-    _env_int,
-    _extract_json,
-    _jsonable,
-    _resolve_llm_log_path,
-    _sanitize_create_kwargs,
-    _should_log_errors,
-    _should_log_success,
-    _strip_think_tags,
-    _truncate_text,
-)
-from ._debug_logger import _LLMDebugLogger
+    return usage
 
 
 def _supports_provider_routing(base_url: str | None) -> bool:

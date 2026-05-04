@@ -1,0 +1,305 @@
+{
+  "version": 1,
+  "title": "Тендер на ремонт школ: кумовство и контроль",
+  "description": "Администрация Заречного района запускает политически чувствительный тендер на капитальный ремонт трёх школ общей стоимостью 47,2 млн руб. Формально это обычная закупка в рамках подготовки к новому учебному году, но внутри процесса накапливается несколько линий напряжения: начальник отдела закупок давно связан с директором одного из подрядчиков, молодой специалист замечает нестандартную подстройку документации под знакомую фирму, а заместитель главы администрации требует результата без медийного скандала и задержек по срокам. Сценарий моделирует не только сам конфликт интересов, но и то, как на него влияют процедурные дедлайны, жалобы родителей, репутационные риски и поведение runtime-аудита в среде, где возможны новые периферийные акторы и вторичные связи.\n",
+  "ticks": 12,
+  "llm": {
+    "model": "deepseek-chat",
+    "base_url": "https://api.deepseek.com/v1",
+    "temperature": 0.25,
+    "use_tool_calls": true,
+    "trace_max_chars": 0,
+    "input_price_per_m": 0.14,
+    "cache_read_price_per_m": 0.0028,
+    "output_price_per_m": 0.28,
+    "api_key_env": "DEEPSEEK_API_KEY"
+  },
+  "runtime": {
+    "language": "ru",
+    "start_date": "2026-03-09",
+    "tick_duration_days": 1,
+    "max_actions_per_turn": 3,
+    "tick_events_history": 300,
+    "enrich_personas": true,
+    "persona_enrich_mode": "core",
+    "spawn_secondary": true,
+    "max_secondary_per_agent": 1,
+    "max_agents": 9,
+    "allow_runtime_spawn": true,
+    "agent_prompt": {
+      "extra_rules": [
+        "Если хочешь написать конкретному участнику, не оформляй этот шаг как публикацию в канале: личное сообщение и публичный пост должны быть разными шагами."
+      ]
+    },
+    "freeform_truth_enabled": true,
+    "enable_worldgen": true,
+    "worldgen_every_ticks": 3
+  },
+  "memory": {
+    "working_max_entries": 50,
+    "working_summarize_batch": 25,
+    "embeddings_mock": false
+  },
+  "governance": {
+    "position_policy": "dao",
+    "dao_voters": [
+      "agent:head",
+      "agent:spec",
+      "agent:deputy"
+    ],
+    "quorum": 0.5,
+    "pass_threshold": 0.5,
+    "vote_duration_ticks": 3,
+    "require_consent": true,
+    "audit": {
+      "enabled": true,
+      "actor_id": null,
+      "collegial_review_enabled": true
+    }
+  },
+  "agents": [
+    {
+      "agent_id": "agent:head",
+      "name": "Волков А.С.",
+      "internal": true,
+      "persona": "Начальник отдела закупок администрации Заречного района, 48 лет. Пятнадцать лет работает в муниципальной системе и привык воспринимать закупку не как юридическую процедуру, а как управляемый процесс, где результат важнее чистоты маршрута. Уверен, что без неформальных договорённостей крупные подрядчики всё равно не заходят в районные проекты, поэтому давно оправдывает для себя «дружескую координацию» с проверенными контрагентами. С директором ООО «СтройГарант» Петровым знаком ещё со студенческих лет, регулярно пересекается на отраслевых мероприятиях и считает его «надёжным исполнителем, с которым не будет сюрпризов». Хочет показать руководству управляемость процесса и получить повышение до руководителя департамента. При прямом давлении осторожен: избегает откровенных формулировок, предпочитает намёки, корректировку документации и процедурные мелочи, которые сложно сразу трактовать как нарушение.\n",
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:admin",
+      "zone_id": "zone:procurement_office",
+      "initial_title": "начальник отдела закупок",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:spec",
+      "name": "Новикова Е.В.",
+      "internal": true,
+      "persona": "Специалист отдела закупок, 26 лет. Второй год работает после окончания юридического факультета и всё ещё воспринимает муниципальную службу как сферу, где процедуры действительно должны защищать общественный интерес. Она внимательно читает конкурсную документацию, замечает несоразмерные требования к опыту подрядчика, странные сроки подачи разъяснений и неформально тёплое общение начальника с одним из участников рынка. Внутри у неё конфликт между профессиональной добросовестностью и страхом: работа нужна для выплаты ипотеки, а открытый конфликт с руководством может быстро закончить карьеру. Склонна искать формально корректные каналы реакции, долго колеблется, но при накоплении доказательств способна выйти на аудитора или публично зафиксировать несостыковки.\n",
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:admin",
+      "zone_id": "zone:procurement_office",
+      "initial_title": "специалист",
+      "wants_promotion": true
+    },
+    {
+      "agent_id": "agent:contractor",
+      "name": "Петров Д.Н.",
+      "internal": false,
+      "persona": "Директор ООО «СтройГарант», 52 года. Двенадцать лет работает на рынке муниципальных заказов и убеждён, что выигрыш определяется не только сметой и квалификацией, но и тем, кто раньше понял неформальные ожидания заказчика. С Волковым знаком со времён политеха и воспринимает эту связь как инвестицию, которую нужно периодически капитализировать в виде контрактов и взаимных услуг. В переговорах умеет говорить намёками, подавать «подсказки» по конкурсной документации и оформлять рискованные предложения в максимально легальном тоне. Если запахнет проверкой, мгновенно становится образцово формальным, ссылается на рынок, опыт компании и якобы объективные требования по качеству.\n",
+      "capabilities": [
+        "message"
+      ],
+      "org_id": "org:stroygarant",
+      "zone_id": "zone:contractor_office",
+      "initial_title": "директор",
+      "wants_promotion": false
+    },
+    {
+      "agent_id": "agent:deputy",
+      "name": "Марченко Т.Л.",
+      "internal": true,
+      "persona": "Заместитель главы администрации Заречного района, 55 лет. Курирует хозяйственный блок и оценивает ситуацию прежде всего политически: родители и депутаты ждут, что школы будут отремонтированы к сентябрю, а областное руководство не примет срывов сроков. Не заинтересован в коррупционной схеме как таковой, но считает, что управленец не должен выносить внутренние проблемы наружу, если объект можно сдать вовремя. Поддержит того, кто предложит реалистичный план и не превратит закупку в публичный кризис. Настоящую жёсткость проявляет только тогда, когда риск скандала становится выше риска замалчивания.\n",
+      "capabilities": [
+        "message",
+        "work",
+        "dao"
+      ],
+      "org_id": "org:admin",
+      "zone_id": "zone:admin_boardroom",
+      "initial_title": "заместитель главы",
+      "wants_promotion": false
+    }
+  ],
+  "world": {
+    "channels": [
+      {
+        "channel_id": "chan:public",
+        "title": "Официальный канал администрации"
+      },
+      {
+        "channel_id": "chan:procurement",
+        "title": "Канал отдела закупок"
+      },
+      {
+        "channel_id": "chan:oversight",
+        "title": "Внутренний канал контрольного блока"
+      }
+    ],
+    "orgs": [
+      {
+        "org_id": "org:admin",
+        "title": "Администрация Заречного района"
+      },
+      {
+        "org_id": "org:stroygarant",
+        "title": "ООО «СтройГарант»"
+      }
+    ],
+    "work_items": [
+      {
+        "work_id": "work:T-001",
+        "work_type": "procurement_tender",
+        "title": "Тендер: капремонт школ №12, №17, №23",
+        "description": "Открытый конкурс на выполнение капитального ремонта трёх школ Заречного района. В состав работ входят усиление кровли, замена электрики, частичная модернизация пищеблоков и ремонт спортивных залов. Начальная максимальная цена контракта — 47 200 000 руб., срок выполнения — 8 месяцев. До конца текущего периода необходимо закрыть этап разъяснений и согласовать финальную редакцию конкурсной документации. Конкурсная комиссия включает Волкова А.С. и Новикову Е.В., финальное управленческое согласование делает Марченко Т.Л.\n",
+        "participants": [
+          "agent:head",
+          "agent:spec",
+          "agent:contractor"
+        ]
+      },
+      {
+        "work_id": "work:A-001",
+        "work_type": "audit_review",
+        "title": "Плановая проверка закупочных процедур Q1",
+        "description": "Плановый аудит закупок за первый квартал. В фокусе — корректность обоснования начальной цены, возможный конфликт интересов, полнота конкурсного досье, а также история частных контактов между сотрудниками администрации и участниками торгов. Любая нестабильность по тендеру может быстро перевести эту проверку из фоновой в приоритетную.\n",
+        "participants": [
+          "agent:head",
+          "agent:spec"
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "artifact_id": "art:tender_dossier",
+        "artifact_type": "procurement_file",
+        "title": "Конкурсное досье по ремонту школ",
+        "summary": "Сводный пакет закупочной документации с техническим заданием, проектом контракта и пояснительной запиской по срокам.\n",
+        "owner_org_id": "org:admin",
+        "zone_id": "zone:procurement_office",
+        "related_work_id": "work:T-001",
+        "visibility": "internal",
+        "status": "draft",
+        "tags": [
+          "тендер",
+          "документы",
+          "школы"
+        ]
+      },
+      {
+        "artifact_id": "art:defect_report",
+        "artifact_type": "inspection_report",
+        "title": "Дефектная ведомость по школам",
+        "summary": "Инженерная сводка с фотографиями протечек, жалобами директоров школ и перечнем критичных работ, которые нельзя переносить на осень.\n",
+        "owner_org_id": "org:admin",
+        "zone_id": "zone:school_cluster",
+        "related_work_id": "work:T-001",
+        "visibility": "internal",
+        "status": "active",
+        "tags": [
+          "обследование",
+          "ремонт",
+          "риски"
+        ]
+      },
+      {
+        "artifact_id": "art:citizen_digest",
+        "artifact_type": "complaint_digest",
+        "title": "Дайджест обращений родителей",
+        "summary": "Подборка обращений о холодных классах, аварийных санузлах и опасениях, что ремонт снова уйдёт в перенос из-за бюрократических проволочек.\n",
+        "owner_org_id": "org:admin",
+        "zone_id": "zone:admin_boardroom",
+        "related_work_id": "work:T-001",
+        "visibility": "internal",
+        "status": "active",
+        "tags": [
+          "родители",
+          "жалобы",
+          "общественное давление"
+        ]
+      }
+    ],
+    "environment": {
+      "institution_modes": [
+        {
+          "org_id": "org:admin",
+          "operating_mode": "strained",
+          "transparency_mode": "limited",
+          "access_mode": "restricted",
+          "security_mode": "heightened",
+          "capture_risk": "high",
+          "linked_zone_ids": [
+            "zone:procurement_office",
+            "zone:school_cluster",
+            "zone:admin_boardroom"
+          ]
+        },
+        {
+          "org_id": "org:stroygarant",
+          "operating_mode": "opportunistic",
+          "transparency_mode": "selective",
+          "access_mode": "internal",
+          "security_mode": "routine",
+          "capture_risk": "medium",
+          "linked_zone_ids": [
+            "zone:contractor_office"
+          ]
+        }
+      ],
+      "zones": [
+        {
+          "zone_id": "zone:procurement_office",
+          "title": "Отдел закупок",
+          "zone_type": "office",
+          "primary_org_id": "org:admin",
+          "access_mode": "controlled",
+          "transparency_mode": "internal",
+          "security_level": "heightened"
+        },
+        {
+          "zone_id": "zone:admin_boardroom",
+          "title": "Кабинет заместителя главы",
+          "zone_type": "office",
+          "primary_org_id": "org:admin",
+          "access_mode": "restricted",
+          "transparency_mode": "internal",
+          "security_level": "heightened"
+        },
+        {
+          "zone_id": "zone:school_cluster",
+          "title": "Кластер ремонтируемых школ",
+          "zone_type": "public_infrastructure",
+          "primary_org_id": "org:admin",
+          "access_mode": "mixed",
+          "transparency_mode": "public",
+          "security_level": "routine"
+        },
+        {
+          "zone_id": "zone:contractor_office",
+          "title": "Офис ООО «СтройГарант»",
+          "zone_type": "office",
+          "primary_org_id": "org:stroygarant",
+          "access_mode": "controlled",
+          "transparency_mode": "private",
+          "security_level": "routine"
+        }
+      ],
+      "resource_pools": [
+        {
+          "resource_id": "res:schools_capex",
+          "title": "Бюджет капремонта школ",
+          "owner_org_id": "org:admin",
+          "quantity": 47200,
+          "unit": "тыс. руб.",
+          "status": "strained",
+          "pressure": "Денег достаточно только при жёстком соблюдении графика и без дополнительных переделок по ходу ремонта.\n"
+        },
+        {
+          "resource_id": "res:contingency_reserve",
+          "title": "Резервный фонд на внеплановые работы",
+          "owner_org_id": "org:admin",
+          "quantity": 6800,
+          "unit": "тыс. руб.",
+          "status": "guarded",
+          "pressure": "Финансисты не хотят вскрывать резерв до публикации итогов конкурса, поэтому любое удорожание станет политической проблемой.\n"
+        }
+      ]
+    }
+  }
+}
