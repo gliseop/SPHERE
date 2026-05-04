@@ -32,10 +32,17 @@ from ._debug_logger import _LLMDebugLogger
 
 
 def _extract_usage(resp_usage: Any) -> dict[str, int]:
-    """Извлечь usage с поддержкой parsing prompt cache токенов.
+    """Извлечь usage с поддержкой parsing prompt cache и reasoning токенов.
 
     OpenRouter и совместимые провайдеры (DeepSeek, Anthropic, OpenAI и др.)
     возвращают данные о prompt-cache в подполе ``prompt_tokens_details``.
+    DeepSeek-reasoner дополнительно возвращает
+    ``completion_tokens_details.reasoning_tokens`` — число токенов,
+    которое модель потратила на внутренние рассуждения. Это часть
+    completion (отдельной платы за reasoning_tokens у DeepSeek нет, но
+    знание величины полезно для планирования стоимости и для понимания,
+    почему completion-time больше обычного).
+
     Эта функция нормализует структуру вне зависимости от того, отдал ли
     SDK pydantic-объект, dict или их смесь.
 
@@ -45,8 +52,9 @@ def _extract_usage(resp_usage: Any) -> dict[str, int]:
             и совместимые клиенты).
 
     Returns:
-        Словарь ``{prompt_tokens, completion_tokens[, cached_tokens]}``.
-        Если ``resp_usage`` пуст или ``None``, возвращается пустой dict.
+        Словарь ``{prompt_tokens, completion_tokens[, cached_tokens]
+        [, reasoning_tokens]}``. Если ``resp_usage`` пуст или ``None``,
+        возвращается пустой dict.
     """
     if resp_usage is None:
         return {}
@@ -80,6 +88,15 @@ def _extract_usage(resp_usage: Any) -> dict[str, int]:
         if cached_native is not None:
             try:
                 usage["cached_tokens"] = int(cached_native)
+            except (TypeError, ValueError):
+                pass
+
+    details_completion = _get(resp_usage, "completion_tokens_details")
+    if details_completion is not None:
+        reasoning = _get(details_completion, "reasoning_tokens")
+        if reasoning is not None:
+            try:
+                usage["reasoning_tokens"] = int(reasoning)
             except (TypeError, ValueError):
                 pass
 
@@ -282,6 +299,7 @@ class OpenAICompatibleProvider:
         provider_order: list[str] | None = None,
         use_tool_calls: bool = True,
         cache_busting_prefix: str | None = None,
+        structured_mode: str = "tool_call",
     ) -> None:
         try:
             from openai import OpenAI
@@ -305,6 +323,10 @@ class OpenAICompatibleProvider:
         self._model = model
         self._cache = LLMCache(cache_path) if cache_path else None
         self._use_tool_calls = use_tool_calls
+        normalized_mode = (structured_mode or "").strip().lower()
+        if normalized_mode not in ("tool_call", "json_schema", "json_object"):
+            normalized_mode = "tool_call"
+        self._structured_mode = normalized_mode
         self._max_retries = max(0, _env_int("SPHERE_LLM_MAX_RETRIES", 2))
         # Дополнительный бюджет ретраев именно для парс-ошибок (пустой JSON):
         # SDK ретраит сетевые коды, но не реагирует на пустой ответ модели.
@@ -650,9 +672,14 @@ class OpenAICompatibleProvider:
     ) -> StructuredLLMResponse:
         """Сгенерировать structured-ответ через OpenAI API.
 
-        Поддерживает два режима: json_schema (response_format)
-        и tool_calls (function calling). Режим tool_calls часто
-        работает быстрее на провайдерах с высоким throughput.
+        Поддерживает три режима, выбираемых через ``self._structured_mode``:
+        ``tool_call`` (function calling, default), ``json_schema``
+        (``response_format=json_schema``) и ``json_object``
+        (``response_format=json_object`` без strict-схемы — для reasoning
+        моделей DeepSeek, которые не поддерживают tool_call/json_schema).
+        Режим ``tool_call`` падает с graceful fallback в ``json_schema``,
+        затем в ``json_object``: первая успешная ветвь возвращается, что
+        позволяет переключаться между моделями без изменений кода вызывающего.
 
         Args:
             system: Системный промпт.
@@ -663,7 +690,34 @@ class OpenAICompatibleProvider:
         Returns:
             Structured-ответ LLM.
         """
-        if self._use_tool_calls:
+        if self._structured_mode == "json_object":
+            return self._structured_via_json_object(
+                system, user, schema, temperature
+            )
+
+        if self._structured_mode == "json_schema":
+            try:
+                return self._structured_via_json_schema(
+                    system, user, schema, temperature
+                )
+            except Exception as exc:
+                self._log(
+                    {
+                        "ts": time.time(),
+                        "kind": "structured_fallback",
+                        "model": self._model,
+                        "from": "json_schema",
+                        "to": "tool_call",
+                        "error": {"type": exc.__class__.__name__, "message": str(exc)},
+                    },
+                    is_error=True,
+                )
+                return self._structured_via_tool_call(
+                    system, user, schema, temperature
+                )
+
+        # Default: structured_mode == "tool_call" (или legacy use_tool_calls).
+        if self._structured_mode == "tool_call" or self._use_tool_calls:
             try:
                 return self._structured_via_tool_call(
                     system, user, schema, temperature
@@ -680,10 +734,28 @@ class OpenAICompatibleProvider:
                     },
                     is_error=True,
                 )
-                return self._structured_via_json_schema(
-                    system, user, schema, temperature
-                )
+                try:
+                    return self._structured_via_json_schema(
+                        system, user, schema, temperature
+                    )
+                except Exception as exc2:
+                    self._log(
+                        {
+                            "ts": time.time(),
+                            "kind": "structured_fallback",
+                            "model": self._model,
+                            "from": "json_schema",
+                            "to": "json_object",
+                            "error": {"type": exc2.__class__.__name__, "message": str(exc2)},
+                        },
+                        is_error=True,
+                    )
+                    return self._structured_via_json_object(
+                        system, user, schema, temperature
+                    )
 
+        # use_tool_calls=False и structured_mode != json_object: legacy путь
+        # (json_schema → tool_call fallback).
         try:
             return self._structured_via_json_schema(
                 system, user, schema, temperature
@@ -818,6 +890,151 @@ class OpenAICompatibleProvider:
         )
         return result
 
+    def _is_reasoner_model(self) -> bool:
+        """Проверить, является ли модель reasoning-моделью DeepSeek.
+
+        DeepSeek reasoner-модели игнорируют параметр ``temperature`` и
+        возвращают HTTP 400, если он передан. К этому семейству относятся
+        ``deepseek-reasoner`` и ``deepseek-v4-flash`` в thinking-режиме.
+
+        Returns:
+            ``True``, если по имени модели можно судить о reasoning-режиме.
+        """
+        model_name = (self._model or "").lower()
+        return model_name.startswith("deepseek-reasoner") or "reasoner" in model_name
+
+    def _structured_via_json_object(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float,
+    ) -> StructuredLLMResponse:
+        """Structured output через response_format json_object.
+
+        Этот режим предназначен для reasoning-моделей DeepSeek
+        (``deepseek-reasoner``, ``deepseek-v4-flash`` в thinking-режиме),
+        которые не поддерживают ни ``tool_call`` с ``tool_choice``, ни
+        ``response_format=json_schema``. Поддерживается только
+        ``response_format=json_object`` без strict-схемы, поэтому схема
+        выводится в system-промпт как описание формата, а валидация
+        перекладывается на саму модель.
+
+        Логика парсинга: если возвращённый текст не парсится как JSON,
+        делается попытка очистить markdown-обёртки (`````json ... ```` `)
+        и повторить ``json.loads``. Если и это падает — поднимается
+        ``LLMCallError`` с понятным сообщением.
+
+        Args:
+            system: Системный промпт.
+            user: Пользовательский промпт.
+            schema: JSON-схема ожидаемого ответа (превращается в текст).
+            temperature: Температура генерации. Игнорируется на
+                reasoning-моделях DeepSeek (см. ``_is_reasoner_model``).
+
+        Returns:
+            Структурированный ответ.
+
+        Raises:
+            LLMCallError: если ответ модели не удалось распарсить как JSON
+                ни напрямую, ни после удаления markdown-обёртки.
+        """
+        schema_text = json.dumps(schema, ensure_ascii=False, indent=2)
+        format_block = (
+            "\n\n=== JSON OUTPUT FORMAT ===\n"
+            "Верните ответ строго в формате JSON, соответствующего следующей "
+            "схеме (не повторяйте схему, верните только данные):\n"
+            f"{schema_text}\n\n"
+            "Ответ должен быть валидным JSON-объектом без markdown-обёртки, "
+            "без префиксов и без комментариев."
+        )
+        enriched_system = (system or "") + format_block
+
+        create_kwargs: dict = {
+            "model": self._model,
+            "messages": self._build_messages(enriched_system, user),
+            "response_format": {"type": "json_object"},
+        }
+        # На reasoning-моделях температура вызывает HTTP 400. Передаём её
+        # только для обычных моделей.
+        if not self._is_reasoner_model():
+            create_kwargs["temperature"] = self._effective_temperature(temperature)
+        if self._extra_body:
+            create_kwargs["extra_body"] = self._extra_body
+
+        def _parse(resp: Any) -> tuple[StructuredLLMResponse, dict[str, Any]]:
+            raw_text = resp.choices[0].message.content or "{}"
+            text = _strip_think_tags(raw_text)
+            data: Any | None = None
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                cleaned = self._strip_markdown_json(text)
+                try:
+                    data = json.loads(cleaned)
+                except json.JSONDecodeError:
+                    # Последняя попытка — извлечь первый JSON-объект из текста.
+                    try:
+                        extracted = _extract_json(cleaned)
+                        data = json.loads(extracted)
+                    except (json.JSONDecodeError, ValueError) as exc:
+                        raise ValueError(
+                            "structured_via_json_object: не удалось распарсить "
+                            f"ответ модели как JSON. raw_preview="
+                            f"{_truncate_text(raw_text, 400)!r}"
+                        ) from exc
+            usage = _extract_usage(resp.usage)
+            return (
+                StructuredLLMResponse(data=data, model=self._model, usage=usage),
+                {
+                    "usage": usage,
+                    "raw_text": _truncate_text(raw_text, self._log_max_chars),
+                    "parsed": data,
+                },
+            )
+
+        result, _meta = self._call_with_retries(
+            kind="structured_json_object",
+            create_kwargs=create_kwargs,
+            parse=_parse,
+        )
+        return result
+
+    @staticmethod
+    def _strip_markdown_json(text: str) -> str:
+        """Убрать markdown-обёртку вокруг JSON-блока.
+
+        Reasoning-модели иногда возвращают ответ как ```json ... ```
+        вопреки явной инструкции «без markdown». Этот хелпер вырезает
+        обёртку безопасно: ищет первый блок ``` (с возможным указанием
+        языка) и берёт содержимое до ближайшего закрывающего ```.
+
+        Args:
+            text: Текст ответа модели.
+
+        Returns:
+            Текст без markdown-обёртки. Если обёртки нет, возвращает вход
+            как есть (со срезанными пробельными символами по краям).
+        """
+        if not text:
+            return text or ""
+        stripped = text.strip()
+        if not stripped.startswith("```"):
+            return stripped
+        # Убираем открывающие ``` и опциональный спецификатор языка (json, JSON и т.п.).
+        without_open = stripped[3:]
+        # Удаляем спецификатор языка до первого перевода строки.
+        newline_idx = without_open.find("\n")
+        if newline_idx != -1:
+            language_marker = without_open[:newline_idx].strip().lower()
+            if language_marker in ("", "json"):
+                without_open = without_open[newline_idx + 1 :]
+        # Снимаем закрывающую ```.
+        close_idx = without_open.rfind("```")
+        if close_idx != -1:
+            without_open = without_open[:close_idx]
+        return without_open.strip()
+
 
 def create_provider(
     mock: bool = True,
@@ -828,6 +1045,7 @@ def create_provider(
     provider_order: list[str] | None = None,
     use_tool_calls: bool = True,
     cache_busting_prefix: str | None = None,
+    structured_mode: str = "tool_call",
 ) -> LLMProvider:
     """Фабрика LLM-провайдеров.
 
@@ -842,10 +1060,13 @@ def create_provider(
         cache_path: Путь к кешу.
         provider_order: Приоритет провайдеров OpenRouter
             (например, ["DeepInfra", "Groq"]).
-        use_tool_calls: Использовать function calling вместо
-            json_schema для structured output.
+        use_tool_calls: Устаревшее поле. Использовать function calling
+            вместо json_schema для structured output. При наличии явного
+            ``structured_mode`` игнорируется.
         cache_busting_prefix: Если непустое, добавляет уникальный префикс
             в каждое сообщение (для A/B-теста с отключённым prompt-cache).
+        structured_mode: Режим structured-вывода
+            (``tool_call``/``json_schema``/``json_object``).
 
     Returns:
         Экземпляр провайдера.
@@ -872,4 +1093,5 @@ def create_provider(
         provider_order=resolved_provider_order,
         use_tool_calls=resolved_use_tool_calls,
         cache_busting_prefix=cache_busting_prefix,
+        structured_mode=structured_mode,
     )

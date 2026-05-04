@@ -69,6 +69,7 @@ def create_llm_provider(cfg: LLMConfig) -> LLMProvider:
         provider_order=provider_order,
         use_tool_calls=cfg.use_tool_calls,
         cache_busting_prefix=cfg.cache_busting_prefix,
+        structured_mode=cfg.structured_mode,
     )
 
 

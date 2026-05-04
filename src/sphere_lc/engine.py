@@ -1125,6 +1125,7 @@ class WorldEngine:
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
                     "cached_tokens": 0,
+                    "reasoning_tokens": 0,
                     "durations_ms": [],
                     "retries_used": 0,
                     "timeout_count": 0,
@@ -1151,6 +1152,7 @@ class WorldEngine:
                 prompt_tokens = int(usage.get("prompt_tokens") or 0)
                 completion_tokens = int(usage.get("completion_tokens") or 0)
                 cached_tokens = int(usage.get("cached_tokens") or 0)
+                reasoning_tokens = int(usage.get("reasoning_tokens") or 0)
 
                 role_bucket = _touch(role_stats, role)
                 role_bucket["calls"] = int(role_bucket["calls"]) + 1
@@ -1158,6 +1160,7 @@ class WorldEngine:
                 role_bucket["prompt_tokens"] = int(role_bucket["prompt_tokens"]) + prompt_tokens
                 role_bucket["completion_tokens"] = int(role_bucket["completion_tokens"]) + completion_tokens
                 role_bucket["cached_tokens"] = int(role_bucket["cached_tokens"]) + cached_tokens
+                role_bucket["reasoning_tokens"] = int(role_bucket.get("reasoning_tokens") or 0) + reasoning_tokens
                 role_bucket["durations_ms"].append(duration_ms)
                 role_bucket["retries_used"] = int(role_bucket["retries_used"]) + int(meta.get("retries_used") or 0)
                 if error:
@@ -1172,6 +1175,7 @@ class WorldEngine:
                     tick_bucket["prompt_tokens"] = int(tick_bucket["prompt_tokens"]) + prompt_tokens
                     tick_bucket["completion_tokens"] = int(tick_bucket["completion_tokens"]) + completion_tokens
                     tick_bucket["cached_tokens"] = int(tick_bucket["cached_tokens"]) + cached_tokens
+                    tick_bucket["reasoning_tokens"] = int(tick_bucket.get("reasoning_tokens") or 0) + reasoning_tokens
                     tick_bucket["durations_ms"].append(duration_ms)
                     tick_bucket["retries_used"] = int(tick_bucket["retries_used"]) + int(meta.get("retries_used") or 0)
                     if error:
@@ -1198,6 +1202,7 @@ class WorldEngine:
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
                         "cached_tokens": cached_tokens,
+                        "reasoning_tokens": reasoning_tokens,
                         "total_tokens": prompt_tokens + completion_tokens,
                         "retries_used": int(meta.get("retries_used") or 0),
                         "error_type": str(error.get("type") or "") or None,
@@ -1238,6 +1243,7 @@ class WorldEngine:
         total_prompt = sum(int(bucket["prompt_tokens"]) for bucket in role_stats.values())
         total_completion = sum(int(bucket["completion_tokens"]) for bucket in role_stats.values())
         total_cached = sum(int(bucket.get("cached_tokens") or 0) for bucket in role_stats.values())
+        total_reasoning = sum(int(bucket.get("reasoning_tokens") or 0) for bucket in role_stats.values())
         sum_duration_ms = sum(float(bucket["duration_ms"]) for bucket in role_stats.values())
         total_retries = sum(int(bucket["retries_used"]) for bucket in role_stats.values())
         total_timeouts = sum(int(bucket["timeout_count"]) for bucket in role_stats.values())
@@ -1282,6 +1288,7 @@ class WorldEngine:
             duration_s = duration_ms / 1000.0
             durations = [float(item) for item in bucket.get("durations_ms", [])]
             cached = int(bucket.get("cached_tokens") or 0)
+            reasoning = int(bucket.get("reasoning_tokens") or 0)
             prompt = int(bucket["prompt_tokens"])
             completion = int(bucket["completion_tokens"])
             cache_hit_ratio = (cached / prompt) if prompt > 0 else 0.0
@@ -1295,6 +1302,7 @@ class WorldEngine:
                 "prompt_tokens": prompt,
                 "completion_tokens": completion,
                 "cached_tokens": cached,
+                "reasoning_tokens": reasoning,
                 "total_tokens": total_tokens,
                 "cache_hit_ratio": round(cache_hit_ratio, 6),
                 "cache_savings_usd": cache_savings_usd,
@@ -1338,6 +1346,7 @@ class WorldEngine:
                 "prompt_tokens": total_prompt,
                 "completion_tokens": total_completion,
                 "cached_tokens": total_cached,
+                "reasoning_tokens": total_reasoning,
                 "total_tokens": total_prompt + total_completion,
                 "cache_hit_ratio": round(overall_cache_hit_ratio, 6),
                 "cache_savings_usd": overall_savings_usd,

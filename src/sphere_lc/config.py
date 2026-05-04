@@ -64,6 +64,19 @@ class LLMConfig(BaseModel):
         cache_read_price_per_m: Цена за миллион токенов, прочитанных из
             prompt-cache (обычно 0.1-0.5 от ``input_price_per_m``).
         output_price_per_m: Цена за миллион completion-токенов.
+        use_tool_calls: Устаревшее поле. Сохранено для обратной совместимости.
+            Если задан явный ``structured_mode``, ``use_tool_calls``
+            игнорируется. Иначе True эквивалентно
+            ``structured_mode='tool_call'``, False — fallback на
+            ``json_schema``.
+        structured_mode: Режим structured-вывода. ``tool_call`` (default) —
+            function calling с ``tool_choice``, поддерживается
+            openai/openrouter/deepseek-chat. ``json_schema`` —
+            ``response_format type=json_schema`` с строгой schema validation.
+            ``json_object`` — простой ``response_format type=json_object``
+            без schema, для reasoning-моделей DeepSeek
+            (``deepseek-reasoner``, ``deepseek-v4-flash`` в thinking-режиме),
+            которые не поддерживают tool_choice/json_schema.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -74,6 +87,7 @@ class LLMConfig(BaseModel):
     provider_order: list[str] = Field(default_factory=list)
     temperature: float = 0.0
     use_tool_calls: bool = True
+    structured_mode: Literal["tool_call", "json_schema", "json_object"] = "tool_call"
     trace_max_chars: int = 0
     cache_busting_prefix: str | None = None
     input_price_per_m: float = 0.14

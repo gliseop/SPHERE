@@ -107,6 +107,7 @@ def _make_provider(client: _StubClient, *, cache_busting_prefix: str | None = No
     provider._model = "stub-model"
     provider._cache = None
     provider._use_tool_calls = True
+    provider._structured_mode = "tool_call"
     provider._max_retries = 0
     provider._parse_max_retries = 0
     provider._retry_base_delay_s = 0.05
