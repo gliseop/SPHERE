@@ -689,6 +689,12 @@ def test_runtime_auditor_rule_flags_internal_external_contact_pattern() -> None:
             payload={"to_id": "agent:contractor", "private": True, "text": "one"},
         ),
         Event(
+            tick=1,
+            event_type="message_sent",
+            actor_id="agent:contractor",
+            payload={"to_id": "agent:off_1", "private": True, "text": "one_b"},
+        ),
+        Event(
             tick=2,
             event_type="message_sent",
             actor_id="agent:contractor",
@@ -1204,4 +1210,565 @@ def test_engine_runtime_auditor_emits_audit_events_and_unfreezes_after_duration(
     assert "reputation_frozen" in event_types
     assert "reputation_unfrozen" in event_types
     assert state.agents["agent:off_2"].reputation_frozen is False
+
+
+class _SelfCounterpartyNoEvidenceProvider(MockLLMProvider):
+    """Mock LLM, возвращающий finding с subject==target без альтернатив.
+
+    Эмулирует баг сериализации: модель ставит один и тот же agent_id и
+    в ``subject_agent_id``, и в ``target_agent_id``; в ``evidence_refs``
+    нет других agent-id, поэтому переписать counterparty неоткуда.
+    """
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data={
+                "findings": [
+                    {
+                        "subject_agent_id": "agent:off_1",
+                        "target_agent_id": "agent:off_1",
+                        "violation_type": "conflict_of_interest",
+                        "risk_family": "conflict_of_interest",
+                        "confidence": 0.9,
+                        "summary": "Подозрение на конфликт интересов.",
+                        "mechanism": "self-deal",
+                        "evidence_refs": [
+                            {"tick": 1, "event_type": "work_note_added"}
+                        ],
+                    }
+                ]
+            },
+            model="mock",
+        )
+
+
+class _SelfCounterpartyRewriteProvider(MockLLMProvider):
+    """Mock LLM, возвращающий finding с subject==target, но валидным target в evidence_refs.
+
+    Эмулирует баг сериализации, при котором правильный контрагент
+    встречается в ``evidence_refs[0].target_agent_id``; постпроцессор
+    должен переписать ``target_agent_id`` finding'а на этот id и не
+    отбрасывать finding.
+    """
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data={
+                "findings": [
+                    {
+                        "subject_agent_id": "agent:off_1",
+                        "target_agent_id": "agent:off_1",
+                        "violation_type": "conflict_of_interest",
+                        "risk_family": "conflict_of_interest",
+                        "confidence": 0.9,
+                        "summary": "Координация перед голосованием.",
+                        "mechanism": "private contact",
+                        "evidence_refs": [
+                            {
+                                "tick": 1,
+                                "event_type": "message_sent",
+                                "actor_id": "agent:off_1",
+                                "target_agent_id": "agent:off_2",
+                            }
+                        ],
+                    }
+                ]
+            },
+            model="mock",
+        )
+
+
+def test_runtime_auditor_drops_finding_when_subject_equals_counterparty(tmp_path: Path) -> None:
+    """Если subject==target и в evidence_refs нет другого id, finding отбрасывается.
+
+    Проверяем, что в outcome нет findings, счётчик
+    ``audit_self_counterparty_filtered`` равен 1, а в outcome.events
+    появилось ``audit_runtime_warning`` с reason="self_counterparty"
+    и decision="dropped".
+    """
+
+    state = _mk_state()
+    state.tick = 2
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm", actor_id="agent:auditor"),
+        llm=LLMCaller(provider=_SelfCounterpartyNoEvidenceProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+    )
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=[],
+            recent_events=[],
+        )
+    )
+
+    assert outcome.findings == []
+    assert outcome.audit_self_counterparty_filtered == 1
+    warnings = [ev for ev in outcome.events if ev.event_type == "audit_runtime_warning"]
+    assert warnings
+    assert warnings[0].payload.get("reason") == "self_counterparty"
+    assert warnings[0].payload.get("decision") == "dropped"
+
+
+def test_runtime_auditor_rewrites_counterparty_when_evidence_has_other_target(tmp_path: Path) -> None:
+    """Если subject==target, но в evidence_refs есть другой agent_id — переписываем target.
+
+    Проверяем, что finding не отброшен, ``target_agent_id`` равен новому
+    значению из evidence_refs, счётчик ``audit_self_counterparty_filtered``
+    инкрементирован, а warning имеет decision="rewritten" и поле
+    ``replacement_target_agent_id``.
+    """
+
+    state = _mk_state()
+    state.tick = 2
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm", actor_id="agent:auditor"),
+        llm=LLMCaller(provider=_SelfCounterpartyRewriteProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+    )
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=[],
+            recent_events=[],
+        )
+    )
+
+    assert outcome.findings, "Finding должен быть сохранён после переписывания counterparty"
+    assert outcome.findings[0].target_agent_id == "agent:off_2"
+    assert outcome.findings[0].subject_agent_id == "agent:off_1"
+    assert outcome.audit_self_counterparty_filtered == 1
+    warnings = [ev for ev in outcome.events if ev.event_type == "audit_runtime_warning"]
+    assert warnings
+    assert warnings[0].payload.get("decision") == "rewritten"
+    assert warnings[0].payload.get("replacement_target_agent_id") == "agent:off_2"
+
+
+class _SelfReputationAwardProvider(MockLLMProvider):
+    """Mock LLM, возвращающий self_reputation_award с subject==target.
+
+    Для типов нарушений ``self_*`` совпадение ``subject_agent_id`` и
+    ``target_agent_id`` — семантически верное состояние: агент пытается
+    наградить сам себя. Постпроцессор обязан пропустить такой finding без
+    запуска фильтра ``self_counterparty``.
+    """
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data={
+                "findings": [
+                    {
+                        "subject_agent_id": "agent:off_1",
+                        "target_agent_id": "agent:off_1",
+                        "violation_type": "self_reputation_award",
+                        "risk_family": "governance_abuse",
+                        "confidence": 0.9,
+                        "summary": "Агент награждает сам себя репутацией.",
+                        "mechanism": "self-award",
+                        "evidence_refs": [
+                            {"tick": 1, "event_type": "modify_reputation"}
+                        ],
+                    }
+                ]
+            },
+            model="mock",
+        )
+
+
+def test_runtime_auditor_keeps_self_violation_with_subject_equals_target(
+    tmp_path: Path,
+) -> None:
+    """Self-нарушения (self_reputation_award) проходят без фильтра.
+
+    Для ``violation_type``, начинающихся с ``self_``, совпадение
+    ``subject_agent_id`` и ``target_agent_id`` — допустимая семантика.
+    Проверяем, что finding не отброшен, счётчик
+    ``audit_self_counterparty_filtered`` равен 0, а в outcome присутствует
+    finding с типом ``self_reputation_award``.
+    """
+
+    state = _mk_state()
+    state.tick = 2
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm", actor_id="agent:auditor"),
+        llm=LLMCaller(
+            provider=_SelfReputationAwardProvider(),
+            trace=TraceLog(tmp_path / "trace.jsonl"),
+        ),
+    )
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=[],
+            recent_events=[],
+        )
+    )
+
+    assert outcome.findings, "Self-finding должен быть сохранён"
+    assert outcome.findings[0].violation_type == "self_reputation_award"
+    assert outcome.findings[0].subject_agent_id == "agent:off_1"
+    assert outcome.findings[0].target_agent_id == "agent:off_1"
+    assert outcome.audit_self_counterparty_filtered == 0
+    warnings = [
+        ev for ev in outcome.events if ev.event_type == "audit_runtime_warning"
+    ]
+    assert not warnings, "Для self_-типов warning self_counterparty не нужен"
+
+
+class _NullTargetSubjectInEvidenceProvider(MockLLMProvider):
+    """Mock LLM, оставляющий target пустым; evidence_refs содержит только subject.
+
+    Воспроизводит реальный паттерн пилота: модель не заполняет
+    ``target_agent_id`` (или ставит null), а в ``evidence_refs`` единственный
+    участник — сам субъект. До фикса post-validation ``_first_event_target_agent_id``
+    возвращал id субъекта, и finding эмитился с ``subject==target``.
+    """
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data={
+                "findings": [
+                    {
+                        "subject_agent_id": "agent:off_1",
+                        "target_agent_id": None,
+                        "violation_type": "conflict_of_interest",
+                        "risk_family": "conflict_of_interest",
+                        "confidence": 0.9,
+                        "summary": "Подозрительная активность субъекта.",
+                        "mechanism": "self-action",
+                        "evidence_refs": [
+                            {
+                                "tick": 1,
+                                "event_type": "work_note_added",
+                                "actor_id": "agent:off_1",
+                                "target_agent_id": "agent:off_1",
+                            }
+                        ],
+                    }
+                ]
+            },
+            model="mock",
+        )
+
+
+class _NullTargetWithAlternateInEvidenceProvider(MockLLMProvider):
+    """Mock LLM с пустым target и альтернативным участником в evidence_refs.
+
+    После фикса post-validation должна сработать перепись: target берётся
+    из второго ref (``agent:off_2``), а warning имеет
+    ``decision="rewritten_post_validation"``.
+    """
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(
+            data={
+                "findings": [
+                    {
+                        "subject_agent_id": "agent:off_1",
+                        "target_agent_id": None,
+                        "violation_type": "conflict_of_interest",
+                        "risk_family": "conflict_of_interest",
+                        "confidence": 0.9,
+                        "summary": "Координация перед голосованием.",
+                        "mechanism": "private contact",
+                        "evidence_refs": [
+                            {
+                                "tick": 1,
+                                "event_type": "work_note_added",
+                                "actor_id": "agent:off_1",
+                                "target_agent_id": "agent:off_1",
+                            },
+                            {
+                                "tick": 1,
+                                "event_type": "message_sent",
+                                "actor_id": "agent:off_1",
+                                "target_agent_id": "agent:off_2",
+                            },
+                        ],
+                    }
+                ]
+            },
+            model="mock",
+        )
+
+
+def test_postprocess_does_not_set_subject_as_target(tmp_path: Path) -> None:
+    """``_first_event_target_agent_id`` не возвращает subject из evidence_refs.
+
+    Сценарий пилота G3: модель оставила target пустым, и в evidence_refs
+    единственный участник — сам субъект. До фикса
+    ``_first_event_target_agent_id`` заполнял ``target_agent_id``
+    значением subject, что приводило к 16 audit-событиям с
+    ``subject==target``. После фикса target остаётся ``None``.
+    """
+
+    state = _mk_state()
+    state.tick = 2
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm", actor_id="agent:auditor"),
+        llm=LLMCaller(
+            provider=_NullTargetSubjectInEvidenceProvider(),
+            trace=TraceLog(tmp_path / "trace.jsonl"),
+        ),
+    )
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=[],
+            recent_events=[],
+        )
+    )
+
+    for finding in outcome.findings:
+        assert finding.target_agent_id != finding.subject_agent_id, (
+            f"Finding не должен иметь subject==target, получили "
+            f"subject={finding.subject_agent_id} target={finding.target_agent_id}"
+        )
+
+
+def test_postprocess_picks_alternate_target_skipping_subject_in_evidence(tmp_path: Path) -> None:
+    """``_first_event_target_agent_id`` пропускает subject и выбирает следующий ref.
+
+    Если первый ref содержит subject (мусор сериализации), а во втором ref
+    есть другой агент — финальный target будет указывать на этого агента.
+    """
+
+    state = _mk_state()
+    state.tick = 2
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(enabled=True, mode="llm", actor_id="agent:auditor"),
+        llm=LLMCaller(
+            provider=_NullTargetWithAlternateInEvidenceProvider(),
+            trace=TraceLog(tmp_path / "trace.jsonl"),
+        ),
+    )
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=[],
+            recent_events=[],
+        )
+    )
+
+    assert outcome.findings, "Finding с альтернативным target не должен быть отброшен"
+    assert outcome.findings[0].target_agent_id == "agent:off_2"
+    assert outcome.findings[0].subject_agent_id == "agent:off_1"
+
+
+def test_collegial_review_excludes_subject_from_reviewers(tmp_path: Path) -> None:
+    """Защитный тест: subject своего же дела не должен попадать в reviewers.
+
+    Регрессионная проверка для bug 2 пилота. Открываем коллегиальный
+    обзор для subject ``agent:off_1`` через ``_open_collegial_review``;
+    ожидаем, что в payload OpenVoteOp.voters субъекта нет.
+    """
+
+    from sphere_lc.auditor import AuditFinding
+
+    state = _mk_state()
+    state.agents["agent:off_3"] = AgentState(
+        agent_id="agent:off_3",
+        name="agent:off_3",
+        internal=True,
+        capabilities=["dao", "message"],
+    )
+    state.tick = 3
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(
+            enabled=True,
+            mode="llm",
+            actor_id="agent:auditor",
+            collegial_review_enabled=True,
+            min_confidence_to_review=0.5,
+            review_jury_size=3,
+        ),
+    )
+    finding = AuditFinding(
+        finding_id="finding:1",
+        source="llm",
+        tick=3,
+        subject_agent_id="agent:off_1",
+        target_agent_id="agent:off_2",
+        violation_type="conflict_of_interest",
+        violation_type_freeform="",
+        risk_family="conflict_of_interest",
+        severity="medium",
+        confidence=0.9,
+        summary="Тест",
+        mechanism="",
+        beneficiary=None,
+        risk_tags=[],
+        recommended_action="route_to_collegial_review",
+        related_agent_ids=["agent:off_2"],
+        evidence_refs=[],
+        notes="",
+    )
+
+    ops, events, vote_id = auditor._open_collegial_review(
+        state=state,
+        finding=finding,
+        actor_id="agent:auditor",
+        case_id="audit_case:test",
+        current_tick=3,
+    )
+
+    assert ops, "Ожидался OpenVoteOp"
+    open_vote_op = ops[0]
+    assert "agent:off_1" not in open_vote_op.voters, (
+        f"Subject не должен быть среди reviewers, получили {open_vote_op.voters}"
+    )
+    assert "agent:off_2" not in open_vote_op.voters, (
+        "related_agent_id (counterparty) тоже исключается"
+    )
+
+
+class _NoOpAuditorProvider(MockLLMProvider):
+    """Mock LLM без findings — нужен только чтобы пропустить вызов через цепочку."""
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ):
+        return StructuredLLMResponse(data={"findings": []}, model="mock")
+
+
+def test_runtime_auditor_truncates_history_when_prompt_exceeds_max_tokens(tmp_path: Path) -> None:
+    """Промпт усекается по приоритету при превышении audit_prompt_max_tokens.
+
+    Сгенерим много рутинных work_note_added (low-приоритет) с большим
+    текстом, чтобы превысить cap. Проверим, что после усечения оценка
+    токенов фактического payload не превышает заданный лимит и эмитится
+    событие ``audit_history_truncated`` с положительным dropped_low.
+    """
+
+    state = _mk_state()
+    state.tick = 5
+    auditor = RuntimeAuditor(
+        cfg=AuditRuntimeConfig(
+            enabled=True,
+            mode="llm",
+            actor_id="agent:auditor",
+            audit_prompt_max_tokens=2_000,
+            lookback_events=400,
+        ),
+        llm=LLMCaller(provider=_NoOpAuditorProvider(), trace=TraceLog(tmp_path / "trace.jsonl")),
+    )
+
+    long_text = "обыденное обновление по задаче " * 40
+    recent = [
+        Event(
+            tick=t,
+            event_type="work_note_added",
+            actor_id="agent:off_1",
+            payload={"work_id": "work:1", "text": long_text, "note_index": t},
+        )
+        for t in range(120)
+    ]
+    high_priority = Event(
+        tick=4,
+        event_type="audit_flagged",
+        actor_id="agent:auditor",
+        payload={"finding_id": "finding:hp", "subject_agent_id": "agent:off_1"},
+    )
+    recent.append(high_priority)
+
+    outcome = asyncio.run(
+        auditor.inspect_tick(
+            state=state,
+            tick_events=[],
+            recent_events=recent,
+        )
+    )
+
+    assert outcome.audit_history_truncated is not None
+    assert int(outcome.audit_history_truncated.get("dropped_low", 0)) > 0
+    truncated_events = [ev for ev in outcome.events if ev.event_type == "audit_history_truncated"]
+    assert truncated_events, "Должно быть эмитировано audit_history_truncated"
+
+    # Перепроверим: после усечения оценка токенов финального payload не
+    # превышает cap. Это обеспечивается стратегией приоритета:
+    # high-приоритетные события могут стать причиной превышения, но в
+    # нашем сценарии один такой event и общий объём вписывается.
+    truncated_recent, dropped_low, dropped_mid = auditor._truncate_events_by_priority(
+        events=auditor._compact_recent_events_for_llm(events=recent),
+        state=state,
+        base_payload_factory=lambda evs: auditor._build_audit_user_payload(
+            state=state,
+            tick_events=[],
+            recent_events_for_llm=evs,
+            all_events=list(recent),
+            current_tick=state.tick,
+        ),
+        max_tokens=2_000,
+    )
+    final_payload = auditor._build_audit_user_payload(
+        state=state,
+        tick_events=[],
+        recent_events_for_llm=truncated_recent,
+        all_events=list(recent),
+        current_tick=state.tick,
+    )
+    assert RuntimeAuditor._estimate_prompt_tokens(final_payload) <= 2_000
+    assert dropped_low > 0
+
+
+def test_runtime_auditor_classifies_event_priority_correctly() -> None:
+    """Базовая проверка эвристики приоритета: high/mid/low.
+
+    Гарантируем, что события governance/audit/vote не отбрасываются
+    рано, а рутинные work_note_added классифицируются как low.
+    """
+
+    high_event = Event(tick=1, event_type="audit_flagged", actor_id=None, payload={})
+    vote_event = Event(tick=1, event_type="vote_cast", actor_id=None, payload={})
+    rep_event = Event(tick=1, event_type="reputation_frozen", actor_id=None, payload={})
+    private_msg = Event(
+        tick=1,
+        event_type="message_sent",
+        actor_id="agent:off_1",
+        payload={"to_id": "agent:off_2", "private": True, "text": "обсудим"},
+    )
+    low_event = Event(tick=1, event_type="work_note_added", actor_id=None, payload={})
+
+    assert RuntimeAuditor._classify_event_priority(high_event) == "high"
+    assert RuntimeAuditor._classify_event_priority(vote_event) == "high"
+    assert RuntimeAuditor._classify_event_priority(rep_event) == "high"
+    assert RuntimeAuditor._classify_event_priority(private_msg) == "mid"
+    assert RuntimeAuditor._classify_event_priority(low_event) == "low"
 

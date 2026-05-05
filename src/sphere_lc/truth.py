@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
@@ -55,9 +55,23 @@ class TruthLog:
 
 @dataclass(slots=True)
 class TruthDetector:
-    """Rules-first truth detector, независимый от runtime-auditor."""
+    """Rules-first truth detector, независимый от runtime-auditor.
+
+    Детектор является stateful на протяжении всего прогона: помнит набор уже
+    эмитированных эпизодов и подавляет повторные записи о том же нарушении на
+    последующих тиках. Эпизод идентифицируется тройкой
+    ``(subject_agent_id, target_or_counterparty_id, violation_type)``; ``tick``
+    в ключ намеренно не входит, иначе дедупликация в скользящих окнах
+    ``detect_contact_patterns`` теряет смысл (одна и та же пара повторно
+    эмитится при каждом проходе окна).
+
+    Attributes:
+        private_contact_window_ticks: Размер окна (в тиках) для подсчёта
+            недавних приватных контактов в правилах из ``_records_for_event``.
+    """
 
     private_contact_window_ticks: int = 3
+    _emitted_episode_keys: set[tuple[str, str, str]] = field(default_factory=set)
 
     def detect_tick(
         self,
@@ -78,7 +92,7 @@ class TruthDetector:
                     current_tick=current_tick,
                 )
             )
-        return self._dedupe(records)
+        return self._register_episodes(self._dedupe(records))
 
     def detect_contact_patterns(
         self,
@@ -93,6 +107,7 @@ class TruthDetector:
 
         low_tick = int(tick) - int(window_ticks)
         pairs: dict[tuple[str, str], int] = {}
+        pair_events: dict[tuple[str, str], list[Event]] = {}
         for event in all_events:
             if int(event.tick) < low_tick:
                 continue
@@ -112,6 +127,7 @@ class TruthDetector:
                 continue
             key = (min(left, right), max(left, right))
             pairs[key] = pairs.get(key, 0) + 1
+            pair_events.setdefault(key, []).append(event)
 
         records: list[TruthRecord] = []
         for (left, right), count in pairs.items():
@@ -125,6 +141,11 @@ class TruthDetector:
                 continue
             subject_agent_id = left if left_agent.internal else right
             target_agent_id = right if left_agent.internal else left
+            relevant_events = sorted(
+                pair_events.get((left, right), []),
+                key=lambda e: int(e.tick),
+            )
+            evidence_refs = [_event_ref(ev) for ev in relevant_events[-min(len(relevant_events), 6):]]
             records.append(
                 TruthRecord(
                     tick=int(tick),
@@ -139,9 +160,10 @@ class TruthDetector:
                     ),
                     mechanism="private_contact_frequency",
                     risk_tags=["external_contact", "procurement"],
+                    evidence_refs=evidence_refs,
                 )
             )
-        return self._dedupe(records)
+        return self._register_episodes(self._dedupe(records))
 
     def _records_for_event(
         self,
@@ -326,6 +348,34 @@ class TruthDetector:
             out.append(record)
         return out
 
+    def _register_episodes(self, records: list[TruthRecord]) -> list[TruthRecord]:
+        """Отфильтровывает записи, относящиеся к уже зафиксированным эпизодам.
+
+        Эпизод идентифицируется тройкой ``(subject_agent_id, counterparty,
+        violation_type)``; ``tick`` намеренно не учитывается. Без этого
+        ``detect_contact_patterns`` повторно эмитировал бы одну и ту же пару на
+        каждом тике скользящего окна и завышал ``truth_total``. Дедуп через
+        тики оставляет только первую эмиссию, ``TruthRecord.tick`` сохраняет
+        момент первой эмиссии.
+
+        Args:
+            records: Кандидаты на запись в ``truth.jsonl`` после внутрипакетной
+                дедупликации.
+
+        Returns:
+            Подмножество ``records``, эпизоды которых ранее не фиксировались;
+            эпизоды этого подмножества помечены как зарегистрированные.
+        """
+
+        out: list[TruthRecord] = []
+        for record in records:
+            episode_key = _episode_key(record)
+            if episode_key in self._emitted_episode_keys:
+                continue
+            self._emitted_episode_keys.add(episode_key)
+            out.append(record)
+        return out
+
 
 def _event_ref(event: Event) -> dict[str, Any]:
     payload = event.payload or {}
@@ -357,6 +407,26 @@ def _record_key(record: TruthRecord) -> tuple[int, str, str, str | None, str]:
         record.violation_type,
         record.target_agent_id,
         _evidence_signature(record.evidence_refs),
+    )
+
+
+def _episode_key(record: TruthRecord) -> tuple[str, str, str]:
+    """Возвращает episode-key для дедупликации повторов через тики.
+
+    Args:
+        record: Кандидат на эмиссию.
+
+    Returns:
+        Тройка ``(subject_agent_id, counterparty_id, violation_type)``;
+        ``counterparty_id`` берётся из ``target_agent_id`` (пустая строка, если
+        у записи нет цели — например, для будущих self-only нарушений). Tick
+        сознательно не входит в ключ.
+    """
+
+    return (
+        record.subject_agent_id,
+        record.target_agent_id or "",
+        record.violation_type,
     )
 
 

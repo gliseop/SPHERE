@@ -2257,7 +2257,9 @@ def test_openai_provider_only_sets_provider_order_for_openrouter() -> None:
     }
 
 
-def test_openai_provider_uses_30s_timeout_by_default() -> None:
+def test_openai_provider_uses_30s_timeout_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SPHERE_LLM_REQUEST_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("SPHERE_LLM_CALL_DEADLINE_S", raising=False)
     provider = OpenAICompatibleProvider(
         model=DEFAULT_LLM_MODEL,
         api_key="test-key",
@@ -2384,7 +2386,7 @@ def test_memory_summarizes_working_buffer(tmp_path: Path) -> None:
 
 def test_memory_summarization_failure_preserves_working_buffer(tmp_path: Path) -> None:
     class _FailingSummaryProvider(MockLLMProvider):
-        def generate(self, system: str, user: str, temperature: float = 0.0):
+        def generate(self, system: str, user: str, temperature: float = 0.0, max_completion_tokens: int | None = None):
             raise RuntimeError("boom")
 
     mem = AgentMemory(agent_id="agent:off_1")
@@ -2601,7 +2603,7 @@ def test_agent_prompt_exposes_respond_nomination_without_dao_capability(tmp_path
 
     assert "Голосования в ходу: vote:1" in prompt
     assert "Верни только JSON с одним полем `reply`." in prompt
-    assert "если тебя выдвинули, ты можешь прямо согласиться или отказаться" in prompt
+    assert "если тебя выдвинули или процедура адресована тебе как субъекту" in prompt
     assert "respond_nomination (vote_id, accept: true/false)" not in prompt
 
 

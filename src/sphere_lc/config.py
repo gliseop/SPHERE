@@ -43,7 +43,41 @@ def _normalize_string_list(values: list[str] | tuple[str, ...]) -> list[str]:
 
 
 class LLMConfig(BaseModel):
-    """Настройки LLM-провайдера."""
+    """Настройки LLM-провайдера.
+
+    Помимо стандартных параметров (модель, base_url, температура), включает
+    поля для оценки prompt-cache: тарифы за миллион токенов и опциональный
+    префикс для отключения кэша при A/B-тестах. Тарифы по умолчанию
+    соответствуют ``deepseek/deepseek-v4-flash`` через OpenRouter
+    (``input_price_per_m=0.14``, ``cache_read_price_per_m=0.028``,
+    ``output_price_per_m=0.28``); для других моделей значения переопределяются
+    в сценарии или скриптом-обёрткой.
+
+    Attributes:
+        cache_busting_prefix: Если непустое, провайдер добавляет уникальный
+            префикс в system-сообщение, гарантируя промах prompt-cache на
+            каждом запросе. Используется только в режиме A прогона
+            cache-busting.
+        input_price_per_m: Цена за миллион prompt-токенов в USD без скидки
+            на cache (используется для оценочной полной стоимости и для
+            расчёта экономии вместе с ``cache_read_price_per_m``).
+        cache_read_price_per_m: Цена за миллион токенов, прочитанных из
+            prompt-cache (обычно 0.1-0.5 от ``input_price_per_m``).
+        output_price_per_m: Цена за миллион completion-токенов.
+        use_tool_calls: Устаревшее поле. Сохранено для обратной совместимости.
+            Если задан явный ``structured_mode``, ``use_tool_calls``
+            игнорируется. Иначе True эквивалентно
+            ``structured_mode='tool_call'``, False — fallback на
+            ``json_schema``.
+        structured_mode: Режим structured-вывода. ``tool_call`` (default) —
+            function calling с ``tool_choice``, поддерживается
+            openai/openrouter/deepseek-chat. ``json_schema`` —
+            ``response_format type=json_schema`` с строгой schema validation.
+            ``json_object`` — простой ``response_format type=json_object``
+            без schema, для reasoning-моделей DeepSeek
+            (``deepseek-reasoner``, ``deepseek-v4-flash`` в thinking-режиме),
+            которые не поддерживают tool_choice/json_schema.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -53,7 +87,12 @@ class LLMConfig(BaseModel):
     provider_order: list[str] = Field(default_factory=list)
     temperature: float = 0.0
     use_tool_calls: bool = True
+    structured_mode: Literal["tool_call", "json_schema", "json_object"] = "tool_call"
     trace_max_chars: int = 0
+    cache_busting_prefix: str | None = None
+    input_price_per_m: float = 0.14
+    cache_read_price_per_m: float = 0.028
+    output_price_per_m: float = 0.28
 
     @field_validator("provider_order")
     @classmethod
@@ -70,6 +109,21 @@ class LLMConfig(BaseModel):
             seen.add(key)
             out.append(value)
         return out
+
+    @field_validator("input_price_per_m", "cache_read_price_per_m", "output_price_per_m")
+    @classmethod
+    def _validate_price(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("LLM price must be >= 0")
+        return float(v)
+
+    @field_validator("cache_busting_prefix")
+    @classmethod
+    def _normalize_cache_busting_prefix(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = str(v).strip()
+        return cleaned or None
 
 
 class MemoryWeights(BaseModel):
@@ -102,6 +156,10 @@ class MemoryConfig(BaseModel):
     working_render_max_chars: int = 40_000
     working_render_entry_max_chars: int = 3_000
     summary_context_fraction: float = 0.30
+    # Жёсткий потолок длины ответа модели на summary-вызов. Без него модели
+    # с большим completion-окном (например, nemotron 65k) уходят в потолок и
+    # съедают значительную часть LLM-времени без полезного результата.
+    summary_max_completion_tokens: int = 4_000
 
     # Long-term hybrid index.
     long_term_max_docs: int = 800
@@ -259,6 +317,22 @@ class RuntimeConfig(BaseModel):
     langgraph_debug: bool = False
     enrich_personas: bool = False
     persona_enrich_mode: Literal["full", "core"] = "full"
+    personas_pre_enriched_path: str | None = None
+    """Путь к JSON-файлу с предобогащёнными персонами.
+
+    При указании этого пути ``WorldEngine._enrich_personas`` пропускает
+    LLM-генерацию и проверку кэша по fingerprint, загружая персоны
+    напрямую из файла. Формат файла совместим с тем, что пишет
+    ``WorldEngine._save_personas_cache`` — словарь с полями ``meta``
+    (опциональный) и ``personas`` (отображение
+    ``agent_id -> PersonaArtifact``).
+
+    Если в файле отсутствует персона для конкретного агента или
+    она не проходит проверку ``_persona_is_cache_complete``, агент
+    попадает в очередь стандартного обогащения через LLM (fallback).
+    Опция предназначена для серий главы 3, где требуется гарантия
+    идентичности персон между прогонами в режимах G0, G1, G2, G3.
+    """
     spawn_secondary: bool = False
     max_secondary_per_agent: int = 2
     max_agents: int = 15
@@ -427,6 +501,7 @@ class AuditRuntimeConfig(BaseModel):
     actor_id: str | None = None
     mode: Literal["rules", "hybrid", "llm"] = "llm"
     lookback_events: int = 120
+    audit_window_ticks: int = 5
     private_contact_window_ticks: int = 3
     obligation_window_ticks: int = 3
     response_window_ticks: int = 2
@@ -444,6 +519,9 @@ class AuditRuntimeConfig(BaseModel):
     reputation_penalty_delta: float | None = None
     collegial_review_enabled: bool = True
     review_jury_size: int = 3
+    reviewer_seed_salt: str = ""
+    audit_prompt_max_tokens: int = 200_000
+    audit_use_summary_for_old_ticks: bool = False
 
     @field_validator("actor_id")
     @classmethod
@@ -455,6 +533,7 @@ class AuditRuntimeConfig(BaseModel):
 
     @field_validator(
         "lookback_events",
+        "audit_window_ticks",
         "private_contact_window_ticks",
         "obligation_window_ticks",
         "response_window_ticks",
@@ -468,6 +547,13 @@ class AuditRuntimeConfig(BaseModel):
         if v < 0:
             raise ValueError("value must be >= 0")
         return v
+
+    @field_validator("audit_prompt_max_tokens")
+    @classmethod
+    def _validate_audit_prompt_max_tokens(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("audit_prompt_max_tokens must be > 0")
+        return int(v)
 
     @field_validator(
         "min_confidence_to_flag",

@@ -4,12 +4,16 @@
   "description": "Расширенный муниципальный сценарий закупки с полной организационной экосистемой: мэрия, отдел закупок, юридический и бухгалтерский блоки, отдел образования, контрольно-ревизионный отдел, несколько подрядчиков и субподрядчиков, независимый эксперт, журналист и представитель общественного совета. Сценарий моделирует сложную среду, в которой формальные процедуры тендера на капитальный ремонт школ сталкиваются с неформальными связями, давлением сроков и множественными точками контроля. Цель — протестировать механизм коллегиального review при достаточном кворуме, проверить, как governance-контур масштабируется при двадцати участниках с разнонаправленными интересами, и выявить паттерны коалиционного поведения в условиях повышенного общественного внимания.",
   "ticks": 25,
   "llm": {
-    "model": "nvidia/nemotron-3-super-120b-a12b",
-    "base_url": null,
-    "temperature": 0.25,
-    "use_tool_calls": true,
+    "model": "deepseek-reasoner",
+    "base_url": "https://api.deepseek.com/v1",
+    "temperature": 0.0,
+    "use_tool_calls": false,
+    "structured_mode": "json_object",
     "trace_max_chars": 0,
-    "provider_order": ["DeepInfra"]
+    "input_price_per_m": 0.14,
+    "cache_read_price_per_m": 0.0028,
+    "output_price_per_m": 0.28,
+    "api_key_env": "DEEPSEEK_API_KEY"
   },
   "runtime": {
     "language": "ru",
@@ -32,7 +36,9 @@
   "memory": {
     "working_max_entries": 50,
     "working_summarize_batch": 25,
-    "embeddings_mock": false
+    "embeddings_mock": false,
+    "embeddings_base_url": "https://openrouter.ai/api/v1",
+    "embeddings_api_key_env": "OPENAI_API_KEY"
   },
   "governance": {
     "position_policy": "dao",

@@ -4,14 +4,59 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
+import os
 import sys
+import uuid
+from collections.abc import Coroutine
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 from rich.console import Console
 from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn, MofNCompleteColumn
+
+
+def _run_with_thread_pool(coro: Coroutine[Any, Any, Any]) -> Any:
+    """Запустить coroutine с расширенным thread pool для asyncio.to_thread.
+
+    Стандартный default executor имеет лимит ``min(32, cpu_count + 4)`` потоков.
+    LLM-вызовы через ``asyncio.to_thread`` упираются в этот лимит при большом
+    числе агентов: на стенде с 8 ядрами потолок 12 потоков, что ограничивает
+    параллельные HTTPS-запросы к OpenRouter тем же числом. Лимит расширяется
+    через ``SPHERE_THREAD_POOL_WORKERS`` (по умолчанию 60), что позволяет
+    держать одновременно до 60 запросов к провайдеру и сократить время прогона
+    при медленных моделях с длинной генерацией.
+
+    Args:
+        coro: Главная coroutine движка симуляции.
+
+    Returns:
+        Результат выполнения ``coro``.
+    """
+    try:
+        max_workers = int(os.getenv("SPHERE_THREAD_POOL_WORKERS", "60"))
+    except ValueError:
+        max_workers = 60
+    max_workers = max(1, max_workers)
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="sphere-llm",
+    )
+    loop = asyncio.new_event_loop()
+    loop.set_default_executor(executor)
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        loop.close()
+        asyncio.set_event_loop(None)
+        executor.shutdown(wait=True)
 
 from .composer import WorldComposer
 from .config import LLMConfig
@@ -55,12 +100,20 @@ def _cmd_run(args: argparse.Namespace) -> None:
         cfg.runtime.enrich_personas = True
     if getattr(args, "persona_enrich_mode", None):
         cfg.runtime.persona_enrich_mode = str(args.persona_enrich_mode)
+    if getattr(args, "personas_pre_enriched_path", None):
+        cfg.runtime.personas_pre_enriched_path = str(args.personas_pre_enriched_path)
     if getattr(args, "governance", None):
         apply_builtin_governance_mode(cfg, args.governance)
+    if bool(getattr(args, "cache_busting", False)):
+        cfg.llm.cache_busting_prefix = uuid.uuid4().hex
     out_dir = Path(args.out) if args.out else Path("results") / datetime.now().strftime("%Y%m%d_%H%M%S")
     artifacts = default_artifacts(out_dir)
 
     console.print(f"[bold]SPHERE-LC run[/bold] scenario={args.scenario} ticks={cfg.ticks} out={out_dir}")
+    if cfg.llm.cache_busting_prefix:
+        console.print(
+            f"[yellow]Prompt cache отключён: cache_busting_prefix={cfg.llm.cache_busting_prefix}[/yellow]"
+        )
 
     with Progress(
         TextColumn("[bold blue]{task.description}"),
@@ -85,7 +138,7 @@ def _cmd_run(args: argparse.Namespace) -> None:
 
         engine = WorldEngine(cfg=cfg, artifacts=artifacts)
         engine.on_tick_done = _on_tick
-        asyncio.run(engine.run())
+        _run_with_thread_pool(engine.run())
 
     console.print(
         f"[green]Done[/green] events={artifacts.events_path} trace={artifacts.trace_path} "
@@ -167,11 +220,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Режим обогащения персон: full (summary+biography+interview) или core (summary+biography)",
     )
     p_run.add_argument(
+        "--personas-pre-enriched-path",
+        type=str,
+        default=None,
+        help="Путь к JSON с предобогащёнными персонами (для воспроизводимости серии прогонов главы 3)",
+    )
+    p_run.add_argument(
         "--governance",
         type=str,
         choices=list(BUILTIN_GOVERNANCE_MODES),
         default=None,
         help="Применить built-in governance mode (G0, G1, G2, G3)",
+    )
+    p_run.add_argument(
+        "--cache-busting",
+        action="store_true",
+        help=(
+            "Принудительно отключить prompt-cache провайдера: добавляет "
+            "уникальный префикс с uuid4 в каждое сообщение. Используется "
+            "для A/B-тестирования эффекта prompt-cache."
+        ),
     )
     p_run.set_defaults(fn=_cmd_run)
 

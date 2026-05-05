@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .llm import LLMCaller
 from .prompts import render_prompt
+
+logger = logging.getLogger(__name__)
 
 class EvaluationSummary(BaseModel):
     """Итог сравнения runtime-сигналов и truth-layer."""
@@ -33,6 +36,17 @@ class EvaluationSummary(BaseModel):
     semantic_precision: float = 0.0
     semantic_recall: float = 0.0
     semantic_f1: float = 0.0
+    semantic_status: str = "skipped"
+    """Статус выполнения семантического судьи.
+
+    Значения:
+        - ``"computed"``: судья отработал успешно, метрики ``semantic_*`` валидны;
+        - ``"failed"``: судья был вызван, но упал с исключением — значения ``semantic_*``
+          остаются плейсхолдерами и не должны интерпретироваться как реальные;
+        - ``"skipped"``: судья не запускался (например, отсутствует truth-список).
+    """
+    semantic_failure_reason: str = ""
+    """Свободно-формулированная причина падения, заполняется при ``semantic_status="failed"``."""
     case_truth_source: str = "truth"
     case_truth_total: int = 0
     case_true_positive: int = 0
@@ -212,8 +226,22 @@ async def augment_evaluation_with_semantic_judge(
             schema=_evaluation_semantic_schema(),
             temperature=temperature,
         )
-    except Exception:
-        return summary
+    except Exception as exc:
+        reason = _classify_semantic_judge_error(exc)
+        logger.warning(
+            "semantic judge failed: %s — %s (%s); truth_findings=%d signal_findings=%d",
+            type(exc).__name__,
+            exc,
+            reason,
+            len(truth_findings),
+            len(signal_findings),
+        )
+        return summary.model_copy(
+            update={
+                "semantic_status": "failed",
+                "semantic_failure_reason": f"{type(exc).__name__}: {reason}",
+            }
+        )
 
     data = resp.data if isinstance(resp.data, dict) else {}
     semantic_matches = _normalize_index_matches(
@@ -250,6 +278,8 @@ async def augment_evaluation_with_semantic_judge(
             "semantic_precision": round(semantic_precision, 4),
             "semantic_recall": round(semantic_recall, 4),
             "semantic_f1": round(_f1(semantic_precision, semantic_recall), 4),
+            "semantic_status": "computed",
+            "semantic_failure_reason": "",
             "case_true_positive": case_tp,
             "case_false_positive": case_fp,
             "case_false_negative": case_fn,
@@ -465,8 +495,23 @@ def _normalize_index_matches(
     left_key: str,
     right_key: str,
 ) -> list[tuple[int, int]]:
+    """Принимает совпадения по ключам ``_index`` или их алиасам ``_idx``.
+
+    LLM-судьи на разных провайдерах возвращают то ``truth_index``/``signal_index``,
+    то их сокращённые варианты ``truth_idx``/``signal_idx``. Без алиасинга весь
+    результат тихо отбрасывается, что обнулит semantic-метрики.
+    """
     if not isinstance(items, list):
         return []
+    left_aliases = (left_key, left_key.replace("_index", "_idx"))
+    right_aliases = (right_key, right_key.replace("_index", "_idx"))
+
+    def _pick(item: dict[str, Any], aliases: tuple[str, ...]) -> Any:
+        for key in aliases:
+            if key in item:
+                return item.get(key)
+        return None
+
     out: list[tuple[int, int]] = []
     used_left: set[int] = set()
     used_right: set[int] = set()
@@ -474,8 +519,8 @@ def _normalize_index_matches(
         if not isinstance(item, dict):
             continue
         try:
-            left_idx = int(item.get(left_key))
-            right_idx = int(item.get(right_key))
+            left_idx = int(_pick(item, left_aliases))
+            right_idx = int(_pick(item, right_aliases))
         except (TypeError, ValueError):
             continue
         if not (0 <= left_idx < left_size and 0 <= right_idx < right_size):
@@ -488,11 +533,19 @@ def _normalize_index_matches(
     return out
 
 
-def _strict_match(*, truth_entries: list[dict[str, Any]], signal_entries: list[dict[str, Any]]) -> list[tuple[int, int]]:
+_STRICT_TICK_WINDOW = 3
+
+
+def _strict_match(
+    *,
+    truth_entries: list[dict[str, Any]],
+    signal_entries: list[dict[str, Any]],
+    tick_window: int = _STRICT_TICK_WINDOW,
+) -> list[tuple[int, int]]:
     candidates: list[tuple[float, int, int]] = []
     for truth_idx, truth in enumerate(truth_entries):
         for signal_idx, signal in enumerate(signal_entries):
-            score = _strict_match_score(truth=truth, signal=signal)
+            score = _strict_match_score(truth=truth, signal=signal, tick_window=tick_window)
             if score > 0.0:
                 candidates.append((score, truth_idx, signal_idx))
     candidates.sort(reverse=True)
@@ -508,9 +561,22 @@ def _strict_match(*, truth_entries: list[dict[str, Any]], signal_entries: list[d
     return matches
 
 
-def _strict_match_score(*, truth: dict[str, Any], signal: dict[str, Any]) -> float:
-    if int(truth["tick"]) != int(signal["tick"]):
+def _strict_match_score(
+    *,
+    truth: dict[str, Any],
+    signal: dict[str, Any],
+    tick_window: int = _STRICT_TICK_WINDOW,
+) -> float:
+    truth_tick = int(truth["tick"])
+    signal_tick = int(signal["tick"])
+    tick_diff = abs(truth_tick - signal_tick)
+    if tick_diff > max(0, int(tick_window)):
         return 0.0
+    tick_penalty = 0.0
+    if tick_diff > 0:
+        # За каждый тик расхождения снимаем небольшую долю — точное попадание
+        # ценнее «попадание в окне», но обоих признаём как валидные совпадения.
+        tick_penalty = min(0.2, 0.05 * tick_diff)
     if str(truth["subject"]) != str(signal["subject"]):
         return 0.0
     if not _violation_type_match(truth.get("violation_type"), signal.get("violation_type")):
@@ -523,15 +589,15 @@ def _strict_match_score(*, truth: dict[str, Any], signal: dict[str, Any]) -> flo
     truth_relaxed = set(truth.get("evidence_relaxed") or set())
     signal_relaxed = set(signal.get("evidence_relaxed") or set())
     if truth_exact and signal_exact and truth_exact == signal_exact:
-        return 1.0
+        return max(0.0, 1.0 - tick_penalty)
     if truth_relaxed and signal_relaxed and truth_relaxed == signal_relaxed:
-        return 0.8
+        return max(0.0, 0.8 - tick_penalty)
     if not truth_relaxed and not signal_relaxed:
-        return 0.7
+        return max(0.0, 0.7 - tick_penalty)
     # Truth without evidence refs (e.g. state-based detect_contact_patterns):
     # match on header fields alone — the TruthRecord has no specific event anchors.
     if not truth_relaxed:
-        return 0.6
+        return max(0.0, 0.6 - tick_penalty)
     return 0.0
 
 
@@ -557,12 +623,106 @@ def _evidence_ref_signature(item: dict[str, Any], *, include_timestamp: bool = T
     return json.dumps(keys, ensure_ascii=False, sort_keys=True)
 
 
+_VIOLATION_TYPE_SYNONYMS: dict[str, set[str]] = {
+    # LLM-аудитор v3 фактически использует ``preferential_treatment`` и ``other``
+    # как описание тех же эпизодов, что детерминированный truth-детектор
+    # маркирует как ``conflict_of_interest``. Анализ events.jsonl в прогоне
+    # ``overnight_g3_v3_deepseek`` показал, что 21 finding с типом ``other``
+    # описывает приватные контакты, координацию замолчания, неформальные
+    # встречи в обход формального процесса — это семейство «конфликт интересов /
+    # преференциальное обращение». Без словаря синонимов 30 из 47 finding'ов
+    # не сопоставлялись с эталоном, обнуляя precision и recall.
+    "conflict_of_interest": {
+        "conflict_of_interest",
+        "preferential_treatment",
+        "other",
+    },
+}
+
+
+def _build_violation_type_index(
+    groups: dict[str, set[str]],
+) -> dict[str, frozenset[str]]:
+    """Свернуть словарь групп синонимов в индекс «значение → группа».
+
+    Для каждого значения в любой группе сопоставляется замороженное множество
+    всех её членов. Это даёт симметричный и транзитивный матчер: если ``a`` и
+    ``b`` принадлежат одной группе, то и ``b`` и ``a`` тоже, и любая третья
+    точка ``c`` из той же группы матчится с ``a`` и ``b``.
+
+    Args:
+        groups: Словарь, где ключ — каноническое имя группы (для удобства
+            интроспекции), а значение — множество синонимов.
+
+    Returns:
+        Индекс «значение в нижнем регистре без пробелов → frozenset группы».
+    """
+    index: dict[str, frozenset[str]] = {}
+    for group in groups.values():
+        normalized = frozenset(item.lower().strip() for item in group)
+        for member in normalized:
+            index[member] = normalized
+    return index
+
+
+_VIOLATION_TYPE_INDEX: dict[str, frozenset[str]] = _build_violation_type_index(
+    _VIOLATION_TYPE_SYNONYMS
+)
+
+
 def _violation_type_match(left: Any, right: Any) -> bool:
-    left_norm = _normalize_violation_type(left)
-    right_norm = _normalize_violation_type(right)
+    """Сравнить два значения ``violation_type`` с учётом словаря синонимов.
+
+    Ранее функция требовала точного совпадения строк, и LLM-аудитор с типами
+    ``preferential_treatment``/``other`` не сопоставлялся с truth-детектором,
+    выдающим только ``conflict_of_interest``. Теперь мы признаём пару валидной,
+    если оба значения принадлежат одной группе синонимов в
+    ``_VIOLATION_TYPE_SYNONYMS``. Сравнение нечувствительно к регистру и
+    окружающим пробелам.
+
+    Args:
+        left: Левое значение (например, из truth-записи).
+        right: Правое значение (например, из payload события audit_flagged).
+
+    Returns:
+        ``True``, если значения совпадают точно либо принадлежат одной группе
+        синонимов; иначе — ``False``. Пустые/``None``-значения никогда не
+        матчатся.
+    """
+    left_norm = _normalize_violation_type(left).lower().strip()
+    right_norm = _normalize_violation_type(right).lower().strip()
     if not left_norm or not right_norm:
         return False
-    return left_norm == right_norm
+    if left_norm == right_norm:
+        return True
+    left_group = _VIOLATION_TYPE_INDEX.get(left_norm)
+    right_group = _VIOLATION_TYPE_INDEX.get(right_norm)
+    if left_group is None or right_group is None:
+        return False
+    return left_group is right_group
+
+
+def _classify_semantic_judge_error(exc: Exception) -> str:
+    """Сгенерировать человекочитаемую подсказку о причине падения LLM-судьи.
+
+    Анализирует текст исключения и выделяет три класса распространённых
+    ошибок: исчерпание баланса OpenRouter (HTTP 402), переполнение контекстного
+    окна модели и прочие сбои. Подсказка попадает в ``semantic_failure_reason``
+    и в WARNING-лог, чтобы аналитик мог быстро понять, нужно ли пополнять
+    баланс, сжимать промпт или искать иную причину.
+
+    Args:
+        exc: Исключение, перехваченное в обёртке судьи.
+
+    Returns:
+        Короткая фраза, описывающая категорию ошибки.
+    """
+    text = str(exc).lower()
+    if "402" in text or "insufficient credits" in text or "requires more credits" in text:
+        return "OpenRouter insufficient credits"
+    if "context length" in text or "context_length" in text or "maximum context" in text:
+        return "prompt too long"
+    return "generic LLM failure"
 
 
 def _f1(precision: float, recall: float) -> float:

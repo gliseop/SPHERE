@@ -4,12 +4,12 @@
   "description": "Расширенный муниципальный сценарий закупки с полной организационной экосистемой: мэрия, отдел закупок, юридический и бухгалтерский блоки, отдел образования, контрольно-ревизионный отдел, несколько подрядчиков и субподрядчиков, независимый эксперт, журналист и представитель общественного совета. Сценарий моделирует сложную среду, в которой формальные процедуры тендера на капитальный ремонт школ сталкиваются с неформальными связями, давлением сроков и множественными точками контроля. Цель — протестировать механизм коллегиального review при достаточном кворуме, проверить, как governance-контур масштабируется при двадцати участниках с разнонаправленными интересами, и выявить паттерны коалиционного поведения в условиях повышенного общественного внимания.",
   "ticks": 25,
   "llm": {
-    "model": "nvidia/nemotron-3-super-120b-a12b",
+    "model": "deepseek/deepseek-v4-flash",
     "base_url": null,
     "temperature": 0.25,
     "use_tool_calls": true,
     "trace_max_chars": 0,
-    "provider_order": ["DeepInfra"]
+    "provider_order": []
   },
   "runtime": {
     "language": "ru",
@@ -18,7 +18,7 @@
     "temporal_past_slack_days": 1,
     "temporal_future_horizon_days": 120,
     "max_actions_per_turn": 3,
-    "tick_events_history": 400,
+    "tick_events_history": 4000,
     "enrich_personas": true,
     "persona_enrich_mode": "full",
     "spawn_secondary": true,
@@ -46,7 +46,8 @@
     "audit": {
       "enabled": true,
       "actor_id": null,
-      "lookback_events": 300,
+      "lookback_events": 2000,
+      "audit_window_ticks": 6,
       "private_contact_window_ticks": 5,
       "min_confidence_to_flag": 0.6,
       "min_confidence_to_freeze": 0.70,
@@ -55,7 +56,7 @@
       "reputation_freeze_enabled": true,
       "collegial_review_enabled": true,
       "reputation_penalty_delta": null,
-      "reviewer_seed_salt": "run_v2_20260427"
+      "reviewer_seed_salt": "run_v3_deepseek_20260429"
     }
   },
   "agents": [

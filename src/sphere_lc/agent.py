@@ -675,8 +675,41 @@ class AgentRunner:
         org_ids = ", ".join(state.registry.list_ids(EntityKind.ORG)) or "(нет)"
         open_votes = [vid for vid, v in state.votes.items() if v.status == "open"]
         vote_ids = ", ".join(sorted(open_votes)) or "(нет)"
+        votes_where_eligible: list[str] = []
+        other_open_votes: list[str] = []
+        for vid in open_votes:
+            vote = state.votes[vid]
+            agent_in_voters = agent.agent_id in vote.voters
+            already_voted = (
+                agent.agent_id in vote.votes
+                or agent.agent_id in vote.anon_voters_cast
+            )
+            is_subject = agent.agent_id == vote.target_agent_id
+            if agent_in_voters and not already_voted and not is_subject:
+                votes_where_eligible.append(vid)
+            else:
+                other_open_votes.append(vid)
+
+        eligible_vote_lines = []
+        for vid in sorted(votes_where_eligible)[:8]:
+            vote = state.votes[vid]
+            summary = str(vote.metadata.get("summary") or vote.reason or "").strip()
+            eligible_vote_lines.append(
+                render_prompt(
+                    "agent.blocks.summaries.vote_eligible_cta",
+                    vote_id=vid,
+                    vote_type=vote.vote_type,
+                    target_agent_id=vote.target_agent_id,
+                    closes_tick=vote.closes_tick,
+                    summary=summary or "(без summary)",
+                )
+            )
+        eligible_votes_text = (
+            "\n".join(eligible_vote_lines) if eligible_vote_lines else "- (нет)"
+        )
+
         vote_summaries = []
-        for vid in sorted(open_votes)[:8]:
+        for vid in sorted(other_open_votes)[:8]:
             vote = state.votes[vid]
             if vote.vote_type == "audit_review":
                 summary = str(vote.metadata.get("summary") or vote.reason or "").strip()
@@ -761,6 +794,7 @@ class AgentRunner:
             channel_ids=channel_ids,
             org_ids=org_ids,
             vote_ids=vote_ids,
+            eligible_votes_text=eligible_votes_text,
             vote_summaries_text=vote_summaries_text,
             work_summaries_text=work_summaries_text,
             facts_text=facts_text,

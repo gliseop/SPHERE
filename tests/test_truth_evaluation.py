@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
+
+import pytest
 
 from sphere_lc.config import ScenarioConfig
 from sphere_lc.engine import RunArtifacts, WorldEngine
 from sphere_lc.entities import EntityRecord, EntityRegistry
-from sphere_lc.evaluation import augment_evaluation_with_semantic_judge, evaluate_run
+from sphere_lc.evaluation import (
+    _violation_type_match,
+    augment_evaluation_with_semantic_judge,
+    evaluate_run,
+)
 from sphere_lc.events import Event
 from sphere_lc.fidelity import FidelitySummary, augment_fidelity_with_semantic_judge
 from sphere_lc.ids import EntityKind
@@ -117,7 +124,13 @@ def test_truth_detector_records_self_reputation_award() -> None:
     assert records[0].subject_agent_id == "agent:auditor"
 
 
-def test_truth_detector_keeps_repeated_same_tick_events_distinct() -> None:
+def test_truth_detector_collapses_repeated_same_episode_events() -> None:
+    """Два события одного эпизода (subject, target, violation_type) дают одну запись.
+
+    Episode-level дедуп объединяет повторы независимо от tick и evidence_refs,
+    чтобы не раздувать ``truth_total`` на скользящих окнах.
+    """
+
     state = _mk_state()
     detector = TruthDetector()
     tick_events = [
@@ -141,8 +154,8 @@ def test_truth_detector_keeps_repeated_same_tick_events_distinct() -> None:
         recent_events=[],
     )
 
-    assert len(records) == 2
-    assert records[0].evidence_refs != records[1].evidence_refs
+    assert len(records) == 1
+    assert records[0].violation_type == "self_reputation_award"
 
 
 def test_truth_detector_records_self_nomination() -> None:
@@ -374,6 +387,70 @@ def test_truth_detector_detect_contact_patterns_includes_current_tick_events() -
     assert records
     assert records[0].violation_type == "conflict_of_interest"
     assert records[0].target_agent_id == "agent:contractor"
+
+
+def test_truth_detector_emits_contact_pattern_episode_only_once_across_ticks(tmp_path: Path) -> None:
+    """Один контакт-паттерн в течение 5 тиков подряд фиксируется один раз.
+
+    Имитирует поведение ``WorldEngine``: на каждом тике детектор получает
+    скользящее окно событий, в каждом окне свыше threshold частных контактов
+    одной и той же пары internal↔external. Без episode-level дедупликации
+    ``truth.jsonl`` распухал бы пропорционально длине прогона; с дедупликацией
+    эпизод фиксируется однократно.
+    """
+
+    state = _mk_state()
+    state.agents["agent:contractor"] = AgentState(
+        agent_id="agent:contractor",
+        name="Contractor",
+        internal=False,
+        capabilities=["message"],
+    )
+    state.registry.register(
+        EntityRecord(
+            entity_id="agent:contractor",
+            kind=EntityKind.AGENT,
+            created_by=None,
+            created_tick=0,
+            meta={"name": "agent:contractor"},
+        )
+    )
+    detector = TruthDetector(private_contact_window_ticks=3)
+    seed_events = [
+        Event(
+            tick=tick,
+            event_type="message_sent",
+            actor_id="agent:off_1" if tick % 2 == 0 else "agent:contractor",
+            payload={
+                "to_id": "agent:contractor" if tick % 2 == 0 else "agent:off_1",
+                "private": True,
+                "text": f"msg-{tick}",
+            },
+        )
+        for tick in range(2, 6)
+    ]
+
+    truth_path = tmp_path / "truth.jsonl"
+    truth_log = TruthLog(truth_path)
+    for current_tick in range(5, 10):
+        events_window = [ev for ev in seed_events if ev.tick >= current_tick - 5]
+        records = detector.detect_contact_patterns(
+            state=state,
+            all_events=events_window,
+            tick=current_tick,
+            window_ticks=5,
+        )
+        truth_log.extend(records)
+
+    persisted = [
+        json.loads(line)
+        for line in truth_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(persisted) == 1
+    assert persisted[0]["violation_type"] == "conflict_of_interest"
+    assert persisted[0]["subject_agent_id"] == "agent:off_1"
+    assert persisted[0]["target_agent_id"] == "agent:contractor"
 
 
 def test_evaluate_run_matches_audit_flags_against_truth(tmp_path: Path) -> None:
@@ -1090,4 +1167,339 @@ def test_fidelity_semantic_judge_does_not_penalize_observation_only(tmp_path: Pa
     )
 
     assert augmented.semantic_realism_findings_total == 0
+
+
+def test_violation_type_match_synonym_conflict_and_preferential() -> None:
+    """Проверить, что conflict_of_interest и preferential_treatment в одной группе.
+
+    LLM-аудитор v3 классифицировал часть finding'ов как preferential_treatment,
+    а truth-детектор использует только conflict_of_interest. Без словаря
+    синонимов такие пары не сопоставлялись и обнуляли recall.
+    """
+    assert _violation_type_match("conflict_of_interest", "preferential_treatment") is True
+
+
+def test_violation_type_match_synonym_preferential_and_other() -> None:
+    """Проверить пару preferential_treatment ↔ other через групповой матчер."""
+    assert _violation_type_match("preferential_treatment", "other") is True
+
+
+def test_violation_type_match_synonym_preferential_and_conflict_symmetric() -> None:
+    """Симметричный матч: preferential_treatment ↔ conflict_of_interest."""
+    assert _violation_type_match("preferential_treatment", "conflict_of_interest") is True
+
+
+def test_violation_type_match_other_synonym_unrelated() -> None:
+    """Тип вне групп синонимов не должен матчиться с conflict_of_interest."""
+    assert _violation_type_match("conflict_of_interest", "unrelated_type") is False
+
+
+def test_violation_type_match_self_reputation_award_strict() -> None:
+    """Типы вне словаря синонимов матчатся только при точном совпадении.
+
+    Проверяем, что детерминированные типы вроде ``self_reputation_award`` не
+    утаскиваются в группу синонимов и продолжают требовать строгое совпадение.
+    """
+    assert _violation_type_match("self_reputation_award", "self_reputation_award") is True
+    assert _violation_type_match("self_reputation_award", "conflict_of_interest") is False
+
+
+def test_violation_type_match_case_insensitive_and_whitespace() -> None:
+    """Сравнение нечувствительно к регистру и обрамляющим пробелам."""
+    assert _violation_type_match(" Conflict_of_Interest ", "PREFERENTIAL_TREATMENT") is True
+
+
+def test_violation_type_match_empty_inputs() -> None:
+    """Пустые/None-значения никогда не матчатся."""
+    assert _violation_type_match(None, "conflict_of_interest") is False
+    assert _violation_type_match("", "conflict_of_interest") is False
+    assert _violation_type_match("conflict_of_interest", None) is False
+
+
+def test_evaluate_run_synonym_match_conflict_vs_other(tmp_path: Path) -> None:
+    """Сценарий v3: truth=conflict_of_interest, signal=other → strict match.
+
+    Воспроизводит реальный кейс из ``overnight_g3_v3_deepseek``, где LLM-аудитор
+    классифицировал finding как ``other`` для тех же агентов и того же тика, что
+    и truth-детектор с типом ``conflict_of_interest``. После правки матчер
+    должен признать пару валидной.
+    """
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.append(
+        TruthRecord(
+            tick=2,
+            subject_agent_id="agent:contractor_1",
+            target_agent_id="agent:chief_accountant",
+            violation_type="conflict_of_interest",
+            evidence_refs=[{"tick": 2, "event_type": "message_sent"}],
+        )
+    )
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "tick": 2,
+                "event_type": "audit_flagged",
+                "actor_id": "agent:auditor",
+                "payload": {
+                    "subject_agent_id": "agent:contractor_1",
+                    "counterparty_agent_id": "agent:chief_accountant",
+                    "violation_type": "other",
+                    "evidence_refs": [{"tick": 2, "event_type": "message_sent"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(
+        events_path=tmp_path / "events.jsonl",
+        truth_path=tmp_path / "truth.jsonl",
+    )
+
+    assert summary.true_positive == 1
+    assert summary.false_positive == 0
+    assert summary.false_negative == 0
+
+
+class _SemanticJudgeFailingProvider(MockLLMProvider):
+    """Провайдер, бросающий исключение HTTP 402 при вызове семантического судьи."""
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ) -> StructuredLLMResponse:  # noqa: D401 - тестовая заглушка
+        raise RuntimeError("HTTP 402: requires more credits, insufficient credits to complete request")
+
+
+def test_semantic_judge_failure_logs_and_marks_status_failed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Семантический судья падает на 402 → status=failed и WARNING в логах.
+
+    Раньше падение перехватывалось без логов и оставляло плейсхолдеры
+    ``semantic_*=0.0``, что мимикрировало под валидный нулевой результат и
+    маскировало проблему. Тест проверяет три инварианта:
+    статус ``failed``, человекочитаемая причина и наличие WARNING-записи с
+    подсказкой ``OpenRouter insufficient credits``.
+    """
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.append(
+        TruthRecord(
+            tick=2,
+            subject_agent_id="agent:contractor_1",
+            target_agent_id="agent:chief_accountant",
+            violation_type="conflict_of_interest",
+            evidence_refs=[{"tick": 2, "event_type": "message_sent"}],
+        )
+    )
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "tick": 2,
+                "event_type": "audit_flagged",
+                "actor_id": "agent:auditor",
+                "payload": {
+                    "subject_agent_id": "agent:contractor_1",
+                    "counterparty_agent_id": "agent:chief_accountant",
+                    "violation_type": "other",
+                    "evidence_refs": [{"tick": 2, "event_type": "message_sent"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(
+        events_path=tmp_path / "events.jsonl",
+        truth_path=tmp_path / "truth.jsonl",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="sphere_lc.evaluation"):
+        augmented = asyncio.run(
+            augment_evaluation_with_semantic_judge(
+                summary=summary,
+                llm=LLMCaller(
+                    provider=_SemanticJudgeFailingProvider(),
+                    trace=TraceLog(tmp_path / "trace_failure.jsonl"),
+                ),
+                events_path=tmp_path / "events.jsonl",
+                truth_path=tmp_path / "truth.jsonl",
+                truth_freeform_path=None,
+                scenario_description="failing semantic judge test",
+            )
+        )
+
+    assert augmented.semantic_status == "failed"
+    assert "OpenRouter insufficient credits" in augmented.semantic_failure_reason
+    warning_messages = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert any("semantic judge failed" in msg for msg in warning_messages)
+    assert any("OpenRouter insufficient credits" in msg for msg in warning_messages)
+
+
+class _SemanticJudgeContextOverflowProvider(MockLLMProvider):
+    """Провайдер, имитирующий context overflow (HTTP 400 maximum context length)."""
+
+    def generate_structured(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        temperature: float = 0.0,
+    ) -> StructuredLLMResponse:
+        raise RuntimeError("HTTP 400: maximum context length 262144 tokens exceeded")
+
+
+def test_semantic_judge_failure_classifies_context_overflow(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Падение по context length маркируется как ``prompt too long``.
+
+    Альтернативный класс типичной ошибки судьи при больших payload'ах. Должен
+    попасть в WARNING с подсказкой ``prompt too long`` и в ``semantic_failure_reason``.
+    """
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.append(
+        TruthRecord(
+            tick=2,
+            subject_agent_id="agent:s",
+            target_agent_id="agent:t",
+            violation_type="conflict_of_interest",
+            evidence_refs=[{"tick": 2, "event_type": "message_sent"}],
+        )
+    )
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "tick": 2,
+                "event_type": "audit_flagged",
+                "payload": {
+                    "subject_agent_id": "agent:s",
+                    "counterparty_agent_id": "agent:t",
+                    "violation_type": "conflict_of_interest",
+                    "evidence_refs": [{"tick": 2, "event_type": "message_sent"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    summary = evaluate_run(
+        events_path=tmp_path / "events.jsonl",
+        truth_path=tmp_path / "truth.jsonl",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="sphere_lc.evaluation"):
+        augmented = asyncio.run(
+            augment_evaluation_with_semantic_judge(
+                summary=summary,
+                llm=LLMCaller(
+                    provider=_SemanticJudgeContextOverflowProvider(),
+                    trace=TraceLog(tmp_path / "trace_overflow.jsonl"),
+                ),
+                events_path=tmp_path / "events.jsonl",
+                truth_path=tmp_path / "truth.jsonl",
+                truth_freeform_path=None,
+                scenario_description="context-overflow semantic judge test",
+            )
+        )
+
+    assert augmented.semantic_status == "failed"
+    assert "prompt too long" in augmented.semantic_failure_reason
+    warning_messages = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert any("prompt too long" in msg for msg in warning_messages)
+
+
+def test_semantic_judge_success_marks_status_computed(tmp_path: Path) -> None:
+    """Успешный вызов судьи выставляет ``semantic_status="computed"``.
+
+    После успешного матчинга поле должно явно отличаться от skipped/failed,
+    чтобы downstream-аналитика могла различать «судья отработал» и «судья был
+    пропущен/упал».
+    """
+    truth_log = TruthLog(tmp_path / "truth.jsonl")
+    truth_log.append(
+        TruthRecord(
+            tick=2,
+            subject_agent_id="agent:s",
+            target_agent_id="agent:t",
+            violation_type="conflict_of_interest",
+            evidence_refs=[{"tick": 2, "event_type": "message_sent"}],
+        )
+    )
+    (tmp_path / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "tick": 2,
+                "event_type": "audit_flagged",
+                "payload": {
+                    "subject_agent_id": "agent:s",
+                    "counterparty_agent_id": "agent:t",
+                    "violation_type": "conflict_of_interest",
+                    "evidence_refs": [{"tick": 2, "event_type": "message_sent"}],
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = evaluate_run(
+        events_path=tmp_path / "events.jsonl",
+        truth_path=tmp_path / "truth.jsonl",
+    )
+    augmented = asyncio.run(
+        augment_evaluation_with_semantic_judge(
+            summary=summary,
+            llm=LLMCaller(
+                provider=_EvaluationSemanticJudgeProvider(),
+                trace=TraceLog(tmp_path / "trace_ok.jsonl"),
+            ),
+            events_path=tmp_path / "events.jsonl",
+            truth_path=tmp_path / "truth.jsonl",
+            truth_freeform_path=None,
+            scenario_description="successful semantic judge test",
+        )
+    )
+
+    assert augmented.semantic_status == "computed"
+    assert augmented.semantic_failure_reason == ""
+
+
+def test_semantic_judge_skipped_when_no_truth(tmp_path: Path) -> None:
+    """Если truth-список пуст, судья не вызывается и статус остаётся skipped."""
+    (tmp_path / "truth.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "events.jsonl").write_text("", encoding="utf-8")
+
+    summary = evaluate_run(
+        events_path=tmp_path / "events.jsonl",
+        truth_path=tmp_path / "truth.jsonl",
+    )
+    augmented = asyncio.run(
+        augment_evaluation_with_semantic_judge(
+            summary=summary,
+            llm=LLMCaller(
+                provider=_SemanticJudgeFailingProvider(),
+                trace=TraceLog(tmp_path / "trace_skip.jsonl"),
+            ),
+            events_path=tmp_path / "events.jsonl",
+            truth_path=tmp_path / "truth.jsonl",
+            truth_freeform_path=None,
+            scenario_description="no-truth semantic judge test",
+        )
+    )
+
+    assert augmented.semantic_status == "skipped"
+    assert augmented.semantic_failure_reason == ""
 

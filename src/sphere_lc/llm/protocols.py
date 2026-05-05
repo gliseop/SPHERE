@@ -41,6 +41,7 @@ class LLMProvider(Protocol):
         system: str,
         user: str,
         temperature: float = 0.0,
+        max_completion_tokens: int | None = None,
     ) -> LLMResponse:
         """Сгенерировать ответ.
 
@@ -48,6 +49,8 @@ class LLMProvider(Protocol):
             system: Системный промпт.
             user: Пользовательский промпт.
             temperature: Температура генерации.
+            max_completion_tokens: Жёсткий потолок длины ответа в токенах.
+                None — без ограничения (используется потолок модели).
 
         Returns:
             Ответ LLM.

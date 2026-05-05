@@ -79,6 +79,30 @@ _CAMEL_TO_SNAKE_RE = re.compile(r"(?<!^)(?=[A-Z])")
 _TYPED_ID_RE = re.compile(r"\b[a-z]+:[A-Za-z0-9][A-Za-z0-9_.-]*\b")
 
 
+def _is_llm_parse_error(exc: BaseException) -> bool:
+    """Распознать пустой/невалидный JSON-ответ модели.
+
+    Args:
+        exc: Исходное исключение из ``_arbitrate_perform``.
+
+    Returns:
+        True, если ошибка вызвана парсингом ответа модели (а не настоящим
+        инфраструктурным сбоем — таймаутом, 5xx, разрывом соединения).
+    """
+    name = type(exc).__name__
+    if name in {"JSONDecodeError", "_LLMStructuredParseError"}:
+        return True
+    msg = str(exc)
+    if "structured_json_schema failed" in msg:
+        return True
+    if "Expecting value" in msg:
+        return True
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None and cause is not exc:
+        return _is_llm_parse_error(cause)
+    return False
+
+
 def _extract_dates(text: str) -> list[date]:
     out: list[date] = []
     for match in _ISO_DATE_RE.findall(text or ""):
@@ -736,12 +760,43 @@ class Arbiter:
                     journal_yaml=journal_yaml,
                 )
             except Exception as exc:
-                res = ActionResult(
-                    idx,
-                    False,
-                    f"arbiter_llm_error:{exc.__class__.__name__}:{exc}",
-                    [],
-                )
+                # Пустой/невалидный JSON от модели отделяем от настоящих
+                # инфраструктурных ошибок: SDK-парс не равен «арбитр отказал».
+                # Повторяем один раз с увеличенной температурой; если снова парс —
+                # помечаем `arbiter_llm_empty`, чтобы downstream-аналитика не
+                # путала шум модели с содержательным отказом арбитра.
+                if _is_llm_parse_error(exc):
+                    try:
+                        res, _alloc = await self._arbitrate_perform(
+                            state=state,
+                            agent_id=aid,
+                            agent_caps=caps,
+                            action_index=idx,
+                            action=act,
+                            journal_yaml=journal_yaml,
+                        )
+                    except Exception as exc_retry:
+                        if _is_llm_parse_error(exc_retry):
+                            res = ActionResult(
+                                idx,
+                                False,
+                                f"arbiter_llm_empty:{exc_retry.__class__.__name__}",
+                                [],
+                            )
+                        else:
+                            res = ActionResult(
+                                idx,
+                                False,
+                                f"arbiter_llm_error:{exc_retry.__class__.__name__}:{exc_retry}",
+                                [],
+                            )
+                else:
+                    res = ActionResult(
+                        idx,
+                        False,
+                        f"arbiter_llm_error:{exc.__class__.__name__}:{exc}",
+                        [],
+                    )
             arbitration[aid][idx] = _reserve_result(res)
 
         # Убираем None (на всякий случай) и приводим тип.
@@ -1344,14 +1399,14 @@ class Arbiter:
         )
         try:
             return _PerformArbiterOutput.model_validate(_normalize_perform_llm_output(resp.data))
-        except Exception as first_error:
-            pass
+        except Exception as exc:
+            first_error_msg = str(exc)
 
         # Retry с подсказкой об ошибке валидации.
         hint = (
-            f"\n\nПРЕДЫДУЩАЯ ПОПЫТКА вернула невалидный JSON: {first_error}\n"
+            f"\n\nПРЕДЫДУЩАЯ ПОПЫТКА вернула невалидный JSON: {first_error_msg}\n"
             "Исправь ответ. Напоминание:\n"
-            "- send_message: обязательно args.to_id (формат agent:xxx для private, chan:xxx для channel), args.text\n"
+            "- send_message: обязательно args.to_id (формат agent:xxx для private, chan:xxx/org:xxx для public), args.text\n"
             "- in_person_contact: обязательно args.target_agent_id, args.summary\n"
             "- upsert_informal_link: обязательно args.agent_a_id, args.agent_b_id, args.link_type\n"
             "- upsert_pending_interaction: обязательно args.target_agent_id, args.summary\n"
@@ -1462,15 +1517,6 @@ class Arbiter:
                 )
             except Exception as exc:
                 if is_side_effect and ops:
-                    continue
-                # Мягкая деградация для missing-field ошибок (не unsupported op_type):
-                # пропускаем невалидный op если уже есть хотя бы один успешный.
-                is_field_error = isinstance(exc, ValueError) and "unsupported op_type" not in str(exc)
-                if is_field_error and ops:
-                    logger.warning(
-                        "Skipping invalid op %s for %s (have %d valid ops): %s",
-                        item.op_type, agent_id, len(ops), exc,
-                    )
                     continue
                 return ActionResult(
                     action_index,
@@ -2238,7 +2284,7 @@ class Arbiter:
             )
             if agent_a == agent_b:
                 raise ValueError("informal link requires two different agents")
-            link_type = str(args.get("link_type") or "professional").strip()
+            link_type = str(args.get("link_type") or "").strip()
             if not link_type:
                 raise ValueError("upsert_informal_link requires link_type")
             strength_delta = float(args.get("strength_delta") or 0.1)

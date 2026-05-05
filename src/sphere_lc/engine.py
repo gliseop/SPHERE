@@ -749,31 +749,55 @@ class WorldEngine:
                             )
                             self._write_names_sidecar(state=state)
 
-            truth_window = int(self.cfg.governance.audit.lookback_events)
-            truth_recent = events_history[-truth_window:] if truth_window > 0 else list(events_history)
+            # История событий для аудита и truth срезается по тикам, а не по count,
+            # чтобы окно `private_contact_window_ticks` было гарантированно покрыто
+            # независимо от плотности событий на тик. Параметры
+            # `lookback_events`/`tick_events_history` сохранены как safety-cap для
+            # деградации памяти при экстремальной плотности.
+            contact_window_ticks = int(
+                self.cfg.governance.audit.private_contact_window_ticks
+            )
+            audit_window_ticks = max(
+                int(self.cfg.governance.audit.audit_window_ticks),
+                contact_window_ticks,
+            )
+            audit_low_tick = int(state.tick) - audit_window_ticks
+            contact_low_tick = int(state.tick) - contact_window_ticks
+            audit_window_events = int(self.cfg.governance.audit.lookback_events)
+            tick_bounded_history = [
+                ev for ev in events_history if int(ev.tick) >= contact_low_tick
+            ]
+            audit_recent_full = [
+                ev for ev in events_history if int(ev.tick) >= audit_low_tick
+            ]
+            # Safety-cap: если плотность экстремальна, обрезаем хвост в количестве,
+            # но при штатной нагрузке весь tick-bounded slice уйдёт в детекторы.
+            if audit_window_events > 0 and len(audit_recent_full) > audit_window_events:
+                audit_recent_full = audit_recent_full[-audit_window_events:]
             truth_records = truth_detector.detect_tick(
                 state=state,
                 tick_events=tick_events,
-                recent_events=truth_recent,
+                recent_events=audit_recent_full,
             )
             if truth_records:
                 truth_log.extend(truth_records)
             truth_contact_records = truth_detector.detect_contact_patterns(
                 state=state,
-                all_events=list(truth_recent) + list(tick_events),
+                all_events=list(audit_recent_full) + list(tick_events),
                 tick=state.tick,
+                window_ticks=contact_window_ticks,
             )
             if truth_contact_records:
                 truth_log.extend(truth_contact_records)
 
             if self.cfg.governance.audit.enabled:
-                audit_window = int(self.cfg.governance.audit.lookback_events)
-                audit_recent = events_history[-audit_window:] if audit_window > 0 else list(events_history)
+                audit_recent = audit_recent_full
                 try:
                     audit_outcome = await auditor.inspect_tick(
                         state=state,
                         tick_events=tick_events,
                         recent_events=audit_recent,
+                        pattern_events=tick_bounded_history,
                     )
                 except Exception as exc:
                     logger.warning("Runtime auditor failed on tick %s: %s", state.tick, exc)
@@ -849,7 +873,18 @@ class WorldEngine:
                     simulated_date=current_date,
                 ))
 
-            # Ограничиваем историю для памяти.
+            # Срезаем историю по тикам, а не по count: окна аудита и truth должны
+            # покрываться целиком независимо от плотности событий. tick_events_history
+            # сохранён как safety-cap при экстремальной плотности.
+            keep_ticks = max(
+                int(self.cfg.governance.audit.audit_window_ticks),
+                int(self.cfg.governance.audit.private_contact_window_ticks),
+                int(self.cfg.runtime.freeform_truth_window_ticks),
+            ) + 1
+            history_low_tick = int(state.tick) - keep_ticks
+            events_history = [
+                ev for ev in events_history if int(ev.tick) >= history_low_tick
+            ]
             if len(events_history) > self.cfg.runtime.tick_events_history:
                 events_history = events_history[-self.cfg.runtime.tick_events_history :]
 
@@ -1089,6 +1124,8 @@ class WorldEngine:
                     "duration_ms": 0.0,
                     "prompt_tokens": 0,
                     "completion_tokens": 0,
+                    "cached_tokens": 0,
+                    "reasoning_tokens": 0,
                     "durations_ms": [],
                     "retries_used": 0,
                     "timeout_count": 0,
@@ -1114,12 +1151,16 @@ class WorldEngine:
                 error = row.get("error") or {}
                 prompt_tokens = int(usage.get("prompt_tokens") or 0)
                 completion_tokens = int(usage.get("completion_tokens") or 0)
+                cached_tokens = int(usage.get("cached_tokens") or 0)
+                reasoning_tokens = int(usage.get("reasoning_tokens") or 0)
 
                 role_bucket = _touch(role_stats, role)
                 role_bucket["calls"] = int(role_bucket["calls"]) + 1
                 role_bucket["duration_ms"] = float(role_bucket["duration_ms"]) + duration_ms
                 role_bucket["prompt_tokens"] = int(role_bucket["prompt_tokens"]) + prompt_tokens
                 role_bucket["completion_tokens"] = int(role_bucket["completion_tokens"]) + completion_tokens
+                role_bucket["cached_tokens"] = int(role_bucket["cached_tokens"]) + cached_tokens
+                role_bucket["reasoning_tokens"] = int(role_bucket.get("reasoning_tokens") or 0) + reasoning_tokens
                 role_bucket["durations_ms"].append(duration_ms)
                 role_bucket["retries_used"] = int(role_bucket["retries_used"]) + int(meta.get("retries_used") or 0)
                 if error:
@@ -1133,6 +1174,8 @@ class WorldEngine:
                     tick_bucket["duration_ms"] = float(tick_bucket["duration_ms"]) + duration_ms
                     tick_bucket["prompt_tokens"] = int(tick_bucket["prompt_tokens"]) + prompt_tokens
                     tick_bucket["completion_tokens"] = int(tick_bucket["completion_tokens"]) + completion_tokens
+                    tick_bucket["cached_tokens"] = int(tick_bucket["cached_tokens"]) + cached_tokens
+                    tick_bucket["reasoning_tokens"] = int(tick_bucket.get("reasoning_tokens") or 0) + reasoning_tokens
                     tick_bucket["durations_ms"].append(duration_ms)
                     tick_bucket["retries_used"] = int(tick_bucket["retries_used"]) + int(meta.get("retries_used") or 0)
                     if error:
@@ -1158,6 +1201,8 @@ class WorldEngine:
                         "duration_ms": round(duration_ms, 3),
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
+                        "cached_tokens": cached_tokens,
+                        "reasoning_tokens": reasoning_tokens,
                         "total_tokens": prompt_tokens + completion_tokens,
                         "retries_used": int(meta.get("retries_used") or 0),
                         "error_type": str(error.get("type") or "") or None,
@@ -1197,6 +1242,8 @@ class WorldEngine:
 
         total_prompt = sum(int(bucket["prompt_tokens"]) for bucket in role_stats.values())
         total_completion = sum(int(bucket["completion_tokens"]) for bucket in role_stats.values())
+        total_cached = sum(int(bucket.get("cached_tokens") or 0) for bucket in role_stats.values())
+        total_reasoning = sum(int(bucket.get("reasoning_tokens") or 0) for bucket in role_stats.values())
         sum_duration_ms = sum(float(bucket["duration_ms"]) for bucket in role_stats.values())
         total_retries = sum(int(bucket["retries_used"]) for bucket in role_stats.values())
         total_timeouts = sum(int(bucket["timeout_count"]) for bucket in role_stats.values())
@@ -1207,18 +1254,59 @@ class WorldEngine:
             else 0.0
         )
 
+        llm_cfg = self.cfg.llm
+        input_price_per_m = float(getattr(llm_cfg, "input_price_per_m", 0.0) or 0.0)
+        cache_read_price_per_m = float(getattr(llm_cfg, "cache_read_price_per_m", 0.0) or 0.0)
+        output_price_per_m = float(getattr(llm_cfg, "output_price_per_m", 0.0) or 0.0)
+
+        def _cost_breakdown(
+            *, prompt: int, cached: int, completion: int
+        ) -> tuple[float, float]:
+            """Оценить экономию и полную стоимость одного бакета.
+
+            Args:
+                prompt: Полное число prompt-токенов (включая cached).
+                cached: Из них прочитанных из prompt-cache.
+                completion: Число completion-токенов.
+
+            Returns:
+                Кортеж ``(savings_usd, total_cost_usd)``. Savings — экономия от
+                cache по сравнению с тарифом без cache. Total — фактическая
+                цена с учётом cache_read.
+            """
+            non_cached = max(0, prompt - cached)
+            non_cached_cost = (non_cached / 1_000_000.0) * input_price_per_m
+            cached_cost = (cached / 1_000_000.0) * cache_read_price_per_m
+            output_cost = (completion / 1_000_000.0) * output_price_per_m
+            total = non_cached_cost + cached_cost + output_cost
+            savings = (cached / 1_000_000.0) * (input_price_per_m - cache_read_price_per_m)
+            return round(max(0.0, savings), 6), round(total, 6)
+
         def _format_bucket(bucket: dict[str, Any]) -> dict[str, float | int | None]:
             total_tokens = int(bucket["prompt_tokens"]) + int(bucket["completion_tokens"])
             duration_ms = float(bucket["duration_ms"])
             duration_s = duration_ms / 1000.0
             durations = [float(item) for item in bucket.get("durations_ms", [])]
+            cached = int(bucket.get("cached_tokens") or 0)
+            reasoning = int(bucket.get("reasoning_tokens") or 0)
+            prompt = int(bucket["prompt_tokens"])
+            completion = int(bucket["completion_tokens"])
+            cache_hit_ratio = (cached / prompt) if prompt > 0 else 0.0
+            cache_savings_usd, total_cost_usd = _cost_breakdown(
+                prompt=prompt, cached=cached, completion=completion
+            )
             return {
                 "calls": int(bucket["calls"]),
                 "duration_ms": round(duration_ms, 3),
                 "duration_s": round(duration_s, 3),
-                "prompt_tokens": int(bucket["prompt_tokens"]),
-                "completion_tokens": int(bucket["completion_tokens"]),
+                "prompt_tokens": prompt,
+                "completion_tokens": completion,
+                "cached_tokens": cached,
+                "reasoning_tokens": reasoning,
                 "total_tokens": total_tokens,
+                "cache_hit_ratio": round(cache_hit_ratio, 6),
+                "cache_savings_usd": cache_savings_usd,
+                "total_cost_usd": total_cost_usd,
                 "avg_duration_ms": round(duration_ms / max(int(bucket["calls"]), 1), 3),
                 "avg_total_tokens": round(total_tokens / max(int(bucket["calls"]), 1), 3),
                 "tokens_per_second": round(total_tokens / duration_s, 3) if duration_s > 0 else None,
@@ -1248,11 +1336,24 @@ class WorldEngine:
 
         slow_calls.sort(key=lambda item: float(item.get("duration_ms") or 0.0), reverse=True)
 
+        overall_cache_hit_ratio = (total_cached / total_prompt) if total_prompt > 0 else 0.0
+        overall_savings_usd, overall_total_cost_usd = _cost_breakdown(
+            prompt=total_prompt, cached=total_cached, completion=total_completion
+        )
+
         return {
             "overall": {
                 "prompt_tokens": total_prompt,
                 "completion_tokens": total_completion,
+                "cached_tokens": total_cached,
+                "reasoning_tokens": total_reasoning,
                 "total_tokens": total_prompt + total_completion,
+                "cache_hit_ratio": round(overall_cache_hit_ratio, 6),
+                "cache_savings_usd": overall_savings_usd,
+                "total_cost_usd": overall_total_cost_usd,
+                "input_price_per_m": input_price_per_m,
+                "cache_read_price_per_m": cache_read_price_per_m,
+                "output_price_per_m": output_price_per_m,
                 "sum_llm_duration_ms": round(sum_duration_ms, 3),
                 "sum_llm_duration_s": round(sum_duration_ms / 1000.0, 3),
                 "trace_span_s": round(trace_span_seconds, 3),
@@ -3196,6 +3297,7 @@ class WorldEngine:
                 "version": 1,
                 "fingerprint": self._personas_cache_fingerprint(cache_input),
                 "input": cache_input,
+                "source": "enriched",
             },
             "personas": {
                 aid: persona.model_dump(mode="json")
@@ -3206,6 +3308,38 @@ class WorldEngine:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    def _load_pre_enriched_personas(self, *, path: Path) -> dict[str, PersonaArtifact]:
+        """Прочитать предобогащённые персоны из файла.
+
+        Args:
+            path: Путь к JSON-файлу в формате ``_save_personas_cache``.
+
+        Returns:
+            Отображение ``agent_id -> PersonaArtifact`` для тех записей,
+            которые удалось распарсить. Невалидные записи пропускаются.
+            При ошибке чтения файла или некорректной структуре возвращает
+            пустой словарь.
+        """
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Failed to read pre-enriched personas from %s: %s", path, exc)
+            return {}
+        if not isinstance(raw, dict):
+            logger.warning("Pre-enriched personas file %s has invalid root type", path)
+            return {}
+        personas_raw = raw.get("personas")
+        if not isinstance(personas_raw, dict):
+            logger.warning("Pre-enriched personas file %s missing 'personas' mapping", path)
+            return {}
+        out: dict[str, PersonaArtifact] = {}
+        for aid, item in personas_raw.items():
+            try:
+                out[str(aid)] = PersonaArtifact.model_validate(item)
+            except Exception as exc:
+                logger.warning("Skipping invalid persona %r in %s: %s", aid, path, exc)
+        return out
+
     async def _enrich_personas(self, *, state: WorldState, llm: LLMCaller) -> None:
         to_enrich_ids = [
             aid for aid, agent in sorted(state.agents.items()) if not agent.persona.biography.strip()
@@ -3213,22 +3347,83 @@ class WorldEngine:
         if not to_enrich_ids:
             return
 
+        # Ветка предобогащённых персон. Используется в сериях главы 3,
+        # где идентичность персон между прогонами G0/G1/G2/G3 — обязательное
+        # условие чистоты сравнения. Кэш по fingerprint в этой ветке намеренно
+        # не используется: достаточно явного указания пути из RuntimeConfig.
+        pre_enriched_path_raw = (self.cfg.runtime.personas_pre_enriched_path or "").strip()
+        skip_global_cache_save = False
+        pre_enriched_applied = 0
+        pre_enriched: dict[str, PersonaArtifact] = {}
+        if pre_enriched_path_raw:
+            pre_path = Path(pre_enriched_path_raw)
+            if not pre_path.exists():
+                logger.warning(
+                    "personas_pre_enriched_path is set but file does not exist: %s",
+                    pre_path,
+                )
+            else:
+                pre_enriched = self._load_pre_enriched_personas(path=pre_path)
+                for aid in to_enrich_ids:
+                    persona = pre_enriched.get(aid)
+                    if persona is None:
+                        continue
+                    if not self._persona_is_cache_complete(persona):
+                        logger.warning(
+                            "Pre-enriched persona for %s is incomplete, falling back to enrich",
+                            aid,
+                        )
+                        continue
+                    state.agents[aid].persona = persona
+                    pre_enriched_applied += 1
+                if pre_enriched_applied:
+                    logger.info(
+                        "Loaded %d pre-enriched personas from %s",
+                        pre_enriched_applied,
+                        pre_path,
+                    )
+                # Когда персоны пришли из явного файла, мы не хотим, чтобы
+                # они «утекли» в глобальный кэш и подменили будущие прогоны
+                # с другим сценарием через совпадение fingerprint.
+                skip_global_cache_save = True
+
         cache_input = self._personas_cache_input(state=state)
-        cached = self._load_personas_cache(state=state, cache_input=cache_input)
+        cached: dict[str, PersonaArtifact] = {}
+        if not skip_global_cache_save:
+            cached = self._load_personas_cache(state=state, cache_input=cache_input)
 
         pending: list[str] = []
+        cache_hits = 0
         for aid in to_enrich_ids:
+            if state.agents[aid].persona.biography.strip():
+                # Уже подставлена из pre_enriched — пропускаем.
+                continue
             cached_persona = cached.get(aid)
             if cached_persona is None or not self._persona_is_cache_complete(cached_persona):
                 pending.append(aid)
                 continue
             state.agents[aid].persona = cached_persona
+            cache_hits += 1
 
         if not pending:
-            logger.info(
-                "Loaded persona cache for %d agents from %s",
-                len(to_enrich_ids),
-                self._personas_global_cache_path(cache_input=cache_input),
+            # Все агенты покрыты без вызова LLM. Выбираем источник:
+            # «pre_enriched» только если ни одной персоны не пришлось
+            # дотягивать из глобального кэша; иначе «cache», а если был
+            # частичный pre_enriched + частичный кэш — всё равно «cache»
+            # как преобладающий путь, чтобы meta.source не вводил в
+            # заблуждение.
+            if pre_enriched_applied > 0 and cache_hits == 0:
+                snapshot_source = "pre_enriched"
+            else:
+                snapshot_source = "cache"
+            if not skip_global_cache_save:
+                logger.info(
+                    "Loaded persona cache for %d agents from %s",
+                    len(to_enrich_ids),
+                    self._personas_global_cache_path(cache_input=cache_input),
+                )
+            self._write_local_personas_snapshot(
+                state=state, cache_input=cache_input, source=snapshot_source
             )
             return
 
@@ -3242,13 +3437,76 @@ class WorldEngine:
             state.agents[aid].persona = persona
 
         all_enriched = all(self._persona_is_cache_complete(state.agents[aid].persona) for aid in to_enrich_ids)
+        # Если был хотя бы один реальный вызов LLM — итоговый источник
+        # «enriched», даже если часть персон пришла из pre_enriched/cache.
         if not all_enriched:
+            if skip_global_cache_save:
+                self._write_local_personas_snapshot(
+                    state=state, cache_input=cache_input, source="enriched"
+                )
             return
         try:
             personas = {aid: agent.persona for aid, agent in state.agents.items()}
-            self._save_personas_cache(cache_input=cache_input, personas=personas)
+            if skip_global_cache_save:
+                self._write_local_personas_snapshot(
+                    state=state,
+                    cache_input=cache_input,
+                    source="enriched",
+                    personas=personas,
+                )
+            else:
+                self._save_personas_cache(cache_input=cache_input, personas=personas)
         except Exception as exc:
             logger.warning("Failed to write personas cache: %s", exc)
+
+    def _write_local_personas_snapshot(
+        self,
+        *,
+        state: WorldState,
+        cache_input: dict[str, Any],
+        source: str,
+        personas: dict[str, PersonaArtifact] | None = None,
+    ) -> None:
+        """Записать только локальный ``personas.json`` без глобального кэша.
+
+        Используется и в режиме предобогащённых персон, и в обычных кэш-режимах
+        для самодокументирования прогона. В первом случае мы дополнительно
+        не «утекаем» персонами в каталог ``_persona_cache`` через совпадение
+        fingerprint.
+
+        Args:
+            state: Текущее состояние мира.
+            cache_input: Словарь, по которому считается fingerprint.
+            source: Реальный источник персон, попадает в ``meta.source``.
+                Допустимые значения: ``"pre_enriched"`` (загружено из явного
+                файла), ``"cache"`` (полное попадание в глобальный кэш),
+                ``"enriched"`` (часть или все персоны сгенерированы LLM).
+            personas: Готовый словарь персон, либо ``None`` —
+                в последнем случае он собирается из ``state.agents``.
+        """
+        if personas is None:
+            personas = {aid: agent.persona for aid, agent in state.agents.items()}
+        try:
+            payload = {
+                "meta": {
+                    "version": 1,
+                    "fingerprint": self._personas_cache_fingerprint(cache_input),
+                    "input": cache_input,
+                    "source": source,
+                },
+                "personas": {
+                    aid: persona.model_dump(mode="json")
+                    for aid, persona in sorted(personas.items())
+                },
+            }
+            local_path = self._personas_cache_path()
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning("Failed to write local personas snapshot: %s", exc)
 
     def _init_state(self, *, event_log: EventLog) -> WorldState:
         state = WorldState(tick=0, registry=EntityRegistry(), environment=EnvironmentState())
