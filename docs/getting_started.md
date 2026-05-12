@@ -74,14 +74,14 @@ cd ../..
 ### Запуск симуляции по сценарию
 
 ```bash
-# Минимальный сценарий (JSON)
-sphere-lc run --scenario scenarios/lc_minimal.json --out results/lc_minimal_run
+# Контрольный baseline-сценарий (JSON)
+sphere-lc run --scenario scenarios/template_s0_g0.json --out results/template_s0_g0_run
 ```
 
 ### Переопределение числа тиков
 
 ```bash
-sphere-lc run --scenario scenarios/lc_minimal.json --ticks 50 --out results/long_run
+sphere-lc run --scenario scenarios/template_s0_g0.json --ticks 50 --out results/long_run
 ```
 
 ### Генерация сценария из описания (LLM)
@@ -103,7 +103,7 @@ sphere-lc compose --description-file docs/scenario_brief.txt --out scenarios/com
 Пост-фактум анализ журнала событий чанками через LLM:
 
 ```bash
-sphere-lc oracle --events results/lc_minimal_run/events.jsonl --out results/lc_minimal_run/violations.json
+sphere-lc oracle --events results/template_s0_g0_run/events.jsonl --out results/template_s0_g0_run/violations.json
 ```
 
 Полный список аргументов CLI — в [cli_reference.md](./cli_reference.md).

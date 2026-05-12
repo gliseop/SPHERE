@@ -68,10 +68,10 @@ sphere-lc oracle --events <путь> --out <путь> [опции]
 
 ```bash
 # Минимальный прогон
-sphere-lc run --scenario scenarios/lc_minimal.json
+sphere-lc run --scenario scenarios/template_s0_g0.json
 
 # Прогон с указанием выходной директории и числа тиков
-sphere-lc run --scenario scenarios/lc_minimal.json --out results/run_50 --ticks 50
+sphere-lc run --scenario scenarios/template_s0_g0.json --out results/run_50 --ticks 50
 
 # Реалистичный сценарий с enrichment/social graph/worldgen
 sphere-lc run --scenario scenarios/procurement_tender.json --out results/procurement_tender_run
